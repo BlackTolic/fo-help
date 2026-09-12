@@ -106,6 +106,30 @@ export class WorkerManager {
     return true;
   }
 
+  /** 请求 worker 给某 hwnd 截 1 张图(用大漠 Capture) */
+  requestThumbnail(hwnd: number): Promise<string | null> {
+    const wid = this.byHwnd.get(hwnd);
+    if (!wid) return Promise.resolve(null);
+    const m = this.workers.get(wid);
+    if (!m) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+      const onMessage = (msg: any) => {
+        if (msg.type === 'thumbnail' && msg.hwnd === hwnd) {
+          m.worker.off('message', onMessage);
+          resolve(msg.dataUrl || null);
+        }
+      };
+      m.worker.on('message', onMessage);
+      m.worker.postMessage({ type: 'command', command: 'screenshot' });
+      // 超时保护
+      setTimeout(() => {
+        m.worker.off('message', onMessage);
+        resolve(null);
+      }, 8000);
+    });
+  }
+
   list(): WorkerState[] {
     return Array.from(this.workers.values()).map((m) => m.state);
   }
@@ -132,7 +156,6 @@ export class WorkerManager {
     if (!m) return;
 
     if (msg.type === 'state') {
-      // 状态更新
       m.state = { ...m.state, ...msg.state };
       this.broadcast(PushChannel.WorkerStateChanged, m.state);
     } else if (msg.type === 'log') {
@@ -148,6 +171,9 @@ export class WorkerManager {
         error: msg.error,
         timestamp: Date.now(),
       });
+    } else if (msg.type === 'thumbnail') {
+      // 缩略图:缓存到主进程 + 推给 renderer
+      this.broadcast('thumbnail:update', { hwnd: msg.hwnd, dataUrl: msg.dataUrl });
     }
   }
 

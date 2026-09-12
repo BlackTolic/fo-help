@@ -37,31 +37,6 @@ let profileService: ProfileService | null = null;
 let taskConfigService: TaskConfigService | null = null;
 let thumbnailService: ThumbnailService | null = null;
 
-/** 广播给所有 BrowserWindow */
-function broadcast(channel: string, payload: unknown) {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload);
-  }
-}
-
-/** 给某个 hwnd 截 1 张缩略图并推送(无缓存则拍,有则跳过) */
-async function captureOneThumbnail(hwnd: number) {
-  if (!thumbnailService) thumbnailService = new ThumbnailService();
-  // 已有缓存就跳过
-  if (thumbnailService.getCached(hwnd)) return;
-  const dataUrl = await thumbnailService.capture(hwnd);
-  if (dataUrl) {
-    broadcast('thumbnail:update', { hwnd, dataUrl });
-  }
-}
-
-/** 给一组 hwnd 错开截图(避免阻塞) */
-function scheduleThumbnails(hwnds: number[], staggerMs = 200) {
-  hwnds.forEach((hwnd, idx) => {
-    setTimeout(() => captureOneThumbnail(hwnd), idx * staggerMs);
-  });
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -101,32 +76,23 @@ function createWindow() {
 function setupIpc() {
   // ---- 窗口相关 ----
   ipcMain.handle(RequestChannel.ListGameWindows, async (): Promise<GameWindow[]> => {
-    const wins = await listGameWindows();
-    // 错开拍 1 张缩略图(已有缓存的跳过)
-    scheduleThumbnails(wins.map((w) => w.hwnd));
-    return wins;
+    return await listGameWindows();
   });
 
   ipcMain.handle(RequestChannel.RefreshGameWindows, async (): Promise<GameWindow[]> => {
-    const wins = await listGameWindows();
-    scheduleThumbnails(wins.map((w) => w.hwnd));
-    return wins;
+    return await listGameWindows();
   });
 
-  // 截图指定 hwnd 缩略图(dataURL) - 有缓存直接返回,否则拍一张
+  // 截图由 worker 用大漠完成,主进程只暴露缓存查询
   ipcMain.handle(RequestChannel.CaptureWindow, async (_e, hwnd: number) => {
     if (!thumbnailService) thumbnailService = new ThumbnailService();
-    const cached = thumbnailService.getCached(hwnd);
-    if (cached) return cached;
-    return await thumbnailService.capture(hwnd);
+    return thumbnailService.getCached(hwnd) || null;
   });
 
-  // 强制刷新某窗口缩略图(用户手动点刷新)
+  // 触发 worker 重截某 hwnd 的缩略图
   ipcMain.handle('thumbnail:recapture', async (_e, hwnd: number) => {
-    if (!thumbnailService) thumbnailService = new ThumbnailService();
-    const dataUrl = await thumbnailService.recapture(hwnd);
-    if (dataUrl) broadcast('thumbnail:update', { hwnd, dataUrl });
-    return dataUrl;
+    if (!workerManager) return null;
+    return await workerManager.requestThumbnail(hwnd);
   });
 
   // ---- 任务配置 ----

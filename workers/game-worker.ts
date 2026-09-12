@@ -45,8 +45,8 @@ const taskNameMap: Record<TaskType, TaskName> = {
 };
 
 let currentStatus: ScriptStatus = 'idle';
-void currentStatus; // 写到 setStatus,TS 可能误判
-let _running = true;       // 模块作用域,让 stop 命令能停
+void currentStatus;
+let _running = true;
 void _running;
 let _startedAt = Date.now();
 void _startedAt;
@@ -54,9 +54,11 @@ let killCount = 0;
 void killCount;
 let _bindSuccess = false;
 void _bindSuccess;
-let characterName = '';   // OCR 出来的角色名
+let characterName = '';
 let combat: CombatEngine | null = null;
 void combat;
+let _dm: any = null;
+void _dm;
 
 function sendLog(level: string, msg: string) {
   parentPort!.postMessage({ type: 'log', level, msg });
@@ -88,6 +90,42 @@ async function readCharacterNameMock(_dm: any, fallback: string): Promise<string
   return `${fallback || '角色'}-${r.toString().padStart(2, '0')}`;
 }
 
+/**
+ * 用大漠 Capture 截游戏窗口,转 base64 推给主进程
+ * 不依赖 BindWindow:dm.Capture 直接读帧缓冲,即使绑定失败也能用
+ * (需要 dm.dll 注册成功 + 大漠注册码有效)
+ */
+async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const os = require('os');
+    const tmpFile = path.join(os.tmpdir(), `fo-help-thumb-${hwnd}-${Date.now()}.png`);
+    // 大漠 Capture 截 0,0 - 1920,1080(用游戏实际窗口大小裁剪,大漠自动处理)
+    const ret = dm.Capture(0, 0, 1920, 1080, tmpFile);
+    if (ret !== 1) {
+      sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
+      return;
+    }
+    if (!fs.existsSync(tmpFile)) {
+      sendLog('warn', `大漠 Capture 文件不存在: ${tmpFile}`);
+      return;
+    }
+    const buf = fs.readFileSync(tmpFile);
+    if (buf.length > 1024 * 1024) {
+      sendLog('warn', `缩略图过大 ${(buf.length / 1024).toFixed(0)}KB,跳过`);
+      try { fs.unlinkSync(tmpFile); } catch { /* noop */ }
+      return;
+    }
+    const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+    parentPort!.postMessage({ type: 'thumbnail', hwnd, dataUrl });
+    sendLog('info', `缩略图已推送 (${(buf.length / 1024).toFixed(0)}KB)`);
+    try { fs.unlinkSync(tmpFile); } catch { /* noop */ }
+  } catch (e: any) {
+    sendLog('warn', `截图失败: ${e.message}`);
+  }
+}
+
 const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
   idle: 'idle',
   searching: 'moving',
@@ -113,10 +151,11 @@ async function main() {
   // 1. 加载大漠
   let dm: any;
   try {
-    dm = getDamoo();
+    _dm = getDamoo();
+    dm = _dm;
     sendLog('info', `大漠加载成功,版本 ${dm.Ver()}`);
   } catch (e: any) {
-    sendLog('error', `大漠加载失败: ${e.message}`);
+    log.error(`大漠加载失败: ${e.message}`);
     setStatus('alert', '大漠未加载');
     return;
   }
@@ -161,6 +200,9 @@ async function main() {
       characterName,
     },
   });
+
+  // 3.6 截 1 张缩略图(用大漠 Capture)推给主进程
+  await takeAndSendThumbnail(dm, init.hwnd);
 
   // 4. 初始化引擎
   const vision = new DamooVisionProvider();
@@ -228,14 +270,28 @@ parentPort.on('message', (msg: any) => {
         break;
       case 'resume':
         sendLog('info', '收到 resume');
-        // 重新启动
         if (combat) {
           combat.start().catch((e) => sendLog('error', `resume 失败: ${e.message}`));
         }
         break;
+      case 'screenshot':
+        // 截图请求(主进程转发 renderer)
+        handleScreenshot().catch((e) => sendLog('error', `截图失败: ${e.message}`));
+        break;
     }
   }
 });
+
+async function handleScreenshot(): Promise<void> {
+  if (!_dm) {
+    try { _dm = getDamoo(); } catch { /* noop */ }
+  }
+  if (_dm) {
+    await takeAndSendThumbnail(_dm, init.hwnd);
+  } else {
+    sendLog('warn', '截图失败:大漠未加载');
+  }
+}
 
 main().catch((e) => {
   sendLog('error', `Worker 异常: ${e.message}`);
