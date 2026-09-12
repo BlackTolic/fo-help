@@ -7,9 +7,9 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "dev": "concurrently -k -n vite,main,worker -c blue,green,magenta \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:worker\"",
+    "dev": "npm run build:main && concurrently -k -n vite,main,worker -c blue,green,magenta \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:worker\"",
     "dev:renderer": "vite",
-    "dev:main": "wait-on dist-electron/main/index.js && cross-env NODE_ENV=development electron .",
+    "dev:main": "wait-on http-get://localhost:5173 dist-electron/electron/main.js && cross-env NODE_ENV=development electron .",
     "dev:worker": "tsc -p workers/tsconfig.json --outDir dist-workers --watch --preserveWatchOutput",
     "build:main": "tsc -p electron/tsconfig.json",
     "build:worker": "tsc -p workers/tsconfig.json --outDir dist-workers",
