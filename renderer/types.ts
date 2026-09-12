@@ -13,6 +13,7 @@ interface FohelpAPI {
   listGameWindows: () => Promise<GameWindow[]>;
   refreshGameWindows: () => Promise<GameWindow[]>;
   captureWindow: (hwnd: number) => Promise<string | null>;
+  recaptureThumbnail: (hwnd: number) => Promise<string | null>;
   startWorker: (hwnd: number, characterName: string, taskType: TaskType, profileId?: string) => Promise<{ ok: boolean; workerId?: string; error?: string }>;
   stopWorker: (workerId: string) => Promise<boolean>;
   pauseWorker: (workerId: string) => Promise<boolean>;

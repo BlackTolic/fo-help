@@ -44,22 +44,23 @@ function broadcast(channel: string, payload: unknown) {
   }
 }
 
-/** 启动某个 hwnd 的后台截图 + 推送 */
-function startThumbnailWatch(hwnd: number) {
+/** 给某个 hwnd 截 1 张缩略图并推送(无缓存则拍,有则跳过) */
+async function captureOneThumbnail(hwnd: number) {
   if (!thumbnailService) thumbnailService = new ThumbnailService();
-  thumbnailService.startWatching(
-    hwnd,
-    (targetHwnd, dataUrl) => {
-      broadcast('thumbnail:update', { hwnd: targetHwnd, dataUrl });
-    },
-    2000,  // 2 秒一张
-  );
+  // 已有缓存就跳过
+  if (thumbnailService.getCached(hwnd)) return;
+  const dataUrl = await thumbnailService.capture(hwnd);
+  if (dataUrl) {
+    broadcast('thumbnail:update', { hwnd, dataUrl });
+  }
 }
 
-/** 停止某个 hwnd 的截图(预留给以后按需停) */
-void function stopThumbnailWatch(hwnd: number) {
-  thumbnailService?.stopWatching(hwnd);
-};
+/** 给一组 hwnd 错开截图(避免阻塞) */
+function scheduleThumbnails(hwnds: number[], staggerMs = 200) {
+  hwnds.forEach((hwnd, idx) => {
+    setTimeout(() => captureOneThumbnail(hwnd), idx * staggerMs);
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -101,23 +102,31 @@ function setupIpc() {
   // ---- 窗口相关 ----
   ipcMain.handle(RequestChannel.ListGameWindows, async (): Promise<GameWindow[]> => {
     const wins = await listGameWindows();
-    // 启动后台截图 watcher(每个 hwnd 一个)
-    for (const w of wins) startThumbnailWatch(w.hwnd);
+    // 错开拍 1 张缩略图(已有缓存的跳过)
+    scheduleThumbnails(wins.map((w) => w.hwnd));
     return wins;
   });
 
   ipcMain.handle(RequestChannel.RefreshGameWindows, async (): Promise<GameWindow[]> => {
     const wins = await listGameWindows();
-    for (const w of wins) startThumbnailWatch(w.hwnd);
+    scheduleThumbnails(wins.map((w) => w.hwnd));
     return wins;
   });
 
-  // 截图指定 hwnd 缩略图(dataURL) - 直接返回缓存,避免重复截
+  // 截图指定 hwnd 缩略图(dataURL) - 有缓存直接返回,否则拍一张
   ipcMain.handle(RequestChannel.CaptureWindow, async (_e, hwnd: number) => {
     if (!thumbnailService) thumbnailService = new ThumbnailService();
     const cached = thumbnailService.getCached(hwnd);
     if (cached) return cached;
     return await thumbnailService.capture(hwnd);
+  });
+
+  // 强制刷新某窗口缩略图(用户手动点刷新)
+  ipcMain.handle('thumbnail:recapture', async (_e, hwnd: number) => {
+    if (!thumbnailService) thumbnailService = new ThumbnailService();
+    const dataUrl = await thumbnailService.recapture(hwnd);
+    if (dataUrl) broadcast('thumbnail:update', { hwnd, dataUrl });
+    return dataUrl;
   });
 
   // ---- 任务配置 ----
@@ -207,11 +216,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   workerManager?.shutdownAll();
-  thumbnailService?.stopAll();
+  thumbnailService?.clearAll();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
   workerManager?.shutdownAll();
-  thumbnailService?.stopAll();
+  thumbnailService?.clearAll();
 });

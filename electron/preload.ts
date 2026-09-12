@@ -16,6 +16,10 @@ const api = {
   captureWindow: (hwnd: number): Promise<string | null> =>
     ipcRenderer.invoke(RequestChannel.CaptureWindow, hwnd),
 
+  // 强制重截某窗口的缩略图(清缓存)
+  recaptureThumbnail: (hwnd: number): Promise<string | null> =>
+    ipcRenderer.invoke('thumbnail:recapture', hwnd),
+
   // Worker
   startWorker: (hwnd: number, characterName: string, taskType: TaskType, profileId?: string) =>
     ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType, profileId }),
