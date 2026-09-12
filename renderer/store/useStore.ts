@@ -29,6 +29,10 @@ interface AppState {
   characterNames: Map<number, string>;
   setCharacterName: (hwnd: number, name: string) => void;
 
+  // 缩略图(主进程后台推送,按 hwnd 存)
+  thumbnails: Map<number, string>;
+  setThumbnail: (hwnd: number, dataUrl: string | null) => void;
+
   // Workers
   workers: Map<string, WorkerState>;
   startWorker: (hwnd: number, characterName: string, taskType: string) => Promise<void>;
@@ -87,6 +91,16 @@ export const useStore = create<AppState>((set) => ({
       const next = new Map(prev.characterNames);
       next.set(hwnd, name);
       return { characterNames: next };
+    });
+  },
+
+  thumbnails: new Map(),
+  setThumbnail: (hwnd, dataUrl) => {
+    set((prev) => {
+      const next = new Map(prev.thumbnails);
+      if (dataUrl) next.set(hwnd, dataUrl);
+      else next.delete(hwnd);
+      return { thumbnails: next };
     });
   },
 
@@ -167,5 +181,10 @@ export function subscribeToIpc() {
       msg: err.error?.message || JSON.stringify(err.error),
       timestamp: err.timestamp,
     });
+  });
+
+  // 订阅后台缩略图推送
+  window.fohelp.onThumbnailUpdate(({ hwnd, dataUrl }) => {
+    useStore.getState().setThumbnail(hwnd, dataUrl);
   });
 }

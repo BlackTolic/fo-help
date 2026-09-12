@@ -25,6 +25,7 @@ interface FohelpAPI {
   onWorkerStateChanged: (cb: (state: WorkerState) => void) => () => void;
   onWorkerLog: (cb: (log: { workerId: string; level: string; msg: string; timestamp: number }) => void) => () => void;
   onWorkerError: (cb: (err: { workerId: string; error: any; timestamp: number }) => void) => () => void;
+  onThumbnailUpdate: (cb: (data: { hwnd: number; dataUrl: string | null }) => void) => () => void;
 }
 
 declare global {

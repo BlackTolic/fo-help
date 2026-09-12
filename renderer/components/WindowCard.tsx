@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { Play, Pause, Square, Settings, Pencil } from 'lucide-react';
-import { Thumbnail } from './Thumbnail';
+import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';
 import type { GameWindow, TaskConfig, WorkerState } from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
@@ -25,6 +25,8 @@ export function WindowCard({
   onStart, onStop, onPause, onResume, onTaskSaved,
 }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  // 从 store 读主进程推送的缩略图(不再自己截)
+  const thumbnail = useStore((s) => s.thumbnails.get(gameWindow.hwnd));
   const status = worker?.status || 'idle';
   const isConfigured = !!taskConfig;
   const isRunning = worker && status !== 'idle' && status !== 'paused';
@@ -33,9 +35,21 @@ export function WindowCard({
   return (
     <>
       <div className="card overflow-hidden flex flex-col">
-        {/* 缩略图 */}
-        <div className="relative aspect-[4/3] bg-bg-input border-b border-border-base">
-          <Thumbnail hwnd={gameWindow.hwnd} refreshMs={3000} />
+        {/* 缩略图(主进程后台推送) */}
+        <div className="relative aspect-[4/3] bg-bg-input border-b border-border-base flex items-center justify-center">
+          {thumbnail ? (
+            <img
+              src={thumbnail}
+              alt={`hwnd ${gameWindow.hwnd}`}
+              className="w-full h-full object-contain"
+              draggable={false}
+            />
+          ) : (
+            <div className="text-text-muted text-xs text-center p-3">
+              <div className="text-2xl mb-1 opacity-30 animate-pulse">⏳</div>
+              <div>截取中...</div>
+            </div>
+          )}
           <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 rounded text-[10px] font-mono text-text-secondary">
             hwnd {gameWindow.hwnd}
           </div>

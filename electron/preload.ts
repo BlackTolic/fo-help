@@ -56,6 +56,13 @@ const api = {
     ipcRenderer.on(PushChannel.WorkerError, listener);
     return () => ipcRenderer.removeListener(PushChannel.WorkerError, listener);
   },
+
+  // 后台缩略图推送
+  onThumbnailUpdate: (cb: (data: { hwnd: number; dataUrl: string | null }) => void) => {
+    const listener = (_e: IpcRendererEvent, payload: any) => cb(payload);
+    ipcRenderer.on(PushChannel.ThumbnailUpdate, listener);
+    return () => ipcRenderer.removeListener(PushChannel.ThumbnailUpdate, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld('fohelp', api);

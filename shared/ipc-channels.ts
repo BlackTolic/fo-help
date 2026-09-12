@@ -30,4 +30,5 @@ export enum PushChannel {
   WorkerStateChanged = 'worker:state',     // Worker 状态变化
   WorkerLog = 'worker:log',                 // Worker 日志
   WorkerError = 'worker:error',             // Worker 错误
+  ThumbnailUpdate = 'thumbnail:update',     // 后台截图推送
 }

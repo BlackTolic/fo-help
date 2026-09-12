@@ -37,6 +37,30 @@ let profileService: ProfileService | null = null;
 let taskConfigService: TaskConfigService | null = null;
 let thumbnailService: ThumbnailService | null = null;
 
+/** 广播给所有 BrowserWindow */
+function broadcast(channel: string, payload: unknown) {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+/** 启动某个 hwnd 的后台截图 + 推送 */
+function startThumbnailWatch(hwnd: number) {
+  if (!thumbnailService) thumbnailService = new ThumbnailService();
+  thumbnailService.startWatching(
+    hwnd,
+    (targetHwnd, dataUrl) => {
+      broadcast('thumbnail:update', { hwnd: targetHwnd, dataUrl });
+    },
+    2000,  // 2 秒一张
+  );
+}
+
+/** 停止某个 hwnd 的截图(预留给以后按需停) */
+void function stopThumbnailWatch(hwnd: number) {
+  thumbnailService?.stopWatching(hwnd);
+};
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -76,16 +100,23 @@ function createWindow() {
 function setupIpc() {
   // ---- 窗口相关 ----
   ipcMain.handle(RequestChannel.ListGameWindows, async (): Promise<GameWindow[]> => {
-    return await listGameWindows();
+    const wins = await listGameWindows();
+    // 启动后台截图 watcher(每个 hwnd 一个)
+    for (const w of wins) startThumbnailWatch(w.hwnd);
+    return wins;
   });
 
   ipcMain.handle(RequestChannel.RefreshGameWindows, async (): Promise<GameWindow[]> => {
-    return await listGameWindows();
+    const wins = await listGameWindows();
+    for (const w of wins) startThumbnailWatch(w.hwnd);
+    return wins;
   });
 
-  // 截图指定 hwnd 缩略图(dataURL)
+  // 截图指定 hwnd 缩略图(dataURL) - 直接返回缓存,避免重复截
   ipcMain.handle(RequestChannel.CaptureWindow, async (_e, hwnd: number) => {
     if (!thumbnailService) thumbnailService = new ThumbnailService();
+    const cached = thumbnailService.getCached(hwnd);
+    if (cached) return cached;
     return await thumbnailService.capture(hwnd);
   });
 
@@ -176,9 +207,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   workerManager?.shutdownAll();
+  thumbnailService?.stopAll();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
   workerManager?.shutdownAll();
+  thumbnailService?.stopAll();
 });
