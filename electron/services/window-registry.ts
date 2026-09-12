@@ -120,29 +120,48 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
 
 /** QQ幻想 窗口识别规则(可扩展) */
 export function isQQFantasyWindow(win: GameWindow): boolean {
-  // 1. 进程名匹配
   const procName = win.processName.toLowerCase();
-  if (
+  const title = win.title.toLowerCase();
+  const className = win.className;
+
+  // 0. 排除自己(electron / chrome 类窗口,避免本应用误报)
+  const SELF_CLASSES = [
+    'Chrome_WidgetWin_1',  // Electron 主窗口
+    'Chrome_RenderWidgetHostHWND',
+    'Intermediate D3D Window',
+  ];
+  if (SELF_CLASSES.includes(className)) {
+    return false;
+  }
+
+  // 0b. 排除本应用("QQ幻想助手" 是我们自己的窗口)
+  if (title === 'qq幻想助手' || title.startsWith('qq幻想助手')) {
+    return false;
+  }
+
+  // 1. 进程名匹配(空名放过,可能是反外挂保护)
+  if (procName && (
     procName.includes('qq') ||
     procName.includes('fantasy') ||
     procName.includes('幻想') ||
-    procName === 'game.exe' ||
-    procName === ''
-  ) {
-    // 注:空进程名也纳入(有些游戏加了保护),让 UI 上看到再人工判断
-    // 严格模式可以加白名单,这里宽松一点方便调试
-    if (procName === '') return false; // 空名跳过,避免噪音
+    procName === 'game.exe'
+  )) {
     return true;
   }
 
-  // 2. 标题匹配
-  const title = win.title.toLowerCase();
+  // 2. 标题匹配(QQ幻想私服常见标题: "QQ幻想之XX" / "幻想世界")
   if (title.includes('qq幻想') || title.includes('幻想世界')) {
     return true;
   }
 
-  // 3. 类名匹配
-  if (win.className === 'TMainForm') {
+  // 3. 类名匹配(QQ幻想 / 私服)
+  const KNOWN_CLASSES = [
+    'TMainForm',         // 老版 Delphi
+    'QQSwordWinClass',   // QQ幻想之龙飞凤舞 实际类名
+    'TApplication',      // 部分老游戏
+    'GameWnd',           // 私服
+  ];
+  if (KNOWN_CLASSES.includes(className)) {
     return true;
   }
 
