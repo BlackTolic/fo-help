@@ -13,6 +13,11 @@ const execFileAsync = promisify(execFile);
 /** 调 PowerShell 枚举所有可见顶层窗口,返回 JSON 列表 */
 async function listAllWindowsViaPS(): Promise<GameWindow[]> {
   const script = `
+    # 强制 UTF-8,避免中文窗口标题在子进程 stdout 中被 GBK 编码乱码丢弃
+    chcp 65001 >nul
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $OutputEncoding = [System.Text.Encoding]::UTF8
+
     Add-Type -TypeDefinition @"
       using System;
       using System.Runtime.InteropServices;
@@ -47,16 +52,18 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
       if ($title.Length -eq 0) { return $true }
       $cls = New-Object System.Text.StringBuilder $max
       [WinEnum]::GetClassName($h, $cls, $max) | Out-Null
-      $pid = 0
-      [WinEnum]::GetWindowThreadProcessId($h, [ref]$pid) | Out-Null
-      if ($pid -eq 0) { return $true }
+      $procId = 0
+      [WinEnum]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+      # 注意:不要用 $procId -eq 0 跳过 — 部分反外挂保护的游戏窗口 PID 读到 0,
+      # 但 title/className 仍可正确识别,跳过会导致游戏窗口被漏掉
       $r = New-Object WinEnum+RECT
       [WinEnum]::GetWindowRect($h, [ref]$r) | Out-Null
       $w = $r.R - $r.L
       $h2 = $r.B - $r.T
-      if ($w -lt 100 -or $h2 -lt 100) { return $true }
+      # 尺寸检查放宽:某些私服/反外挂让 GetWindowRect 返回 0,但 title/className 仍可识别
+      if ($w -lt 50 -or $h2 -lt 50) { return $true }
       $procName = ""
-      $hp = [WinEnum]::OpenProcess(0x1000, $false, $pid)
+      $hp = [WinEnum]::OpenProcess(0x1000, $false, $procId)
       if ($hp -ne [IntPtr]::Zero) {
         $nb = New-Object System.Text.StringBuilder 256
         [WinEnum]::GetModuleBaseName($hp, [IntPtr]::Zero, $nb, 256) | Out-Null
@@ -67,7 +74,7 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
       $mini = [WinEnum]::IsIconic($h)
       $obj = [PSCustomObject]@{
         HWnd = $h.ToInt64()
-        Pid = [int]$pid
+        Pid = [int]$procId
         Title = $title.ToString()
         ClassName = $cls.ToString()
         ProcessName = $procName
@@ -83,7 +90,10 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
     }
 
     [WinEnum]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
-    $results | ConvertTo-Json -Depth 3 -Compress
+    $json = $results | ConvertTo-Json -Depth 3 -Compress
+    # stdout 编码默认是 GBK,直接 pipe 给 Node 会乱码 → 改用 base64 传输
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    [Convert]::ToBase64String($bytes)
   `;
 
   try {
@@ -95,7 +105,9 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
     ], { timeout: 5000, windowsHide: true });
 
     if (!stdout.trim()) return [];
-    const parsed = JSON.parse(stdout);
+    // base64 传输避免 stdout 编码问题
+    const decoded = Buffer.from(stdout.trim(), 'base64').toString('utf8');
+    const parsed = JSON.parse(decoded);
     if (!Array.isArray(parsed)) return [];
     return parsed.map((w: any) => ({
       hwnd: Number(w.HWnd),

@@ -20,5 +20,6 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    host: '127.0.0.1',  // 强制 IPv4,避免 IPv6 (::1) 端口被占导致起不来
   },
 });
