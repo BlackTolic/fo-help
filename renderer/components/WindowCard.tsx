@@ -121,7 +121,7 @@ export function WindowCard({
               alt={`hwnd ${gameWindow.hwnd}`}
               className="w-full h-full object-contain"
               draggable={false}
-            />
+            />         
           ) : gameWindow.isMinimized ? (
             <div className="text-text-muted text-xs text-center p-3">
               <div className="text-2xl mb-1 opacity-50">📉</div>
