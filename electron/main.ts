@@ -8,6 +8,14 @@ import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
 import { ProfileService, type ProfileInfo } from './services/profile-service';
 
+// 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
+if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
+  (process.stdout as any).setDefaultEncoding('utf8');
+}
+if (process.stderr && typeof (process.stderr as any).setDefaultEncoding === 'function') {
+  (process.stderr as any).setDefaultEncoding('utf8');
+}
+
 const isDev = process.env.NODE_ENV === 'development';
 
 let mainWindow: BrowserWindow | null = null;
