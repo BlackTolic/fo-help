@@ -4,6 +4,9 @@
 import type { IInputProvider, KeyCode, MouseButton, MoveStyle } from '../IInputProvider';
 import type { Point } from '../../vision/IVisionProvider';
 import { getDamoo } from '../../damoo/damoo-instance';
+import { createLogger } from '../../../logger';
+
+const log = createLogger('damoo.input');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const winax = require('winax');
@@ -100,6 +103,6 @@ export class DamooInputProvider implements IInputProvider {
   }
 
   destroy(): void {
-    if (this.hwnd === 0) console.log('  (input provider: hwnd 未绑定)');
+    if (this.hwnd === 0) log.debug('input provider: hwnd 未绑定');
   }
 }

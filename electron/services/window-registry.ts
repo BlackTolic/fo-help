@@ -5,7 +5,9 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { GameWindow } from '../../shared/types';
+import { createLogger } from '../../core/logger';
 
+const log = createLogger('window-registry');
 const execFileAsync = promisify(execFile);
 
 /** 调 PowerShell 枚举所有可见顶层窗口,返回 JSON 列表 */
@@ -111,7 +113,7 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
       isMinimized: !!w.IsMinimized,
     }));
   } catch (err) {
-    console.error('[WindowRegistry] PowerShell 枚举失败:', err);
+    log.error('[WindowRegistry] PowerShell 枚举失败:', err);
     return [];
   }
 }

@@ -10,6 +10,9 @@ import {
   DEFAULT_COMBAT,
   DEFAULT_FARM,
 } from './defaults';
+import { createLogger } from '../logger';
+
+const log = createLogger('profile');
 
 export class ProfileLoader {
   /** 从 YAML 文件加载 Profile,缺失字段用默认值兜底 */
@@ -66,7 +69,7 @@ export class ProfileLoader {
           results.push({ id: raw.id, name: raw.name, file: full });
         }
       } catch (e: any) {
-        console.warn(`[ProfileLoader] 跳过无效文件 ${f}: ${e.message}`);
+        log.warn(`[ProfileLoader] 跳过无效文件 ${f}: ${e.message}`);
       }
     }
     return results;
@@ -76,17 +79,18 @@ export class ProfileLoader {
     // 至少要有一个技能
     const skills = Object.values(p.class.skills || {});
     if (skills.length === 0) {
-      console.warn(`[ProfileLoader] Profile ${p.id} 没有配置任何技能`);
+      log.warn(`[ProfileLoader] Profile ${p.id} 没有配置任何技能`);
     }
     // 字体库存在性检查
     if (p.fontLib && !fs.existsSync(p.fontLib)) {
-      console.warn(`[ProfileLoader] 字库文件不存在: ${p.fontLib}`);
+      log.warn(`[ProfileLoader] 字库文件不存在: ${p.fontLib}`);
     }
     // 模板文件存在性
     for (const [k, v] of Object.entries(p.templates)) {
       if (v && !fs.existsSync(v)) {
-        console.warn(`[ProfileLoader] 模板 ${k} 不存在: ${v}`);
+        log.warn(`[ProfileLoader] 模板 ${k} 不存在: ${v}`);
       }
     }
   }
 }
+

@@ -17,6 +17,9 @@ import { CoordinateReader } from '../core/state/CoordinateReader';
 import { SkillManager } from '../core/state/SkillManager';
 import { TargetFinder } from '../core/combat/TargetFinder';
 import { CombatEngine, type CombatState } from '../core/combat/CombatEngine';
+import { createLogger } from '../core/logger';
+
+const log = createLogger('worker');
 
 if (!parentPort) {
   throw new Error('必须在 worker_threads 中运行');
@@ -53,8 +56,13 @@ void _bindSuccess;
 let combat: CombatEngine | null = null;
 void combat;
 
-function log(level: string, msg: string) {
+function sendLog(level: string, msg: string) {
   parentPort!.postMessage({ type: 'log', level, msg });
+  // 同步打到 pino(便于 dev/console 查)
+  if (level === 'info') log.info(msg);
+  else if (level === 'warn') log.warn(msg);
+  else if (level === 'error') log.error(msg);
+  else log.debug(msg);
 }
 
 function setStatus(status: ScriptStatus, detail?: string) {
@@ -78,24 +86,24 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
 } as const;
 
 async function main() {
-  log('info', `Worker 启动: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
+  sendLog('info', `Worker 启动: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
 
   const profile = init.profile;
   if (profile) {
-    log('info', `Profile: ${profile.id} | ${profile.name} | 职业=${profile.class.name}`);
+    sendLog('info', `Profile: ${profile.id} | ${profile.name} | 职业=${profile.class.name}`);
     const kw = profile.combat?.mobFilter?.nameKeywords;
-    if (kw) log('info', `  找怪关键字: ${kw.join(', ')}`);
+    if (kw) sendLog('info', `  找怪关键字: ${kw.join(', ')}`);
   } else {
-    log('warn', '未指定 Profile');
+    sendLog('warn', '未指定 Profile');
   }
 
   // 1. 加载大漠
   let dm: any;
   try {
     dm = getDamoo();
-    log('info', `大漠加载成功,版本 ${dm.Ver()}`);
+    sendLog('info', `大漠加载成功,版本 ${dm.Ver()}`);
   } catch (e: any) {
-    log('error', `大漠加载失败: ${e.message}`);
+    sendLog('error', `大漠加载失败: ${e.message}`);
     setStatus('alert', '大漠未加载');
     return;
   }
@@ -110,7 +118,7 @@ async function main() {
   };
   const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
   if (!bindOk) {
-    log('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dm.GetLastError?.()}`);
+    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dm.GetLastError?.()}`);
     setStatus('alert', '窗口绑定失败');
     return;
   }
@@ -123,9 +131,9 @@ async function main() {
       const fontPath = path.isAbsolute(profile.fontLib) ? profile.fontLib : path.join(app.getAppPath(), profile.fontLib);
       dm.SetDict(0, fontPath);
       dm.UseDict(0);
-      log('info', `字库已加载: ${fontPath}`);
+      sendLog('info', `字库已加载: ${fontPath}`);
     } catch (e: any) {
-      log('warn', `字库加载失败: ${e.message}`);
+      sendLog('warn', `字库加载失败: ${e.message}`);
     }
   }
 
@@ -136,7 +144,7 @@ async function main() {
   input.bind(init.hwnd);
 
   if (!profile) {
-    log('error', '战斗模式需要 Profile');
+    sendLog('error', '战斗模式需要 Profile');
     setStatus('alert', '缺 Profile');
     return;
   }
@@ -145,7 +153,7 @@ async function main() {
   const skills = new SkillManager(input, profile);
   const finder = new TargetFinder(vision);
   combat = new CombatEngine(input, coord, skills, finder, profile, {
-    onLog: (level, msg) => log(level, msg),
+    onLog: (level, msg) => sendLog(level, msg),
     onStateChange: (s) => {
       const status: ScriptStatus = STATUS_MAP[s.kind] as ScriptStatus;
       let detail: string = s.kind;
@@ -156,11 +164,11 @@ async function main() {
     },
     onKill: () => {
       killCount += 1;
-      log('info', `累计击杀: ${killCount}`);
+      sendLog('info', `累计击杀: ${killCount}`);
     },
   });
 
-  log('info', '战斗引擎已就绪,开始循环...');
+  sendLog('info', '战斗引擎已就绪,开始循环...');
 
   // 5. 主循环
   if (init.taskType === 'farm') {
@@ -168,11 +176,11 @@ async function main() {
     await combat.start();
   } else {
     // 其他任务暂未实现,fallback
-    log('warn', `任务 ${init.taskType} 暂未实现,只跑挂机打怪`);
+    sendLog('warn', `任务 ${init.taskType} 暂未实现,只跑挂机打怪`);
     await combat.start();
   }
 
-  log('info', 'Worker 主循环结束');
+  sendLog('info', 'Worker 主循环结束');
 }
 
 // 命令
@@ -180,7 +188,7 @@ parentPort.on('message', (msg: any) => {
   if (msg.type === 'command') {
     switch (msg.command) {
       case 'stop':
-        log('info', '收到 stop');
+        sendLog('info', '收到 stop');
         _running = false;
         combat?.stop();
         unbindWindow();
@@ -189,15 +197,15 @@ parentPort.on('message', (msg: any) => {
         setTimeout(() => process.exit(0), 100);
         break;
       case 'pause':
-        log('info', '收到 pause');
+        sendLog('info', '收到 pause');
         combat?.stop();
         setStatus('paused', '用户暂停');
         break;
       case 'resume':
-        log('info', '收到 resume');
+        sendLog('info', '收到 resume');
         // 重新启动
         if (combat) {
-          combat.start().catch((e) => log('error', `resume 失败: ${e.message}`));
+          combat.start().catch((e) => sendLog('error', `resume 失败: ${e.message}`));
         }
         break;
     }
@@ -205,6 +213,6 @@ parentPort.on('message', (msg: any) => {
 });
 
 main().catch((e) => {
-  log('error', `Worker 异常: ${e.message}`);
+  sendLog('error', `Worker 异常: ${e.message}`);
   setStatus('alert', e.message);
 });

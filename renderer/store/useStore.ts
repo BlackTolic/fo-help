@@ -41,8 +41,10 @@ let logIdCounter = 1;
 export const useStore = create<AppState>((set) => ({
   gameWindows: [],
   refreshWindows: async () => {
+    console.log(1111)
     if (!window.fohelp) return;
     const list = await window.fohelp.listGameWindows();
+    console.log(list,'list')
     set({ gameWindows: list });
   },
 

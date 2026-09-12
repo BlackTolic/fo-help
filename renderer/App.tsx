@@ -17,6 +17,7 @@ function App() {
   const resumeWorker = useStore((s) => s.resumeWorker);
 
   useEffect(() => {
+    console.log(999)
     subscribeToIpc();
     refreshWindows();
     refreshProfiles();

@@ -10,6 +10,9 @@ import type {
   OcrResult,
 } from '../IVisionProvider';
 import { getDamoo } from '../../damoo/damoo-instance';
+import { createLogger } from '../../../logger';
+
+const log = createLogger('damoo.vision');
 
 export class DamooVisionProvider implements IVisionProvider {
   private hwnd: number = 0;
@@ -102,7 +105,6 @@ export class DamooVisionProvider implements IVisionProvider {
   }
 
   destroy(): void {
-    // 不在这里释放 DaMo 单例(其他 provider 可能还在用)
-    if (this.hwnd === 0) console.log('  (vision provider: hwnd 未绑定)');
+    if (this.hwnd === 0) log.debug('vision provider: hwnd 未绑定');
   }
 }

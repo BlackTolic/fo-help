@@ -6,6 +6,9 @@ import { app } from 'electron';
 import type { WorkerState, TaskName, TaskType } from '../../shared/types';
 import { PushChannel } from '../../shared/ipc-channels';
 import type { Profile } from '../../core/profile/types';
+import { createLogger } from '../../core/logger';
+
+const log = createLogger('worker-manager');
 
 interface ManagedWorker {
   worker: Worker;
@@ -32,7 +35,7 @@ export class WorkerManager {
       'game-worker.js',
     );
 
-    console.log(`[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'}`);
+    log.info(`[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'}`);
 
     const worker = new Worker(workerScript, {
       workerData: { hwnd, characterName, taskType, profile },
@@ -143,7 +146,7 @@ export class WorkerManager {
   }
 
   private onWorkerError(workerId: string, err: Error) {
-    console.error(`[WorkerManager] worker ${workerId} 错误:`, err);
+    log.error(`[WorkerManager] worker ${workerId} 错误:`, err);
     this.broadcast(PushChannel.WorkerError, {
       workerId,
       error: { message: err.message, stack: err.stack },
@@ -152,7 +155,7 @@ export class WorkerManager {
   }
 
   private onWorkerExit(workerId: string, code: number) {
-    console.log(`[WorkerManager] worker ${workerId} 退出 code=${code}`);
+    log.info(`[WorkerManager] worker ${workerId} 退出 code=${code}`);
     const m = this.workers.get(workerId);
     if (m) {
       this.byHwnd.delete(m.state.hwnd);

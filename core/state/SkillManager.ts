@@ -3,6 +3,9 @@
 
 import type { IInputProvider, KeyCode } from '../platform/input/IInputProvider';
 import type { Profile, Condition } from '../profile/types';
+import { createLogger } from '../logger';
+
+const log = createLogger('skills');
 
 const KEY_TO_VK: Record<string, KeyCode> = {
   F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5',
@@ -72,7 +75,7 @@ export class SkillManager {
         this.input.pressKey(vk);
         this.lastPotion.set(key, Date.now());
         anyUsed = true;
-        console.log(`[SkillManager] 触发药水 ${key} (${cfg.type})`);
+        log.info(`触发药水 ${key} (${cfg.type})`);
       }
     }
     return anyUsed;
