@@ -44,10 +44,16 @@ export function WindowCard({
               className="w-full h-full object-contain"
               draggable={false}
             />
+          ) : gameWindow.isMinimized ? (
+            <div className="text-text-muted text-xs text-center p-3">
+              <div className="text-2xl mb-1 opacity-50">📉</div>
+              <div>窗口已最小化</div>
+            </div>
           ) : (
             <div className="text-text-muted text-xs text-center p-3">
-              <div className="text-2xl mb-1 opacity-30 animate-pulse">⏳</div>
-              <div>截取中...</div>
+              <div className="text-2xl mb-1 opacity-50">🚫</div>
+              <div>无法截取</div>
+              <div className="text-text-muted/60 mt-1 text-[10px]">游戏可能启用了反截图保护</div>
             </div>
           )}
           <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 rounded text-[10px] font-mono text-text-secondary">
