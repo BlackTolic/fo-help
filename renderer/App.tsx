@@ -4,27 +4,41 @@ import { useEffect } from 'react';
 import { RefreshCw, Activity } from 'lucide-react';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
+import type { TaskConfig } from '../shared/types';
 
 function App() {
   const gameWindows = useStore((s) => s.gameWindows);
   const workers = useStore((s) => s.workers);
-  const profiles = useStore((s) => s.profiles);
+  const taskConfigs = useStore((s) => s.taskConfigs);
+  const characterNames = useStore((s) => s.characterNames);
   const refreshWindows = useStore((s) => s.refreshWindows);
   const refreshProfiles = useStore((s) => s.refreshProfiles);
+  const loadTaskConfig = useStore((s) => s.loadTaskConfig);
+  const setTaskConfig = useStore((s) => s.setTaskConfig);
   const startWorker = useStore((s) => s.startWorker);
   const stopWorker = useStore((s) => s.stopWorker);
   const pauseWorker = useStore((s) => s.pauseWorker);
   const resumeWorker = useStore((s) => s.resumeWorker);
 
   useEffect(() => {
-    console.log(999)
     subscribeToIpc();
     refreshWindows();
     refreshProfiles();
-    // 每 3 秒自动刷新窗口列表
+    // 每 3 秒刷新窗口列表
     const t = setInterval(refreshWindows, 3000);
     return () => clearInterval(t);
   }, [refreshWindows, refreshProfiles]);
+
+  // 当窗口列表变化时,加载每个窗口的任务配置
+  useEffect(() => {
+    gameWindows.forEach((w) => {
+      if (!taskConfigs.has(w.hwnd)) {
+        loadTaskConfig(w.hwnd);
+      }
+    });
+    // 仅在窗口列表变化时跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameWindows]);
 
   const workersByHwnd = new Map<number, string>();
   for (const [wid, w] of workers) workersByHwnd.set(w.hwnd, wid);
@@ -48,11 +62,11 @@ function App() {
         <div className="flex items-center gap-2 text-xs text-text-secondary">
           <Activity size={14} />
           <span>
-            发现 <span className="text-text-primary font-mono">{gameWindows.length}</span> 个游戏窗口
+            游戏窗口 <span className="text-text-primary font-mono">{gameWindows.length}</span>
           </span>
           <span className="text-text-muted">·</span>
           <span>
-            运行中 <span className="text-accent-green font-mono">{runningCount}</span> 个
+            运行中 <span className="text-accent-green font-mono">{runningCount}</span>
           </span>
           <button
             className="ml-3 btn btn-secondary flex items-center gap-1"
@@ -76,11 +90,6 @@ function App() {
                 <br />
                 如果游戏已经打开但没检测到,可能是窗口识别规则不匹配你的私服版本。
               </p>
-              <div className="mt-4 text-xs text-text-muted">
-                <span className="px-2 py-1 rounded bg-bg-card border border-border-base font-mono">
-                  P1 当前识别规则: 进程名含 qq/fantasy/幻想 + 类名 TMainForm
-                </span>
-              </div>
             </div>
           </div>
         ) : (
@@ -93,11 +102,15 @@ function App() {
                   key={win.hwnd}
                   gameWindow={win}
                   worker={worker}
-                  profiles={profiles}
-                  onStart={(hwnd, name, task, pid) => startWorker(hwnd, name, task, pid)}
+                  characterName={characterNames.get(win.hwnd)}
+                  taskConfig={taskConfigs.get(win.hwnd) || null}
+                  onStart={startWorker}
                   onStop={stopWorker}
                   onPause={pauseWorker}
                   onResume={resumeWorker}
+                  onTaskSaved={(_hwnd, config: TaskConfig) => {
+                    setTaskConfig(win.hwnd, config);
+                  }}
                 />
               );
             })}
@@ -107,12 +120,8 @@ function App() {
 
       {/* 底部状态栏 */}
       <footer className="border-t border-border-base bg-bg-card/50 backdrop-blur px-6 py-2 text-[11px] text-text-muted flex items-center justify-between">
-        <span>
-          F1-F9 技能 · 拟人化点击 · 多窗口并行
-        </span>
-        <span className="font-mono">
-          P1 脚手架阶段 · 战斗/移动/识别模块待 P2 接入
-        </span>
+        <span>挂机打怪 / 挖矿 / 捕捉宠物 / 装备炼化 / 名誉任务</span>
+        <span className="font-mono">大漠 7.2543 · 32-bit Electron</span>
       </footer>
     </div>
   );

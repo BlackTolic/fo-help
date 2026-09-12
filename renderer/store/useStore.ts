@@ -1,7 +1,6 @@
-// Zustand store: 全局应用状态
-
+// 全局应用状态
 import { create } from 'zustand';
-import type { GameWindow, WorkerState } from '../../shared/types';
+import type { GameWindow, WorkerState, TaskConfig } from '../../shared/types';
 import type { ProfileInfo } from '../types';
 
 interface LogEntry {
@@ -21,9 +20,18 @@ interface AppState {
   profiles: ProfileInfo[];
   refreshProfiles: () => Promise<void>;
 
+  // 任务配置(按 hwnd 存)
+  taskConfigs: Map<number, TaskConfig>;
+  loadTaskConfig: (hwnd: number) => Promise<void>;
+  setTaskConfig: (hwnd: number, config: TaskConfig) => void;
+
+  // OCR 出来的角色名(按 hwnd 存)
+  characterNames: Map<number, string>;
+  setCharacterName: (hwnd: number, name: string) => void;
+
   // Workers
   workers: Map<string, WorkerState>;
-  startWorker: (hwnd: number, characterName: string, taskType: string, profileId?: string) => Promise<void>;
+  startWorker: (hwnd: number, characterName: string, taskType: string) => Promise<void>;
   stopWorker: (workerId: string) => Promise<void>;
   pauseWorker: (workerId: string) => Promise<void>;
   resumeWorker: (workerId: string) => Promise<void>;
@@ -41,10 +49,9 @@ let logIdCounter = 1;
 export const useStore = create<AppState>((set) => ({
   gameWindows: [],
   refreshWindows: async () => {
-    console.log(1111)
+    console.log(999)
     if (!window.fohelp) return;
     const list = await window.fohelp.listGameWindows();
-    console.log(list,'list')
     set({ gameWindows: list });
   },
 
@@ -55,10 +62,38 @@ export const useStore = create<AppState>((set) => ({
     set({ profiles: list });
   },
 
-  workers: new Map(),
-  startWorker: async (hwnd, characterName, taskType, profileId) => {
+  taskConfigs: new Map(),
+  loadTaskConfig: async (hwnd) => {
     if (!window.fohelp) return;
-    const res = await window.fohelp.startWorker(hwnd, characterName, taskType as any, profileId);
+    const cfg = await window.fohelp.getTaskConfig(hwnd);
+    set((prev) => {
+      const next = new Map(prev.taskConfigs);
+      if (cfg) next.set(hwnd, cfg);
+      else next.delete(hwnd);
+      return { taskConfigs: next };
+    });
+  },
+  setTaskConfig: (hwnd, config) => {
+    set((prev) => {
+      const next = new Map(prev.taskConfigs);
+      next.set(hwnd, config);
+      return { taskConfigs: next };
+    });
+  },
+
+  characterNames: new Map(),
+  setCharacterName: (hwnd, name) => {
+    set((prev) => {
+      const next = new Map(prev.characterNames);
+      next.set(hwnd, name);
+      return { characterNames: next };
+    });
+  },
+
+  workers: new Map(),
+  startWorker: async (hwnd, characterName, taskType) => {
+    if (!window.fohelp) return;
+    const res = await window.fohelp.startWorker(hwnd, characterName, taskType as any);
     if (res.ok && res.workerId) {
       const states = await window.fohelp.listWorkers();
       const map = new Map<string, WorkerState>();
@@ -98,7 +133,6 @@ export const useStore = create<AppState>((set) => ({
     set((prev) => {
       const entry: LogEntry = { ...log, id: logIdCounter++ };
       const next = [entry, ...prev.logs];
-      // 限制最多 500 条
       if (next.length > 500) next.length = 500;
       return { logs: next };
     });
@@ -115,6 +149,10 @@ export function subscribeToIpc() {
       useStore.getState().removeWorker(state.workerId);
     } else {
       useStore.getState().updateWorkerState(state);
+      // 如果有 characterName 推送,更新
+      if (state.characterName && state.hwnd) {
+        useStore.getState().setCharacterName(state.hwnd, state.characterName);
+      }
     }
   });
 

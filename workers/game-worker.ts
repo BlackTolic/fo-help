@@ -31,6 +31,7 @@ interface InitData {
   taskType: TaskType;
   damooConfig?: Partial<DamooConfig>;
   profile?: any;
+  taskConfig?: any;  // 任务配置(FarmTaskConfig 等)
 }
 
 const init = workerData as InitData;
@@ -53,6 +54,7 @@ let killCount = 0;
 void killCount;
 let _bindSuccess = false;
 void _bindSuccess;
+let characterName = '';   // OCR 出来的角色名
 let combat: CombatEngine | null = null;
 void combat;
 
@@ -73,7 +75,18 @@ function setStatus(status: ScriptStatus, detail?: string) {
   });
 }
 
-// 预留给 P5 心跳: function reportFullState(extra = {}) { ... }
+/**
+ * OCR 读角色名(MOCK 实现)
+ * 真实实现:用大漠 Ocr 读角色头像旁边的名字
+ *  - 在 Profile 里配 selfName 区域(region)
+ *  - dm.Ocr(x1, y1, x2, y2, "FFFFFF-FFFFFF", 0.8) 读白字
+ * 现在 mock:返回传入的名字 + 随机后缀
+ */
+async function readCharacterNameMock(_dm: any, fallback: string): Promise<string> {
+  await new Promise((r) => setTimeout(r, 300));
+  const r = Math.floor(Math.random() * 100);
+  return `${fallback || '角色'}-${r.toString().padStart(2, '0')}`;
+}
 
 const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
   idle: 'idle',
@@ -136,6 +149,18 @@ async function main() {
       sendLog('warn', `字库加载失败: ${e.message}`);
     }
   }
+
+  // 3.5 OCR 读角色名(MOCK)
+  characterName = await readCharacterNameMock(dm, init.characterName);
+  sendLog('info', `OCR 角色名: ${characterName}`);
+
+  // 把角色名告诉主进程
+  parentPort!.postMessage({
+    type: 'state',
+    state: {
+      characterName,
+    },
+  });
 
   // 4. 初始化引擎
   const vision = new DamooVisionProvider();

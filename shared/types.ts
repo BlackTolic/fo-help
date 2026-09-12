@@ -44,6 +44,55 @@ export type TaskName =
   | '装备炼化'
   | '名誉任务';
 
+/** 路径点 */
+export interface Waypoint {
+  id: string;
+  x: number;
+  y: number;
+  /** farm-spot = 挂机点 / rest = 休息点(回血回蓝) / path = 路径中间点 */
+  type: 'farm-spot' | 'rest' | 'path';
+  note?: string;
+}
+
+/** 挂机打怪任务配置 */
+export interface FarmTaskConfig {
+  type: 'farm';
+  /** 地图 ID(预置 + 自定义) */
+  mapId: string;
+  /** 自定义地图名(mapId='custom' 时用) */
+  customMapName?: string;
+  /** 打怪模式: single=单怪 / aoe=AOE 群刷 / patrol=路径巡逻 */
+  mode: 'single' | 'aoe' | 'patrol';
+  /** 路径点列表(patrol 模式必填) */
+  waypoints: Waypoint[];
+  /** 找怪关键字 */
+  mobFilter: {
+    nameKeywords: string[];
+    minLevel?: number;
+    maxLevel?: number;
+  };
+  /** 自定义备注 */
+  note?: string;
+}
+
+/** 留白任务配置(后续实现) */
+export interface PlaceholderTaskConfig {
+  type: 'mine' | 'catch-pet' | 'refine' | 'reputation';
+  _todo?: never;
+}
+
+/** 任务配置联合类型 */
+export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig;
+
+/** 任务配置存储(挂到 window) */
+export interface StoredTaskConfig {
+  id: string;            // 唯一 ID
+  taskType: TaskType;
+  config: TaskConfig;
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** Worker 状态(上报给主面板) */
 export interface WorkerState {
   workerId: string;
@@ -52,13 +101,17 @@ export interface WorkerState {
   taskType: TaskType | null;
   taskName: TaskName | null;
   status: ScriptStatus;
-  statusDetail?: string;       // 状态详细描述(比如"战斗中 - 目标:野狼")
-  startedAt: number | null;    // 启动时间戳
+  statusDetail?: string;
+  startedAt: number | null;
   stats: {
     killCount: number;
     deathCount: number;
     uptimeMs: number;
   };
+  /** 当前任务配置(挂机打怪才有) */
+  taskConfig?: TaskConfig;
+  /** 缩略图(base64 dataURL,可选) */
+  thumbnail?: string;
 }
 
 /** IPC 消息基础结构 */

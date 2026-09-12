@@ -22,7 +22,13 @@ export class WorkerManager {
   /**
    * 启动一个 worker 绑定到指定游戏窗口
    */
-  start(hwnd: number, characterName: string, taskType: TaskType, profile: Profile | null): string {
+  start(
+    hwnd: number,
+    characterName: string,
+    taskType: TaskType,
+    profile: Profile | null,
+    taskConfig: any = null,
+  ): string {
     if (this.byHwnd.has(hwnd)) {
       return this.byHwnd.get(hwnd)!;
     }
@@ -38,7 +44,7 @@ export class WorkerManager {
     log.info(`[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'}`);
 
     const worker = new Worker(workerScript, {
-      workerData: { hwnd, characterName, taskType, profile },
+      workerData: { hwnd, characterName, taskType, profile, taskConfig },
     });
 
     const initialState: WorkerState = {
@@ -58,7 +64,7 @@ export class WorkerManager {
 
     this.workers.set(workerId, { worker, state: initialState });
     this.byHwnd.set(hwnd, workerId);
-
+    
     worker.on('message', (msg) => this.onWorkerMessage(workerId, msg));
     worker.on('error', (err) => this.onWorkerError(workerId, err));
     worker.on('exit', (code) => this.onWorkerExit(workerId, code));

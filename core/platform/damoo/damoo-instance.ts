@@ -7,6 +7,12 @@ import { createLogger } from '../../logger';
 
 const log = createLogger('damoo');
 
+// 大漠注册码(从 DaMo 作者处购买后获得)
+// 注册只需一次,COM 实例里调一次,后续 BindWindow 等高级功能才能用
+// ⚠️ 商业代码,不要提交到公开仓库或分享给他人
+const DAMOO_REGISTER_CODE = 'mh84909b3bf80d45c618136887775ccc90d27d7';
+const DAMOO_ATTACH_CODE = 'mt0plzvti09xyhw7';
+
 export type DisplayMode = 'normal' | 'gdi' | 'gdi2' | 'dx' | 'dx2' | 'dx3';
 export type MouseMode = 'normal' | 'windows' | 'windows2' | 'dx' | 'dx2';
 export type KeypadMode = 'normal' | 'windows' | 'windows2' | 'dx' | 'dx2';
@@ -38,6 +44,18 @@ export function getDamoo(): any {
     try {
       _dm = new winax.Object('dm.dmsoft');
       log.info(`COM 加载成功,版本 ${_dm.Ver()}`);
+      // 注册大漠插件(必须,否则 BindWindowEx 等高级 API 不能用)
+      // 注册码仅首次启动调一次,COM 实例内已记忆
+      try {
+        const regResult = _dm.Reg(DAMOO_REGISTER_CODE, DAMOO_ATTACH_CODE);
+        if (regResult === 1) {
+          log.info('大漠注册成功');
+        } else {
+          log.warn(`大漠注册返回非 1:${regResult} (BindWindowEx 等高级 API 可能不可用)`);
+        }
+      } catch (e: any) {
+        log.warn(`大漠注册异常:${e.message}`);
+      }
     } catch (e: any) {
       _dm = null;
       throw new Error(`大漠 DLL 未注册或加载失败: ${e.message}\n` +

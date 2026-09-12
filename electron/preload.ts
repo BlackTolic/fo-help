@@ -2,7 +2,7 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { RequestChannel, PushChannel } from '../shared/ipc-channels';
-import type { GameWindow, TaskType, WorkerState } from '../shared/types';
+import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
 
 // 类型化 API
 const api = {
@@ -13,9 +13,12 @@ const api = {
   refreshGameWindows: (): Promise<GameWindow[]> =>
     ipcRenderer.invoke(RequestChannel.RefreshGameWindows),
 
+  captureWindow: (hwnd: number): Promise<string | null> =>
+    ipcRenderer.invoke(RequestChannel.CaptureWindow, hwnd),
+
   // Worker
-  startWorker: (hwnd: number, characterName: string, taskType: TaskType) =>
-    ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType }),
+  startWorker: (hwnd: number, characterName: string, taskType: TaskType, profileId?: string) =>
+    ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType, profileId }),
 
   stopWorker: (workerId: string) => ipcRenderer.invoke(RequestChannel.StopWorker, workerId),
 
@@ -24,6 +27,12 @@ const api = {
   resumeWorker: (workerId: string) => ipcRenderer.invoke(RequestChannel.ResumeWorker, workerId),
 
   listWorkers: (): Promise<WorkerState[]> => ipcRenderer.invoke(RequestChannel.ListWorkers),
+
+  // 任务配置
+  saveTaskConfig: (hwnd: number, config: TaskConfig) =>
+    ipcRenderer.invoke(RequestChannel.SaveTaskConfig, hwnd, config),
+  getTaskConfig: (hwnd: number) =>
+    ipcRenderer.invoke(RequestChannel.GetTaskConfig, hwnd),
 
   // Profile
   listProfiles: (): Promise<any[]> => ipcRenderer.invoke(RequestChannel.ListProfiles),

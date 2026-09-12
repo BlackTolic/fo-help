@@ -3,10 +3,12 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'path';
 import { RequestChannel } from '../shared/ipc-channels';
-import type { GameWindow, TaskType, WorkerState } from '../shared/types';
+import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
 import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
 import { ProfileService, type ProfileInfo } from './services/profile-service';
+import { TaskConfigService } from './services/task-config-service';
+import { ThumbnailService } from './services/thumbnail-service';
 
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
 if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
@@ -32,6 +34,8 @@ const isDev = process.env.NODE_ENV === 'development';
 let mainWindow: BrowserWindow | null = null;
 let workerManager: WorkerManager | null = null;
 let profileService: ProfileService | null = null;
+let taskConfigService: TaskConfigService | null = null;
+let thumbnailService: ThumbnailService | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -79,6 +83,28 @@ function setupIpc() {
     return await listGameWindows();
   });
 
+  // 截图指定 hwnd 缩略图(dataURL)
+  ipcMain.handle(RequestChannel.CaptureWindow, async (_e, hwnd: number) => {
+    if (!thumbnailService) thumbnailService = new ThumbnailService();
+    return await thumbnailService.capture(hwnd);
+  });
+
+  // ---- 任务配置 ----
+  ipcMain.handle(RequestChannel.SaveTaskConfig, (_e, hwnd: number, config: TaskConfig) => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    return taskConfigService.save(hwnd, config);
+  });
+
+  ipcMain.handle(RequestChannel.GetTaskConfig, (_e, hwnd: number) => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    return taskConfigService.load(hwnd);
+  });
+
+  ipcMain.handle(RequestChannel.ListTaskConfigs, () => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    return taskConfigService.listAll();
+  });
+
   // ---- Worker 相关 ----
   ipcMain.handle(
     RequestChannel.StartWorker,
@@ -90,9 +116,13 @@ function setupIpc() {
       try {
         if (!workerManager) workerManager = new WorkerManager();
         if (!profileService) profileService = new ProfileService();
+        if (!taskConfigService) taskConfigService = new TaskConfigService();
         const profile = payload.profileId ? profileService.load(payload.profileId) : null;
-        const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, profile);
-        console.log(`[IPC] StartWorker OK wid=${wid}`);
+        // 自动加载该 hwnd 的任务配置
+        const storedTask = taskConfigService.load(payload.hwnd);
+        const taskConfig = storedTask?.config || null;
+        const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, profile, taskConfig);
+        console.log(`[IPC] StartWorker OK wid=${wid} taskConfig=${taskConfig ? 'loaded' : 'none'}`);
         return { ok: true, workerId: wid };
       } catch (err: any) {
         console.error(`[IPC] StartWorker FAIL: ${err.message}`);

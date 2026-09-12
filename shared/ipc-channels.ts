@@ -5,6 +5,7 @@ export enum RequestChannel {
   // 窗口
   ListGameWindows = 'window:list',
   RefreshGameWindows = 'window:refresh',
+  CaptureWindow = 'window:capture',         // 截取指定 hwnd 的缩略图
 
   // Worker
   StartWorker = 'worker:start',
@@ -13,10 +14,14 @@ export enum RequestChannel {
   ResumeWorker = 'worker:resume',
   ListWorkers = 'worker:list',
 
+  // 任务配置
+  SaveTaskConfig = 'task:save',             // 保存任务配置(挂到 hwnd)
+  GetTaskConfig = 'task:get',               // 读任务配置
+  ListTaskConfigs = 'task:list',            // 列出所有任务
+
   // Profile
   ListProfiles = 'profile:list',
   LoadProfile = 'profile:load',
-  GetDefaultProfile = 'profile:getDefault',
 }
 
 /** Main → Renderer(推送事件) */
