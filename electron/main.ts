@@ -9,6 +9,7 @@ import { WorkerManager } from './services/worker-manager';
 import { ProfileService, type ProfileInfo } from './services/profile-service';
 import { TaskConfigService } from './services/task-config-service';
 import { ThumbnailService } from './services/thumbnail-service';
+import chokidar from 'chokidar';
 
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
 if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
@@ -60,6 +61,8 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
+    // production auto-reload:监听 dist/ 变化,改了源码 rebuild 后自动刷新
+    watchDistAndReload(path.join(__dirname, '..', '..', 'dist'));
   }
 
   // 外部链接用系统浏览器打开
@@ -71,6 +74,31 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+/**
+ * 监听 dist/ 目录,文件变化时 debounce 300ms 后 reload renderer
+ * 等价于 HMR 体验(只是全页面 reload,不是模块 hot replace)
+ * 只在 production 模式生效 — dev 模式 vite 已经自带 HMR
+ */
+function watchDistAndReload(distPath: string): void {
+  let timer: NodeJS.Timeout | null = null;
+  chokidar.watch(distPath, {
+    ignored: /(^|[\\/\\\\])\../,  // 忽略 dotfile
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
+  }).on('all', (event, filePath) => {
+    if (filePath.includes('node_modules')) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        console.log(`[auto-reload] ${event} ${filePath} → reload`);
+        mainWindow.webContents.reload();
+      }
+    }, 300);
+  });
+  console.log(`[auto-reload] watching ${distPath}`);
 }
 
 function setupIpc() {
