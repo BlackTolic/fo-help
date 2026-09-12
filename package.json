@@ -1,0 +1,73 @@
+{
+  "name": "fo-help",
+  "version": "0.1.0",
+  "description": "QQ幻想脚本助手 - 多窗口挂机工具",
+  "main": "dist-electron/electron/main.js",
+  "author": "老大",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n vite,main,worker -c blue,green,magenta \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:worker\"",
+    "dev:renderer": "vite",
+    "dev:main": "wait-on dist-electron/main/index.js && cross-env NODE_ENV=development electron .",
+    "dev:worker": "tsc -p workers/tsconfig.json --outDir dist-workers --watch --preserveWatchOutput",
+    "build:main": "tsc -p electron/tsconfig.json",
+    "build:worker": "tsc -p workers/tsconfig.json --outDir dist-workers",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:worker && npm run build:renderer",
+    "start": "cross-env NODE_ENV=production electron .",
+    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit && tsc -p workers/tsconfig.json --noEmit",
+    "package": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "koffi": "^2.10.0",
+    "lucide-react": "^0.460.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "winax": "^3.6.2",
+    "yaml": "^2.9.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^32.3.3",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.fohelp.assistant",
+    "productName": "QQ幻想助手",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist-workers/**/*",
+      "dist/**/*",
+      "assets/**/*",
+      "profiles/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "arch": [
+        "x64"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
