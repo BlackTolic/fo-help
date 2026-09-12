@@ -16,6 +16,17 @@ if (process.stderr && typeof (process.stderr as any).setDefaultEncoding === 'fun
   (process.stderr as any).setDefaultEncoding('utf8');
 }
 
+// 全局异常捕获(防止任何未捕获错误让 Electron 静默退出)
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] unhandledRejection:', reason);
+});
+process.on('exit', (code) => {
+  console.log(`[main process] exit code=${code}`);
+});
+
 const isDev = process.env.NODE_ENV === 'development';
 
 let mainWindow: BrowserWindow | null = null;
@@ -75,13 +86,16 @@ function setupIpc() {
       _e,
       payload: { hwnd: number; characterName: string; taskType: TaskType; profileId?: string },
     ): { ok: boolean; workerId?: string; error?: string } => {
+      console.log(`[IPC] StartWorker hwnd=${payload.hwnd} task=${payload.taskType} profile=${payload.profileId}`);
       try {
         if (!workerManager) workerManager = new WorkerManager();
         if (!profileService) profileService = new ProfileService();
         const profile = payload.profileId ? profileService.load(payload.profileId) : null;
         const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, profile);
+        console.log(`[IPC] StartWorker OK wid=${wid}`);
         return { ok: true, workerId: wid };
       } catch (err: any) {
+        console.error(`[IPC] StartWorker FAIL: ${err.message}`);
         return { ok: false, error: err.message };
       }
     },
