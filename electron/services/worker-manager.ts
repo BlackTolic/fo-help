@@ -21,6 +21,7 @@ export class WorkerManager {
 
   /**
    * 启动一个 worker 绑定到指定游戏窗口
+   * @param waitForConfig true = bootstrap 模式,worker 走完初始化后停在 idle 等 'start-task' 命令
    */
   start(
     hwnd: number,
@@ -28,6 +29,7 @@ export class WorkerManager {
     taskType: TaskType,
     profile: Profile | null,
     taskConfig: any = null,
+    waitForConfig: boolean = false,
   ): string {
     if (this.byHwnd.has(hwnd)) {
       return this.byHwnd.get(hwnd)!;
@@ -41,10 +43,12 @@ export class WorkerManager {
       'game-worker.js',
     );
 
-    log.info(`[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'}`);
+    log.info(
+      `[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'},waitForConfig=${waitForConfig}`,
+    );
 
     const worker = new Worker(workerScript, {
-      workerData: { hwnd, characterName, taskType, profile, taskConfig },
+      workerData: { hwnd, characterName, taskType, profile, taskConfig, waitForConfig },
     });
 
     const initialState: WorkerState = {
@@ -89,6 +93,93 @@ export class WorkerManager {
     const m = this.workers.get(workerId);
     if (!m) return false;
     m.worker.postMessage({ type: 'command', command: 'stop' });
+    return true;
+  }
+
+  /** 通过 hwnd 停止 worker(找不到返回 false) */
+  stopByHwnd(hwnd: number): boolean {
+    const wid = this.byHwnd.get(hwnd);
+    if (!wid) return false;
+    return this.stop(wid);
+  }
+
+  /**
+   * Bootstrap 模式启动 worker:
+   *   1. 如果 hwnd 已有 worker(可能 reload 后还在),发 screenshot 命令再等一张图
+   *   2. 否则以 waitForConfig=true 启动新 worker,等 thumbnail 推送 / alert 状态
+   *   3. 任何路径都返回 Promise<{dataUrl, characterName}>
+   *   4. alert(大漠/绑定失败)/ 15s 超时 -> reject
+   */
+  bootstrap(
+    hwnd: number,
+    characterName: string,
+    profile: Profile | null,
+  ): Promise<{ dataUrl: string | null; characterName: string }> {
+    return new Promise((resolve, reject) => {
+      const existingWid = this.byHwnd.get(hwnd);
+      if (existingWid) {
+        // 已存在:触发一次截图(防止 thumbnail 推送过但被错过)
+        const m = this.workers.get(existingWid)!;
+        if (m.state.status === 'alert') {
+          reject(new Error(m.state.statusDetail || 'worker 处于 alert 状态'));
+          return;
+        }
+        const onMsg = (msg: any) => {
+          if (msg.type === 'thumbnail' && msg.hwnd === hwnd) {
+            m.worker.off('message', onMsg);
+            resolve({
+              dataUrl: msg.dataUrl || null,
+              characterName: m.state.character?.name || characterName,
+            });
+          }
+        };
+        m.worker.on('message', onMsg);
+        m.worker.postMessage({ type: 'command', command: 'screenshot' });
+        setTimeout(() => {
+          m.worker.off('message', onMsg);
+          // 超时但 worker 还在,允许 UI 继续(无缩略图也行)
+          resolve({ dataUrl: null, characterName: m.state.character?.name || characterName });
+        }, 8000);
+        return;
+      }
+
+      // 新启动(bootstrap 模式)
+      const wid = this.start(hwnd, characterName, 'farm', profile, null, true);
+      const m = this.workers.get(wid)!;
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        m.worker.off('message', onMsg);
+        clearTimeout(timer);
+        fn();
+      };
+      const onMsg = (msg: any) => {
+        if (msg.type === 'thumbnail' && msg.hwnd === hwnd) {
+          finish(() =>
+            resolve({
+              dataUrl: msg.dataUrl || null,
+              characterName: msg.characterName || m.state.character?.name || characterName,
+            }),
+          );
+        } else if (msg.type === 'state' && msg.state.status === 'alert') {
+          finish(() => reject(new Error(msg.state.statusDetail || 'worker 进入 alert')));
+        }
+      };
+      m.worker.on('message', onMsg);
+      const timer = setTimeout(() => {
+        finish(() => reject(new Error('bootstrap 超时(15s) — 检查大漠注册码/游戏窗口')));
+      }, 15000);
+    });
+  }
+
+  /** 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环 */
+  startTask(hwnd: number): boolean {
+    const wid = this.byHwnd.get(hwnd);
+    if (!wid) return false;
+    const m = this.workers.get(wid);
+    if (!m) return false;
+    m.worker.postMessage({ type: 'command', command: 'start-task' });
     return true;
   }
 

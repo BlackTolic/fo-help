@@ -1,4 +1,4 @@
-// game-worker.ts: 每个游戏窗口一个 worker
+﻿// game-worker.ts: 每个游戏窗口一个 worker
 // P4-B: 完整战斗循环(找怪 → 接近 → 战斗 → 死亡 → 找下一个)
 
 import { parentPort, workerData } from 'worker_threads';
@@ -32,6 +32,13 @@ interface InitData {
   damooConfig?: Partial<DamooConfig>;
   profile?: any;
   taskConfig?: any;  // 任务配置(FarmTaskConfig 等)
+  /**
+   * true = bootstrap 模式:
+   *   走完整初始化(大漠加载 / 绑窗 / 字符库 / OCR / 截图),
+   *   但不进入战斗循环,停在 idle 等 'start-task' 命令
+   * false/undefined = 直接进入战斗(老行为)
+   */
+  waitForConfig?: boolean;
 }
 
 const init = workerData as InitData;
@@ -59,6 +66,8 @@ let combat: CombatEngine | null = null;
 void combat;
 let _dm: any = null;
 void _dm;
+const _waitForConfig = init.waitForConfig === true;
+let _startResolve: (() => void) | null = null;
 
 function sendLog(level: string, msg: string) {
   parentPort!.postMessage({ type: 'log', level, msg });
@@ -102,7 +111,7 @@ async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
     const os = require('os');
     const tmpFile = path.join(os.tmpdir(), `fo-help-thumb-${hwnd}-${Date.now()}.png`);
     // 大漠 Capture 截 0,0 - 1920,1080(用游戏实际窗口大小裁剪,大漠自动处理)
-    const ret = dm.Capture(0, 0, 1920, 1080, tmpFile);
+    const ret = dm.Capture(0, 0, 192, 108, tmpFile);
     if (ret !== 1) {
       sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
       return;
@@ -237,6 +246,17 @@ async function main() {
 
   sendLog('info', '战斗引擎已就绪,开始循环...');
 
+  // 4.5 bootstrap 模式:停在 idle 等 'start-task' 命令
+  if (_waitForConfig) {
+    sendLog('info', 'bootstrap 模式:等待 start-task 命令...');
+    setStatus('idle', '等待启动');
+    await new Promise<void>((resolve) => {
+      _startResolve = resolve;
+    });
+    _startResolve = null;
+    sendLog('info', '收到 start-task,开始执行任务');
+  }
+
   // 5. 主循环
   if (init.taskType === 'farm') {
     // 真实战斗循环
@@ -254,9 +274,22 @@ async function main() {
 parentPort.on('message', (msg: any) => {
   if (msg.type === 'command') {
     switch (msg.command) {
+      case 'start-task':
+        sendLog('info', '收到 start-task');
+        if (_startResolve) {
+          _startResolve();
+        } else {
+          sendLog('warn', '收到 start-task,但 worker 未在等待状态(可能已启动)');
+        }
+        break;
       case 'stop':
         sendLog('info', '收到 stop');
         _running = false;
+        // 如果还在等命令,先 resolve 退出等待
+        if (_startResolve) {
+          _startResolve();
+          _startResolve = null;
+        }
         combat?.stop();
         unbindWindow();
         releaseDamoo();
@@ -265,6 +298,11 @@ parentPort.on('message', (msg: any) => {
         break;
       case 'pause':
         sendLog('info', '收到 pause');
+        // bootstrap 阶段 pause 无意义,直接 reject 等待
+        if (_startResolve) {
+          _startResolve();
+          _startResolve = null;
+        }
         combat?.stop();
         setStatus('paused', '用户暂停');
         break;

@@ -9,6 +9,9 @@ export enum RequestChannel {
 
   // Worker
   StartWorker = 'worker:start',
+  BootstrapWorker = 'worker:bootstrap',   // 启动 worker 但停在 idle 等命令(等任务配置 + 启动信号)
+  StartTask = 'worker:start-task',        // 给已 bootstrap 的 worker 发"开始执行"信号
+  StopWorkerByHwnd = 'worker:stop-by-hwnd', // 通过 hwnd 找到 workerId 停止(用于取消 bootstrap)
   StopWorker = 'worker:stop',
   PauseWorker = 'worker:pause',
   ResumeWorker = 'worker:resume',

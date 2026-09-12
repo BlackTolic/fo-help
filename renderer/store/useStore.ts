@@ -36,6 +36,16 @@ interface AppState {
   // Workers
   workers: Map<string, WorkerState>;
   startWorker: (hwnd: number, characterName: string, taskType: string) => Promise<void>;
+  /** Bootstrap 模式启动 worker:返回 ok + thumbnail + characterName(失败带 error) */
+  bootstrapWorker: (
+    hwnd: number,
+    characterName: string,
+    profileId?: string,
+  ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
+  /** 给已 bootstrap 的 worker 发 start-task */
+  startTask: (hwnd: number) => Promise<void>;
+  /** 取消 bootstrap:通过 hwnd 停掉 worker(用于 dialog 关闭但没保存) */
+  cancelBootstrap: (hwnd: number) => Promise<void>;
   stopWorker: (workerId: string) => Promise<void>;
   pauseWorker: (workerId: string) => Promise<void>;
   resumeWorker: (workerId: string) => Promise<void>;
@@ -114,6 +124,37 @@ export const useStore = create<AppState>((set) => ({
       for (const s of states) map.set(s.workerId, s);
       set({ workers: map });
     }
+  },
+  bootstrapWorker: async (hwnd, characterName, profileId) => {
+    if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
+    const res = await window.fohelp.bootstrapWorker(hwnd, characterName, profileId);
+    if (res.ok) {
+      // 写缩略图 + 角色名
+      if (res.dataUrl) {
+        useStore.getState().setThumbnail(hwnd, res.dataUrl);
+      }
+      if (res.characterName) {
+        useStore.getState().setCharacterName(hwnd, res.characterName);
+      }
+      // 同步 worker 列表
+      try {
+        const states = await window.fohelp.listWorkers();
+        const map = new Map<string, WorkerState>();
+        for (const s of states) map.set(s.workerId, s);
+        set({ workers: map });
+      } catch {
+        /* noop */
+      }
+    }
+    return res;
+  },
+  startTask: async (hwnd) => {
+    if (!window.fohelp) return;
+    await window.fohelp.startTask(hwnd);
+  },
+  cancelBootstrap: async (hwnd) => {
+    if (!window.fohelp) return;
+    await window.fohelp.stopWorkerByHwnd(hwnd);
   },
   stopWorker: async (workerId) => {
     if (!window.fohelp) return;

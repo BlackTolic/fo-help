@@ -24,6 +24,22 @@ const api = {
   startWorker: (hwnd: number, characterName: string, taskType: TaskType, profileId?: string) =>
     ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType, profileId }),
 
+  /** Bootstrap 模式:启动 worker 但停在 idle,等 thumbnail + start-task */
+  bootstrapWorker: (
+    hwnd: number,
+    characterName: string,
+    profileId?: string,
+  ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.BootstrapWorker, { hwnd, characterName, profileId }),
+
+  /** 给已 bootstrap 的 worker 发 start-task,进入战斗 */
+  startTask: (hwnd: number): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(RequestChannel.StartTask, hwnd),
+
+  /** 通过 hwnd 停止(用于取消 bootstrap) */
+  stopWorkerByHwnd: (hwnd: number): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(RequestChannel.StopWorkerByHwnd, hwnd),
+
   stopWorker: (workerId: string) => ipcRenderer.invoke(RequestChannel.StopWorker, workerId),
 
   pauseWorker: (workerId: string) => ipcRenderer.invoke(RequestChannel.PauseWorker, workerId),

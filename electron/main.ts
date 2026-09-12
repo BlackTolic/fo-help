@@ -137,6 +137,48 @@ function setupIpc() {
     },
   );
 
+  /**
+   * Bootstrap 模式:启动 worker 但停在 idle 等 start-task 命令
+   * 等到 thumbnail 推送后返回,renderer 拿去做任务配置 dialog 的预览
+   */
+  ipcMain.handle(
+    RequestChannel.BootstrapWorker,
+    async (
+      _e,
+      payload: { hwnd: number; characterName: string; profileId?: string },
+    ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> => {
+      console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd} profile=${payload.profileId}`);
+      try {
+        if (!workerManager) workerManager = new WorkerManager();
+        if (!profileService) profileService = new ProfileService();
+        const profile = payload.profileId ? profileService.load(payload.profileId) : null;
+        const { dataUrl, characterName } = await workerManager.bootstrap(
+          payload.hwnd,
+          payload.characterName,
+          profile,
+        );
+        console.log(`[IPC] BootstrapWorker OK hwnd=${payload.hwnd} thumb=${dataUrl ? 'yes' : 'no'}`);
+        return { ok: true, dataUrl, characterName };
+      } catch (err: any) {
+        console.error(`[IPC] BootstrapWorker FAIL: ${err.message}`);
+        return { ok: false, error: err.message };
+      }
+    },
+  );
+
+  /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环 */
+  ipcMain.handle(RequestChannel.StartTask, (_e, hwnd: number): { ok: boolean } => {
+    console.log(`[IPC] StartTask hwnd=${hwnd}`);
+    if (!workerManager) return { ok: false };
+    return { ok: workerManager.startTask(hwnd) };
+  });
+
+  /** 通过 hwnd 找到 workerId 停止(用于取消 bootstrap) */
+  ipcMain.handle(RequestChannel.StopWorkerByHwnd, (_e, hwnd: number): { ok: boolean } => {
+    if (!workerManager) return { ok: false };
+    return { ok: workerManager.stopByHwnd(hwnd) };
+  });
+
   ipcMain.handle(RequestChannel.StopWorker, (_e, workerId: string) => {
     return workerManager?.stop(workerId) ?? false;
   });

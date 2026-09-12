@@ -16,6 +16,9 @@ function App() {
   const loadTaskConfig = useStore((s) => s.loadTaskConfig);
   const setTaskConfig = useStore((s) => s.setTaskConfig);
   const startWorker = useStore((s) => s.startWorker);
+  const bootstrapWorker = useStore((s) => s.bootstrapWorker);
+  const startTask = useStore((s) => s.startTask);
+  const cancelBootstrap = useStore((s) => s.cancelBootstrap);
   const stopWorker = useStore((s) => s.stopWorker);
   const pauseWorker = useStore((s) => s.pauseWorker);
   const resumeWorker = useStore((s) => s.resumeWorker);
@@ -105,6 +108,12 @@ function App() {
                   characterName={characterNames.get(win.hwnd)}
                   taskConfig={taskConfigs.get(win.hwnd) || null}
                   onStart={startWorker}
+                  onStartTask={startTask}
+                  onBootstrap={async (hwnd, name) => {
+                    const res = await bootstrapWorker(hwnd, name);
+                    return { ok: res.ok, error: res.error };
+                  }}
+                  onCancelBootstrap={cancelBootstrap}
                   onStop={stopWorker}
                   onPause={pauseWorker}
                   onResume={resumeWorker}
