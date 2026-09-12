@@ -15,8 +15,8 @@
     "build:worker": "tsc -p workers/tsconfig.json --outDir dist-workers",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:worker && npm run build:renderer",
-    "start": "cross-env NODE_ENV=production electron .",
-    "start:utf8": "cmd /c \"chcp 65001 >nul & cross-env NODE_ENV=production electron .\"",
+    "start": "cmd /c \"chcp 65001 >nul & cross-env NODE_ENV=production electron .\"",
+    "start:legacy": "cross-env NODE_ENV=production electron .",
     "dev:utf8": "cmd /c \"chcp 65001 >nul & npm run dev\"",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit && tsc -p workers/tsconfig.json --noEmit",
     "package": "npm run build && electron-builder"

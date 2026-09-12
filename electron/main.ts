@@ -119,6 +119,11 @@ function setupIpc() {
 app.whenReady().then(() => {
   setupIpc();
   createWindow();
+  console.log('✅ QQ幻想助手 已启动 v0.1 · 本地版');
+  console.log('   - 窗口枚举:PowerShell + Win32 API');
+  console.log('   - 大漠:winax 32-bit COM 集成');
+  console.log('   - 战斗引擎:挂机打怪 完整循环');
+  console.log('   - Profile YAML:3 职业模板已加载');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
