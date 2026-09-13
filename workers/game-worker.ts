@@ -9,8 +9,9 @@ import {
   unbindWindow,
   releaseDamoo,
   DEFAULT_DAMOO_CONFIG,
+  dmApi,
   type DamooConfig,
-} from '../core/platform/damoo/damoo-instance';
+} from '../core/platform/damoo/dm-api';
 import { DamooVisionProvider } from '../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../core/platform/input/damoo/DamooInputProvider';
 import { CoordinateReader } from '../core/state/CoordinateReader';
@@ -95,7 +96,8 @@ function setStatus(status: ScriptStatus, detail?: string) {
  *  - dm.Ocr(x1, y1, x2, y2, "FFFFFF-FFFFFF", 0.8) 读白字
  * 现在 mock:返回传入的名字 + 随机后缀
  */
-async function readCharacterNameMock(_dm: any, fallback: string): Promise<string> {
+async function readCharacterNameMock(fallback: string): Promise<string> {
+  // 真实实现应该用 dmApi.ocr(...) 读角色名,目前 mock
   await new Promise((r) => setTimeout(r, 300));
   const r = Math.floor(Math.random() * 100);
   return `${fallback || '角色'}-${r.toString().padStart(2, '0')}`;
@@ -110,7 +112,7 @@ async function readCharacterNameMock(_dm: any, fallback: string): Promise<string
  *   写到 <thumbsDir>/<hwnd>.png(同 hwnd 覆盖)
  *   推 thumb://<hwnd> URL → renderer <img src> 通过自定义协议加载
  */
-async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
+async function takeAndSendThumbnail(hwnd: number): Promise<void> {
   try {
     const fs = require('fs');
     const path = require('path');
@@ -118,7 +120,7 @@ async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
     if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
     const filePath = path.join(thumbsDir, `${hwnd}.png`);
     // 大漠 Capture 截 0,0 - 192,108(1920x1080 缩到 192x108,大漠自动处理)
-    const ret = dm.Capture(0, 0, 192, 108, filePath);
+    const ret = dmApi.capture(0, 0, 192, 108, filePath);
     if (ret !== 1) {
       sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
       return;
@@ -166,11 +168,9 @@ async function main() {
   }
 
   // 1. 加载大漠
-  let dm: any;
   try {
     _dm = getDamoo();
-    dm = _dm;
-    sendLog('info', `大漠加载成功,版本 ${dm.Ver()}`);
+    sendLog('info', `大漠加载成功,版本 ${dmApi.version()}`);
   } catch (e: any) {
     log.error(`大漠加载失败: ${e.message}`);
     setStatus('alert', '大漠未加载');
@@ -187,7 +187,7 @@ async function main() {
   };
   const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
   if (!bindOk) {
-    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dm.GetLastError?.()}`);
+    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dmApi.getLastError()}`);
     setStatus('alert', '窗口绑定失败');
     return;
   }
@@ -198,8 +198,8 @@ async function main() {
       const path = require('path');
       const { app } = require('electron');
       const fontPath = path.isAbsolute(profile.fontLib) ? profile.fontLib : path.join(app.getAppPath(), profile.fontLib);
-      dm.SetDict(0, fontPath);
-      dm.UseDict(0);
+      dmApi.setDict(0, fontPath);
+      dmApi.useDict(0);
       sendLog('info', `字库已加载: ${fontPath}`);
     } catch (e: any) {
       sendLog('warn', `字库加载失败: ${e.message}`);
@@ -207,7 +207,7 @@ async function main() {
   }
 
   // 3.5 OCR 读角色名(MOCK)
-  characterName = await readCharacterNameMock(dm, init.characterName);
+  characterName = await readCharacterNameMock(init.characterName);
   sendLog('info', `OCR 角色名: ${characterName}`);
 
   // 把角色名告诉主进程
@@ -219,7 +219,7 @@ async function main() {
   });
 
   // 3.6 截 1 张缩略图(用大漠 Capture)推给主进程
-  await takeAndSendThumbnail(dm, init.hwnd);
+  await takeAndSendThumbnail(init.hwnd);
 
   // 4. 初始化引擎
   const vision = new DamooVisionProvider();
@@ -235,7 +235,7 @@ async function main() {
 
   const coord = new CoordinateReader(vision, profile);
   const skills = new SkillManager(input, profile);
-  const finder = new TargetFinder(vision);
+  const finder = new TargetFinder();
   combat = new CombatEngine(input, coord, skills, finder, profile, {
     onLog: (level, msg) => sendLog(level, msg),
     onStateChange: (s) => {
@@ -333,7 +333,7 @@ async function handleScreenshot(): Promise<void> {
     try { _dm = getDamoo(); } catch { /* noop */ }
   }
   if (_dm) {
-    await takeAndSendThumbnail(_dm, init.hwnd);
+    await takeAndSendThumbnail(init.hwnd);
   } else {
     sendLog('warn', '截图失败:大漠未加载');
   }

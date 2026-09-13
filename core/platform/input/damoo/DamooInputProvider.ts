@@ -1,9 +1,9 @@
 // 大漠输入模拟 Provider
-// 用 winax 调 dm.dmsoft,实现 IInputProvider
+// 用 dm-api.ts 统一封装,实现 IInputProvider
 
 import type { IInputProvider, KeyCode, MouseButton, MoveStyle } from '../IInputProvider';
 import type { Point } from '../../vision/IVisionProvider';
-import { getDamoo } from '../../damoo/damoo-instance';
+import { dmApi, getDamoo } from '../../damoo/dm-api';
 import { createLogger } from '../../../logger';
 
 const log = createLogger('damoo.input');
@@ -27,16 +27,16 @@ export class DamooInputProvider implements IInputProvider {
     this.hwnd = hwnd;
   }
 
-  private get dm(): any {
+  /** 暴露给其他模块用(已弃用,推荐 dmApi 直接) */
+  get dm(): any {
     return getDamoo();
   }
 
   async moveMouse(to: Point, style?: MoveStyle): Promise<void> {
-    const dm = this.dm;
     const s = style ?? { kind: 'human', durationMs: 200 };
 
     if (s.kind === 'instant') {
-      dm.MoveTo(to.x, to.y);
+      dmApi.moveTo(to.x, to.y);
       return;
     }
 
@@ -54,52 +54,49 @@ export class DamooInputProvider implements IInputProvider {
       // 抖动
       const jx = s.kind === 'bezier' && s.jitter ? (Math.random() - 0.5) * 1.5 : 0;
       const jy = s.kind === 'bezier' && s.jitter ? (Math.random() - 0.5) * 1.5 : 0;
-      dm.MoveTo(x + jx, y + jy);
+      dmApi.moveTo(x + jx, y + jy);
       await new Promise((r) => setTimeout(r, Math.floor(duration / steps)));
     }
   }
 
   async getMousePos(): Promise<Point> {
-    const dm = this.dm;
-    // GetCursorPos 需要 byref 参数(参考 ffo-auto-script 写法)
+    // GetCursorPos 需要 byref 参数(winax.Variant)
     const x = new winax.Variant(0, 'byref');
     const y = new winax.Variant(0, 'byref');
-    dm.GetCursorPos(x, y);
+    dmApi.getCursorPos(x, y);
     return { x: Number(x) || 0, y: Number(y) || 0 };
   }
 
   async click(button: MouseButton, count: number = 1): Promise<void> {
-    const dm = this.dm;
-    const fn = button === 'left' ? 'LeftClick' : button === 'right' ? 'RightClick' : 'MiddleClick';
+    const fn = button === 'left' ? dmApi.leftClick : button === 'right' ? dmApi.rightClick : dmApi.middleClick;
     for (let i = 0; i < count; i++) {
-      dm[fn]();
+      fn();
       if (i < count - 1) await new Promise((r) => setTimeout(r, 80));
     }
   }
 
   async pressKey(key: KeyCode, holdMs?: number): Promise<void> {
-    const dm = this.dm;
     const code = KEY_MAP[key];
     if (code === undefined) throw new Error(`不支持的键: ${key}`);
     if (holdMs && holdMs > 0) {
-      dm.KeyDown(code);
+      dmApi.keyDown(code);
       await new Promise((r) => setTimeout(r, holdMs));
-      dm.KeyUp(code);
+      dmApi.keyUp(code);
     } else {
-      dm.KeyPress(code);
+      dmApi.keyPress(code);
     }
   }
 
   async keyDown(key: KeyCode): Promise<void> {
     const code = KEY_MAP[key];
     if (code === undefined) throw new Error(`不支持的键: ${key}`);
-    this.dm.KeyDown(code);
+    dmApi.keyDown(code);
   }
 
   async keyUp(key: KeyCode): Promise<void> {
     const code = KEY_MAP[key];
     if (code === undefined) throw new Error(`不支持的键: ${key}`);
-    this.dm.KeyUp(code);
+    dmApi.keyUp(code);
   }
 
   destroy(): void {

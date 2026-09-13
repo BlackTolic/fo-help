@@ -1,5 +1,5 @@
 // 大漠视觉识别 Provider
-// 用 winax 调 dm.dmsoft,实现 IVisionProvider
+// 用 dm-api.ts 统一封装,实现 IVisionProvider
 
 import type {
   IVisionProvider,
@@ -9,7 +9,7 @@ import type {
   OcrOpts,
   OcrResult,
 } from '../IVisionProvider';
-import { getDamoo } from '../../damoo/damoo-instance';
+import { dmApi, getDamoo } from '../../damoo/dm-api';
 import { createLogger } from '../../../logger';
 
 const log = createLogger('damoo.vision');
@@ -21,36 +21,29 @@ export class DamooVisionProvider implements IVisionProvider {
     this.hwnd = hwnd;
   }
 
-  /** 暴露给 TargetFinder 等模块用,内部访问 dm 不用每次 getDamoo() */
+  /** 暴露给 TargetFinder 等模块用(已弃用,推荐用 dmApi 直接) */
   get dm(): any {
     return getDamoo();
   }
 
   async captureScreen(roi?: Rect): Promise<Buffer> {
-    const dm = this.dm;
     const x1 = roi?.x ?? 0;
     const y1 = roi?.y ?? 0;
     const x2 = (roi?.x ?? 0) + (roi?.w ?? 0);
     const y2 = (roi?.y ?? 0) + (roi?.h ?? 0);
-    // 大漠: Capture(x1, y1, x2, y2, file) -> 0/1
-    // 这里返回 base64
-    const data = dm.GetScreenData(x1, y1, x2, y2);
+    // 大漠: GetScreenData(x1, y1, x2, y2) -> base64 字符串
+    const data = dmApi.getScreenData(x1, y1, x2, y2);
     if (!data) throw new Error('Capture 失败');
     return Buffer.from(data, 'base64');
   }
 
   async findImage(roi: Rect, template: Buffer, opts?: FindOpts): Promise<Point | null> {
-    const dm = this.dm;
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dm.FindPic(
-      roi.x, roi.y, roi.x + roi.w, roi.y + roi.h,
-      tplB64, '000000', sim, dir,
-    );
+    const ret = dmApi.findPic(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, tplB64, '000000', sim, dir);
     if (!ret) return null;
-    // ret 格式: "x|y"
-    const parts = String(ret).split('|');
+    const parts = ret.split('|');
     if (parts.length !== 2) return null;
     const x = parseInt(parts[0], 10);
     const y = parseInt(parts[1], 10);
@@ -59,17 +52,12 @@ export class DamooVisionProvider implements IVisionProvider {
   }
 
   async findImages(roi: Rect, template: Buffer, opts?: FindOpts): Promise<Point[]> {
-    const dm = this.dm;
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dm.FindPicEx(
-      roi.x, roi.y, roi.x + roi.w, roi.y + roi.h,
-      tplB64, '000000', sim, dir,
-    );
+    const ret = dmApi.findPicEx(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, tplB64, '000000', sim, dir);
     if (!ret) return [];
-    // FindPicEx 格式: "x1|y1|idx1,x2|y2|idx2,..."
-    return String(ret).split(',')
+    return ret.split(',')
       .filter(Boolean)
       .map((p) => {
         const parts = p.split('|');
@@ -80,15 +68,11 @@ export class DamooVisionProvider implements IVisionProvider {
   }
 
   async findColor(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null> {
-    const dm = this.dm;
     const sim = opts?.similarity ?? 0.9;
     const dir = opts?.direction ?? 'leftTop';
-    const ret = dm.FindColor(
-      roi.x, roi.y, roi.x + roi.w, roi.y + roi.h,
-      color, sim, dir,
-    );
+    const ret = dmApi.findColor(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, color, sim, dir);
     if (!ret) return null;
-    const parts = String(ret).split('|');
+    const parts = ret.split('|');
     if (parts.length !== 2) return null;
     const x = parseInt(parts[0], 10);
     const y = parseInt(parts[1], 10);
@@ -97,11 +81,10 @@ export class DamooVisionProvider implements IVisionProvider {
   }
 
   async ocr(roi: Rect, opts?: OcrOpts): Promise<OcrResult> {
-    const dm = this.dm;
     const color = opts?.color ?? 'FFFFFF';
     const sim = opts?.similarity ?? 0.8;
-    const text = dm.Ocr(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, color, sim);
-    return { text: String(text || ''), confidence: 1.0 };
+    const text = dmApi.ocr(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, color, sim);
+    return { text, confidence: 1.0 };
   }
 
   destroy(): void {

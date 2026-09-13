@@ -48,6 +48,7 @@ export function WindowCard({
 
   // 从 store 读主进程推送的缩略图
   const thumbnail = useStore((s) => s.thumbnails.get(gameWindow.hwnd));
+  console.log(thumbnail);
   const status = worker?.status || 'idle';
   const isConfigured = !!taskConfig;
   const isRunning = worker && status !== 'idle' && status !== 'paused';
@@ -66,7 +67,7 @@ export function WindowCard({
   } else {
     uiState = 'ready';
   }
-
+console.log(uiState,isConfigured,isCreating,isRunning,isPaused,'1111');
   // ---- handlers ----
 
   const handleCreateTask = async () => {
