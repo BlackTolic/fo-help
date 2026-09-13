@@ -151,6 +151,11 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
     return false;
   }
 
+  // 0c. 排除 Windows 文件资源管理器(打开 "QQ幻想" 文件夹时标题会含 qq幻想,误报)
+  if (className === 'CabinetWClass') {
+    return false;
+  }
+
   // 1. 进程名匹配(空名放过,可能是反外挂保护)
   if (procName && (
     procName.includes('qq') ||
