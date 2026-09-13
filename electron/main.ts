@@ -1,7 +1,8 @@
 // Electron 主进程入口
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
 import path from 'path';
+import fs from 'fs';
 import { RequestChannel } from '../shared/ipc-channels';
 import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
 import { listGameWindows } from './services/window-registry';
@@ -10,6 +11,16 @@ import { ProfileService, type ProfileInfo } from './services/profile-service';
 import { TaskConfigService } from './services/task-config-service';
 import { ThumbnailService } from './services/thumbnail-service';
 import chokidar from 'chokidar';
+
+/**
+ * 缩略图本地存储方案:
+ * - 不用 base64 dataURL(避免 IPC 传大字符串 + React img 解析慢)
+ * - 大漠 dm.Capture 直接写 PNG 到 <temp>/fo-help-thumbnails/<hwnd>.png
+ * - renderer 通过自定义协议 app://thumb/<hwnd> 加载(主进程 protocol.handle 映射到本地文件)
+ * - app 关闭时清理整个目录
+ */
+const THUMBS_DIR = path.join(app.getPath('temp'), 'fo-help-thumbnails');
+export function getThumbsDir(): string { return THUMBS_DIR; }
 
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
 if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
@@ -235,8 +246,50 @@ function setupIpc() {
   });
 }
 
+// 自定义协议 thumb://<hwnd> 必须在 app ready 之前注册 scheme privilege
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'thumb',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true },
+  },
+]);
+
+/** 清理缩略图目录(关闭时调) */
+function cleanupThumbs(): void {
+  try {
+    if (fs.existsSync(THUMBS_DIR)) {
+      for (const f of fs.readdirSync(THUMBS_DIR)) {
+        try { fs.unlinkSync(path.join(THUMBS_DIR, f)); } catch { /* noop */ }
+      }
+      try { fs.rmdirSync(THUMBS_DIR); } catch { /* noop */ }
+      console.log(`[thumbs] 清理目录: ${THUMBS_DIR}`);
+    }
+  } catch (e) {
+    console.warn('[thumbs] 清理失败:', (e as Error).message);
+  }
+}
+
 // 启动 app
 app.whenReady().then(() => {
+  // 缩略图目录 + 自定义协议
+  if (!fs.existsSync(THUMBS_DIR)) fs.mkdirSync(THUMBS_DIR, { recursive: true });
+  protocol.handle('thumb', (request) => {
+    try {
+      const url = new URL(request.url);
+      // thumb://<hwnd> 形式,hostname 是 hwnd
+      const hwnd = url.hostname;
+      const filePath = path.join(THUMBS_DIR, `${hwnd}.png`);
+      if (!fs.existsSync(filePath)) {
+        return new Response('not found', { status: 404 });
+      }
+      return net.fetch(`file:///${filePath.replace(/\\/g, '/')}`);
+    } catch (e) {
+      console.error('[thumb protocol] error:', (e as Error).message);
+      return new Response('error', { status: 500 });
+    }
+  });
+  console.log(`[thumbs] 目录: ${THUMBS_DIR} (协议 thumb://<hwnd>)`);
+
   setupIpc();
   createWindow();
   console.log('✅ QQ幻想助手 已启动 v0.1 · 本地版');
@@ -253,6 +306,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   workerManager?.shutdownAll();
   thumbnailService?.clearAll();
+  cleanupThumbs();
   if (process.platform !== 'darwin') app.quit();
 });
 

@@ -39,6 +39,8 @@ interface InitData {
    * false/undefined = 直接进入战斗(老行为)
    */
   waitForConfig?: boolean;
+  /** 缩略图本地存储目录(主进程传过来) */
+  thumbsDir?: string;
 }
 
 const init = workerData as InitData;
@@ -100,36 +102,41 @@ async function readCharacterNameMock(_dm: any, fallback: string): Promise<string
 }
 
 /**
- * 用大漠 Capture 截游戏窗口,转 base64 推给主进程
+ * 用大漠 Capture 截游戏窗口,直接写本地 PNG,推 thumb:// URL 给主进程
  * 不依赖 BindWindow:dm.Capture 直接读帧缓冲,即使绑定失败也能用
  * (需要 dm.dll 注册成功 + 大漠注册码有效)
+ *
+ * 本地存储(避免 base64 dataURL 太大导致 IPC 慢 + React img 解析慢):
+ *   写到 <thumbsDir>/<hwnd>.png(同 hwnd 覆盖)
+ *   推 thumb://<hwnd> URL → renderer <img src> 通过自定义协议加载
  */
 async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
   try {
     const fs = require('fs');
     const path = require('path');
-    const os = require('os');
-    const tmpFile = path.join(os.tmpdir(), `fo-help-thumb-${hwnd}-${Date.now()}.png`);
-    // 大漠 Capture 截 0,0 - 1920,1080(用游戏实际窗口大小裁剪,大漠自动处理)
-    const ret = dm.Capture(0, 0, 192, 108, tmpFile);
+    const thumbsDir = (workerData as InitData).thumbsDir || path.join(require('os').tmpdir(), 'fo-help-thumbnails');
+    if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
+    const filePath = path.join(thumbsDir, `${hwnd}.png`);
+    // 大漠 Capture 截 0,0 - 192,108(1920x1080 缩到 192x108,大漠自动处理)
+    const ret = dm.Capture(0, 0, 192, 108, filePath);
     if (ret !== 1) {
       sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
       return;
     }
-    if (!fs.existsSync(tmpFile)) {
-      sendLog('warn', `大漠 Capture 文件不存在: ${tmpFile}`);
+    if (!fs.existsSync(filePath)) {
+      sendLog('warn', `大漠 Capture 文件不存在: ${filePath}`);
       return;
     }
-    const buf = fs.readFileSync(tmpFile);
-    if (buf.length > 1024 * 1024) {
-      sendLog('warn', `缩略图过大 ${(buf.length / 1024).toFixed(0)}KB,跳过`);
-      try { fs.unlinkSync(tmpFile); } catch { /* noop */ }
-      return;
-    }
-    const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-    parentPort!.postMessage({ type: 'thumbnail', hwnd, dataUrl });
-    sendLog('info', `缩略图已推送 (${(buf.length / 1024).toFixed(0)}KB)`);
-    try { fs.unlinkSync(tmpFile); } catch { /* noop */ }
+    const stat = fs.statSync(filePath);
+    // 推 thumb://<hwnd> URL(几字节),renderer 端用 <img src> 加载
+    parentPort!.postMessage({
+      type: 'thumbnail',
+      hwnd,
+      dataUrl: `thumb://${hwnd}`,
+      filePath,
+      size: stat.size,
+    });
+    sendLog('info', `缩略图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
   } catch (e: any) {
     sendLog('warn', `截图失败: ${e.message}`);
   }

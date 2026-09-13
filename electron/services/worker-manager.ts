@@ -48,7 +48,11 @@ export class WorkerManager {
     );
 
     const worker = new Worker(workerScript, {
-      workerData: { hwnd, characterName, taskType, profile, taskConfig, waitForConfig },
+      workerData: {
+        hwnd, characterName, taskType, profile, taskConfig, waitForConfig,
+        // 缩略图本地存储目录(worker 直接写文件,不传 base64)
+        thumbsDir: path.join(app.getPath('temp'), 'fo-help-thumbnails'),
+      },
     });
 
     const initialState: WorkerState = {
