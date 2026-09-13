@@ -276,8 +276,11 @@ app.whenReady().then(() => {
   protocol.handle('thumb', (request) => {
     try {
       const url = new URL(request.url);
-      // thumb://<hwnd> 形式,hostname 是 hwnd
-      const hwnd = url.hostname;
+      // thumb://image/<hwnd> 形式(hostname 固定 'image',避免纯数字 hwnd 被错认为 IPv4)
+      const hwnd = url.pathname.replace(/^\//, '');
+      if (!/^\d+$/.test(hwnd)) {
+        return new Response('bad hwnd', { status: 400 });
+      }
       const filePath = path.join(THUMBS_DIR, `${hwnd}.png`);
       if (!fs.existsSync(filePath)) {
         return new Response('not found', { status: 404 });
@@ -288,7 +291,7 @@ app.whenReady().then(() => {
       return new Response('error', { status: 500 });
     }
   });
-  console.log(`[thumbs] 目录: ${THUMBS_DIR} (协议 thumb://<hwnd>)`);
+  console.log(`[thumbs] 目录: ${THUMBS_DIR} (协议 thumb://image/<hwnd>)`);
 
   setupIpc();
   createWindow();

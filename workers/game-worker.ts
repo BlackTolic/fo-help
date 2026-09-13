@@ -128,11 +128,12 @@ async function takeAndSendThumbnail(dm: any, hwnd: number): Promise<void> {
       return;
     }
     const stat = fs.statSync(filePath);
-    // 推 thumb://<hwnd> URL(几字节),renderer 端用 <img src> 加载
+    // 推 thumb://image/<hwnd> URL(几字节),renderer 端用 <img src> 加载
+    // (用 hostname='image' + path 放 hwnd,避免纯数字 hwnd 被 URL parser 错认为 IPv4)
     parentPort!.postMessage({
       type: 'thumbnail',
       hwnd,
-      dataUrl: `thumb://${hwnd}`,
+      dataUrl: `thumb://image/${hwnd}`,
       filePath,
       size: stat.size,
     });
