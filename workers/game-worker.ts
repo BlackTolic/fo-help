@@ -54,6 +54,30 @@ const taskNameMap: Record<TaskType, TaskName> = {
   reputation: '名誉任务',
 };
 
+/**
+ * 默认 profile(不读 YAML):最小可用版本
+ * - 职业 warrior,技能/药水都空
+ * - combat.mobFilter 默认空(由 taskConfig.nameKeywords 覆盖)
+ * - engine 留空(用 DEFAULT_DAMOO_CONFIG)
+ * - regions 留空(OCR 不开)
+ */
+const DEFAULT_PROFILE: any = {
+  id: 'default',
+  name: 'Default',
+  class: {
+    name: 'warrior',
+    skills: {},
+    potions: {},
+  },
+  combat: {
+    findTargetIntervalMs: 1500,
+    combatTimeoutMs: 60000,
+    mobFilter: { nameKeywords: [] },
+  },
+  engine: {},
+  regions: {},
+};
+
 let currentStatus: ScriptStatus = 'idle';
 void currentStatus;
 let _running = true;
@@ -121,6 +145,7 @@ async function takeAndSendThumbnail(hwnd: number): Promise<void> {
     const filePath = path.join(thumbsDir, `${hwnd}.png`);
     // 大漠 Capture 截 0,0 - 192,108(1920x1080 缩到 192x108,大漠自动处理)
     const ret = dmApi.capture(0, 0, 192, 108, filePath);
+    console.log('测试ret1', ret);
     if (ret !== 1) {
       sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
       return;
@@ -158,13 +183,19 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
 async function main() {
   sendLog('info', `Worker 启动: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
 
-  const profile = init.profile;
-  if (profile) {
-    sendLog('info', `Profile: ${profile.id} | ${profile.name} | 职业=${profile.class.name}`);
-    const kw = profile.combat?.mobFilter?.nameKeywords;
-    if (kw) sendLog('info', `  找怪关键字: ${kw.join(', ')}`);
+  // 不再依赖 profile YAML;profile 为空时用默认 profile(战士模板)
+  // taskConfig.mobFilter 覆盖默认 profile 的 mobFilter(用户自定义生效)
+  const profile = init.profile || DEFAULT_PROFILE;
+  // 合并 taskConfig → effectiveProfile
+  if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
+    profile.combat = profile.combat || {};
+    profile.combat.mobFilter = {
+      ...profile.combat.mobFilter,
+      nameKeywords: init.taskConfig.mobFilter.nameKeywords,
+    };
+    sendLog('info', `taskConfig 找怪关键字: ${init.taskConfig.mobFilter.nameKeywords.join(', ')}`);
   } else {
-    sendLog('warn', '未指定 Profile');
+    sendLog('info', `默认 profile: 职业=${profile.class?.name || 'warrior'}`);
   }
 
   // 1. 加载大漠
@@ -189,6 +220,9 @@ async function main() {
   if (!bindOk) {
     sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dmApi.getLastError()}`);
     setStatus('alert', '窗口绑定失败');
+    // dm.Capture 不依赖 BindWindow(直接读帧缓冲),仍然能截一张
+    // 让用户能看到"游戏窗口的画面",即使后面战斗循环跑不起来
+    await takeAndSendThumbnail(init.hwnd);
     return;
   }
 
@@ -227,12 +261,7 @@ async function main() {
   vision.bind(init.hwnd);
   input.bind(init.hwnd);
 
-  if (!profile) {
-    sendLog('error', '战斗模式需要 Profile');
-    setStatus('alert', '缺 Profile');
-    return;
-  }
-
+  // profile 已保证非空(main 端 DEFAULT_PROFILE 兜底)
   const coord = new CoordinateReader(vision, profile);
   const skills = new SkillManager(input, profile);
   const finder = new TargetFinder();
@@ -324,9 +353,46 @@ parentPort.on('message', (msg: any) => {
         // 截图请求(主进程转发 renderer)
         handleScreenshot().catch((e) => sendLog('error', `截图失败: ${e.message}`));
         break;
+      case 'screenshot-test':
+        // 测试截图(存到 thumbnails/test-<hwnd>-<ts>.png,不影响正常 thumbnail)
+        takeAndSendThumbnailTest(init.hwnd).catch((e) => sendLog('error', `测试截图失败: ${e.message}`));
+        break;
     }
   }
 });
+
+/**
+ * 测试截图:写到 <thumbsDir>/test-<hwnd>-<ts>.png,推 type:'thumbnail-test' 消息
+ * 用于评估大漠截图精度,文件保留供用户查看(不清理)
+ */
+async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
+  console.log('开始测试截图', hwnd);
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const thumbsDir = (workerData as InitData).thumbsDir;
+    if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
+    const ts = Date.now();
+    const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
+    const ret = dmApi.capture(0, 0, 100, 100, filePath);
+    console.log('测试ret12')
+    if (ret !== 1) {
+      sendLog('warn', `测试截图 Capture 返回 ${ret}`);
+      parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: `Capture 返回 ${ret}` });
+      return;
+    }
+    if (!fs.existsSync(filePath)) {
+      parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: '文件未生成' });
+      return;
+    }
+    const stat = fs.statSync(filePath);
+    parentPort!.postMessage({ type: 'thumbnail-test', hwnd, filePath, size: stat.size });
+    sendLog('info', `测试截图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
+  } catch (e: any) {
+    parentPort!.postMessage({ type: 'thumbnail-test', hwnd: init.hwnd, error: e.message });
+    sendLog('warn', `测试截图失败: ${e.message}`);
+  }
+}
 
 async function handleScreenshot(): Promise<void> {
   if (!_dm) {

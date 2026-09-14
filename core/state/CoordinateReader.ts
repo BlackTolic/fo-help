@@ -4,7 +4,6 @@
 // 后续: 小地图找怪、读目标血条
 
 import type { IVisionProvider } from '../platform/vision/IVisionProvider';
-import type { Profile } from '../profile/types';
 
 export interface WorldPoint {
   x: number;
@@ -13,11 +12,11 @@ export interface WorldPoint {
 
 export class CoordinateReader {
   /** 暴露给 MovementEngine 用,这样它能拿到小地图区域 */
-  readonly profile: Profile;
+  readonly profile: any;
 
   constructor(
     private vision: IVisionProvider,
-    profile: Profile,
+    profile: any,
   ) {
     this.profile = profile;
   }

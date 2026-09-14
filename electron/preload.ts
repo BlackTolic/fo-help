@@ -21,16 +21,15 @@ const api = {
     ipcRenderer.invoke('thumbnail:recapture', hwnd),
 
   // Worker
-  startWorker: (hwnd: number, characterName: string, taskType: TaskType, profileId?: string) =>
-    ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType, profileId }),
+  startWorker: (hwnd: number, characterName: string, taskType: TaskType) =>
+    ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType }),
 
   /** Bootstrap 模式:启动 worker 但停在 idle,等 thumbnail + start-task */
   bootstrapWorker: (
     hwnd: number,
     characterName: string,
-    profileId?: string,
   ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> =>
-    ipcRenderer.invoke(RequestChannel.BootstrapWorker, { hwnd, characterName, profileId }),
+    ipcRenderer.invoke(RequestChannel.BootstrapWorker, { hwnd, characterName }),
 
   /** 给已 bootstrap 的 worker 发 start-task,进入战斗 */
   startTask: (hwnd: number): Promise<{ ok: boolean }> =>
@@ -39,6 +38,16 @@ const api = {
   /** 通过 hwnd 停止(用于取消 bootstrap) */
   stopWorkerByHwnd: (hwnd: number): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke(RequestChannel.StopWorkerByHwnd, hwnd),
+
+  /** 截图测试:截一张到 thumbnails/test-<hwnd>-<ts>.png,返回 filePath */
+  captureTest: (
+    hwnd: number,
+  ): Promise<{ ok: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke('worker:capture-test', hwnd),
+
+  /** Windows 资源管理器高亮显示文件 */
+  showItemInFolder: (filePath: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('shell:showItemInFolder', filePath),
 
   stopWorker: (workerId: string) => ipcRenderer.invoke(RequestChannel.StopWorker, workerId),
 
@@ -53,10 +62,6 @@ const api = {
     ipcRenderer.invoke(RequestChannel.SaveTaskConfig, hwnd, config),
   getTaskConfig: (hwnd: number) =>
     ipcRenderer.invoke(RequestChannel.GetTaskConfig, hwnd),
-
-  // Profile
-  listProfiles: (): Promise<any[]> => ipcRenderer.invoke(RequestChannel.ListProfiles),
-  loadProfile: (id: string): Promise<any> => ipcRenderer.invoke(RequestChannel.LoadProfile, id),
 
   // 事件订阅
   onWorkerStateChanged: (cb: (state: WorkerState) => void) => {

@@ -5,8 +5,8 @@ import path from 'path';
 import { app } from 'electron';
 import type { WorkerState, TaskName, TaskType } from '../../shared/types';
 import { PushChannel } from '../../shared/ipc-channels';
-import type { Profile } from '../../core/profile/types';
 import { createLogger } from '../../core/logger';
+import { getThumbsDir } from '../main';
 
 const log = createLogger('worker-manager');
 
@@ -27,7 +27,7 @@ export class WorkerManager {
     hwnd: number,
     characterName: string,
     taskType: TaskType,
-    profile: Profile | null,
+    profile: any | null,
     taskConfig: any = null,
     waitForConfig: boolean = false,
   ): string {
@@ -44,17 +44,18 @@ export class WorkerManager {
     );
 
     log.info(
-      `[WorkerManager] 启动 worker ${workerId},脚本=${workerScript},hwnd=${hwnd},profile=${profile?.id || 'none'},waitForConfig=${waitForConfig}`,
+      `[WorkerManager] 启动 worker ${workerId},hwnd=${hwnd},profile=${profile?.id || 'default'},waitForConfig=${waitForConfig}`,
     );
+
+    // 缩略图本地存储目录:用 main.ts 统一的 getThumbsDir()(dev = 项目根,packaged = userData)
+    const thumbsDir = getThumbsDir();
 
     const worker = new Worker(workerScript, {
       workerData: {
         hwnd, characterName, taskType, profile, taskConfig, waitForConfig,
-        // 缩略图本地存储目录(worker 直接写文件,不传 base64)
-        thumbsDir: path.join(app.getPath('temp'), 'fo-help-thumbnails'),
+        thumbsDir,
       },
     });
-
     const initialState: WorkerState = {
       workerId,
       hwnd,
@@ -117,7 +118,7 @@ export class WorkerManager {
   bootstrap(
     hwnd: number,
     characterName: string,
-    profile: Profile | null,
+    profile: any | null,
   ): Promise<{ dataUrl: string | null; characterName: string }> {
     return new Promise((resolve, reject) => {
       const existingWid = this.byHwnd.get(hwnd);
@@ -225,6 +226,36 @@ export class WorkerManager {
     });
   }
 
+  /**
+   * 截图测试:让 worker 截一张到 thumbnails/test-<hwnd>-<ts>.png
+   * 用于评估大漠截图精度,不影响正常 thumbnail 流
+   * 前提:该 hwnd 已有 worker(否则需先点"创建任务")
+   */
+  captureTest(hwnd: number): Promise<{ filePath?: string; error?: string }> {
+    return new Promise((resolve) => {
+      const wid = this.byHwnd.get(hwnd);
+      if (!wid) {
+        resolve({ error: '该 hwnd 还没有 worker,请先点"创建任务"' });
+        return;
+      }
+      const m = this.workers.get(wid)!;
+      const onMessage = (msg: any) => {
+        if (msg.type === 'thumbnail-test' && msg.hwnd === hwnd) {
+          m.worker.off('message', onMessage);
+          clearTimeout(timer);
+          if (msg.error) resolve({ error: msg.error });
+          else resolve({ filePath: msg.filePath });
+        }
+      };
+      m.worker.on('message', onMessage);
+      m.worker.postMessage({ type: 'command', command: 'screenshot-test' });
+      const timer = setTimeout(() => {
+        m.worker.off('message', onMessage);
+        resolve({ error: '截图超时(8s)' });
+      }, 8000);
+    });
+  }
+
   list(): WorkerState[] {
     return Array.from(this.workers.values()).map((m) => m.state);
   }
@@ -269,6 +300,9 @@ export class WorkerManager {
     } else if (msg.type === 'thumbnail') {
       // 缩略图:缓存到主进程 + 推给 renderer
       this.broadcast('thumbnail:update', { hwnd: msg.hwnd, dataUrl: msg.dataUrl });
+    } else if (msg.type === 'thumbnail-test') {
+      // 测试截图:只 log,不 broadcast(由 captureTest await 模式接走)
+      log.info(`[WorkerManager] 测试截图: hwnd=${msg.hwnd} → ${msg.filePath || msg.error}`);
     }
   }
 

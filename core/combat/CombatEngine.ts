@@ -5,7 +5,6 @@ import type { IInputProvider } from '../platform/input/IInputProvider';
 import type { CoordinateReader } from '../state/CoordinateReader';
 import type { SkillManager, CombatContext } from '../state/SkillManager';
 import type { TargetFinder, CombatTarget, FindFilter } from './TargetFinder';
-import type { Profile } from '../profile/types';
 
 export type CombatState =
   | { kind: 'idle' }
@@ -35,7 +34,7 @@ export class CombatEngine {
     private coord: CoordinateReader,
     private skills: SkillManager,
     private finder: TargetFinder,
-    private profile: Profile,
+    private profile: any,
     private cb: CombatCallbacks = {},
   ) {}
 

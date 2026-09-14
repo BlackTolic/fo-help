@@ -1,7 +1,6 @@
 // 全局应用状态
 import { create } from 'zustand';
 import type { GameWindow, WorkerState, TaskConfig } from '../../shared/types';
-import type { ProfileInfo } from '../types';
 
 interface LogEntry {
   id: number;
@@ -16,14 +15,14 @@ interface AppState {
   gameWindows: GameWindow[];
   refreshWindows: () => Promise<void>;
 
-  // Profiles
-  profiles: ProfileInfo[];
-  refreshProfiles: () => Promise<void>;
-
   // 任务配置(按 hwnd 存)
   taskConfigs: Map<number, TaskConfig>;
+  /** 已持久化(写过磁盘)的 hwnd 集合;不在集合内 = 仅内存,关闭 app 丢 */
+  savedHwnds: Set<number>;
   loadTaskConfig: (hwnd: number) => Promise<void>;
   setTaskConfig: (hwnd: number, config: TaskConfig) => void;
+  /** "确认"按钮用:只写内存,不加 savedHwnds(关闭 app 丢) */
+  setTaskConfigUnsaved: (hwnd: number, config: TaskConfig) => void;
 
   // OCR 出来的角色名(按 hwnd 存)
   characterNames: Map<number, string>;
@@ -40,7 +39,6 @@ interface AppState {
   bootstrapWorker: (
     hwnd: number,
     characterName: string,
-    profileId?: string,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
   /** 给已 bootstrap 的 worker 发 start-task */
   startTask: (hwnd: number) => Promise<void>;
@@ -69,28 +67,38 @@ export const useStore = create<AppState>((set) => ({
     set({ gameWindows: list });
   },
 
-  profiles: [],
-  refreshProfiles: async () => {
-    if (!window.fohelp) return;
-    const list = await window.fohelp.listProfiles();
-    set({ profiles: list });
-  },
-
   taskConfigs: new Map(),
+  savedHwnds: new Set<number>(),
   loadTaskConfig: async (hwnd) => {
     if (!window.fohelp) return;
     const cfg = await window.fohelp.getTaskConfig(hwnd);
     set((prev) => {
       const next = new Map(prev.taskConfigs);
-      if (cfg) next.set(hwnd, cfg);
-      else next.delete(hwnd);
-      return { taskConfigs: next };
+      const nextSaved = new Set(prev.savedHwnds);
+      if (cfg) {
+        next.set(hwnd, cfg);
+        nextSaved.add(hwnd);  // 磁盘来的 = 已保存
+      } else {
+        next.delete(hwnd);
+        nextSaved.delete(hwnd);
+      }
+      return { taskConfigs: next, savedHwnds: nextSaved };
     });
   },
   setTaskConfig: (hwnd, config) => {
     set((prev) => {
       const next = new Map(prev.taskConfigs);
       next.set(hwnd, config);
+      const nextSaved = new Set(prev.savedHwnds);
+      nextSaved.add(hwnd);
+      return { taskConfigs: next, savedHwnds: nextSaved };
+    });
+  },
+  setTaskConfigUnsaved: (hwnd, config) => {
+    set((prev) => {
+      const next = new Map(prev.taskConfigs);
+      next.set(hwnd, config);
+      // 不加 savedHwnds(标记为"未保存"状态)
       return { taskConfigs: next };
     });
   },
@@ -125,9 +133,9 @@ export const useStore = create<AppState>((set) => ({
       set({ workers: map });
     }
   },
-  bootstrapWorker: async (hwnd, characterName, profileId) => {
+  bootstrapWorker: async (hwnd, characterName) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.bootstrapWorker(hwnd, characterName, profileId);
+    const res = await window.fohelp.bootstrapWorker(hwnd, characterName);
     if (res.ok) {
       // 写缩略图 + 角色名
       if (res.dataUrl) {

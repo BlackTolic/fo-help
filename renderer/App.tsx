@@ -11,10 +11,11 @@ function App() {
   const workers = useStore((s) => s.workers);
   const taskConfigs = useStore((s) => s.taskConfigs);
   const characterNames = useStore((s) => s.characterNames);
+  const savedHwnds = useStore((s) => s.savedHwnds);
   const refreshWindows = useStore((s) => s.refreshWindows);
-  const refreshProfiles = useStore((s) => s.refreshProfiles);
   const loadTaskConfig = useStore((s) => s.loadTaskConfig);
   const setTaskConfig = useStore((s) => s.setTaskConfig);
+  const setTaskConfigUnsaved = useStore((s) => s.setTaskConfigUnsaved);
   const startWorker = useStore((s) => s.startWorker);
   const bootstrapWorker = useStore((s) => s.bootstrapWorker);
   const startTask = useStore((s) => s.startTask);
@@ -26,11 +27,10 @@ function App() {
   useEffect(() => {
     subscribeToIpc();
     refreshWindows();
-    refreshProfiles();
     // 每 3 秒刷新窗口列表
     const t = setInterval(refreshWindows, 3000);
     return () => clearInterval(t);
-  }, [refreshWindows, refreshProfiles]);
+  }, [refreshWindows]);
 
   // 当窗口列表变化时,加载每个窗口的任务配置
   useEffect(() => {
@@ -117,8 +117,13 @@ function App() {
                   onStop={stopWorker}
                   onPause={pauseWorker}
                   onResume={resumeWorker}
+                  isSaved={savedHwnds.has(win.hwnd)}
                   onTaskSaved={(_hwnd, config: TaskConfig) => {
                     setTaskConfig(win.hwnd, config);
+                  }}
+                  onTaskConfirm={(_hwnd, config: TaskConfig) => {
+                    // 确认/历史加载:仅写内存
+                    setTaskConfigUnsaved(win.hwnd, config);
                   }}
                 />
               );

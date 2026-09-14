@@ -1,8 +1,7 @@
-// SkillManager: 技能冷却管理 + 智能选技
-// 从 Profile.class.skills 读配置
+﻿// SkillManager: 鎶€鑳藉喎鍗寸鐞?+ 鏅鸿兘閫夋妧
+// 浠?profile.class.skills 璇婚厤缃?鍏煎:profile 鏄?any,榛樿绌哄璞?
 
 import type { IInputProvider, KeyCode } from '../platform/input/IInputProvider';
-import type { Profile, Condition } from '../profile/types';
 import { createLogger } from '../logger';
 
 const log = createLogger('skills');
@@ -30,15 +29,15 @@ export class SkillManager {
 
   constructor(
     private input: IInputProvider,
-    private profile: Profile,
+    private profile: any,
   ) {}
 
   /**
-   * 尝试释放技能(自动判断冷却 + 条件)
-   * @returns 是否真的施放了
-   */
+   * 灏濊瘯閲婃斁鎶€鑳?鑷姩鍒ゆ柇鍐峰嵈 + 鏉′欢)
+   * @returns 鏄惁鐪熺殑鏂芥斁浜?   */
   cast(key: string, ctx: CombatContext): boolean {
-    const skill = this.profile.class.skills[key as keyof typeof this.profile.class.skills];
+    const skills = (this.profile?.class?.skills || {}) as any;
+    const skill = skills[key];
     if (!skill) return false;
 
     const now = Date.now();
@@ -47,14 +46,14 @@ export class SkillManager {
 
     if (!this.evalCondition(skill.condition, ctx)) return false;
 
-    // 真的施放
+    // 真的释放
     const vk = KEY_TO_VK[key] || (key as KeyCode);
     this.input.pressKey(vk);
     this.lastCast.set(key, now);
     return true;
   }
 
-  /** 强制施放(忽略冷却) */
+  /** 寮哄埗鏂芥斁(蹇界暐鍐峰嵈) */
   forceCast(key: string): void {
     const vk = KEY_TO_VK[key] || (key as KeyCode);
     this.input.pressKey(vk);
@@ -63,9 +62,9 @@ export class SkillManager {
 
   /** 检查药水 */
   checkPotions(ctx: CombatContext): boolean {
-    const potions = this.profile.class.potions || {};
+    const potions = (this.profile?.class?.potions || {}) as any;
     let anyUsed = false;
-    for (const [key, cfg] of Object.entries(potions)) {
+    for (const [key, cfg] of Object.entries(potions) as [string, any][]) {
       if (!cfg) continue;
       const last = this.lastPotion.get(key) || 0;
       // 药水至少 1 秒 CD(防止狂按)
@@ -83,7 +82,7 @@ export class SkillManager {
 
   /** 获取最优技能(按优先级 + 冷却 + 条件) */
   pickBest(ctx: CombatContext): string | null {
-    const skills = Object.entries(this.profile.class.skills || {});
+    const skills = Object.entries((this.profile?.class?.skills || {}) as any) as [string, any][];
     const now = Date.now();
 
     const candidates = skills
@@ -98,13 +97,13 @@ export class SkillManager {
     return candidates[0]?.[0] || null;
   }
 
-  /** 评估触发条件 */
-  private evalCondition(cond: Condition | undefined, ctx: CombatContext): boolean {
-    if (!cond) return true;  // 没条件 = 总是 true
+  /** 璇勪及瑙﹀彂鏉′欢 */
+  private evalCondition(cond: any | undefined, ctx: CombatContext): boolean {
+    if (!cond) return true;  // 娌℃潯浠?= 鎬绘槸 true
     const v = ctxValue(cond.type, ctx);
     if (v === undefined || v === null) return false;
 
-    // 数值比较时把 value 转 number;bool 严格相等
+    // 鏁板€兼瘮杈冩椂鎶?value 杞?number;bool 涓ユ牸鐩哥瓑
     if (cond.op === 'equal') {
       return v === cond.value;
     }
@@ -121,7 +120,7 @@ export class SkillManager {
   }
 }
 
-function ctxValue(type: Condition['type'], ctx: CombatContext): number | boolean | undefined {
+function ctxValue(type: string, ctx: CombatContext): number | boolean | undefined {
   switch (type) {
     case 'selfHp':         return ctx.selfHp;
     case 'selfMp':         return ctx.selfMp;

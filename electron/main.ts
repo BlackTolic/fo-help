@@ -7,19 +7,21 @@ import { RequestChannel } from '../shared/ipc-channels';
 import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
 import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
-import { ProfileService, type ProfileInfo } from './services/profile-service';
 import { TaskConfigService } from './services/task-config-service';
 import { ThumbnailService } from './services/thumbnail-service';
-import chokidar from 'chokidar';
 
 /**
  * 缩略图本地存储方案:
  * - 不用 base64 dataURL(避免 IPC 传大字符串 + React img 解析慢)
- * - 大漠 dm.Capture 直接写 PNG 到 <temp>/fo-help-thumbnails/<hwnd>.png
- * - renderer 通过自定义协议 app://thumb/<hwnd> 加载(主进程 protocol.handle 映射到本地文件)
+ * - 大漠 dm.Capture 直接写 PNG 到 <项目根>/thumbnails/<hwnd>.png
+ * - 测试截图:thumbnails/test-<hwnd>-<ts>.png
+ * - renderer 通过自定义协议 thumb://image/<hwnd> 加载(主进程 protocol.handle 映射到本地文件)
  * - app 关闭时清理整个目录
+ * - dev 模式放项目根方便看;packaged 放 userData(避免 asar 内写不进去)
  */
-const THUMBS_DIR = path.join(app.getPath('temp'), 'fo-help-thumbnails');
+const THUMBS_DIR = app.isPackaged
+  ? path.join(app.getPath('userData'), 'thumbnails')
+  : path.join(app.getAppPath(), 'thumbnails');
 export function getThumbsDir(): string { return THUMBS_DIR; }
 
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
@@ -45,7 +47,6 @@ const isDev = process.env.NODE_ENV === 'development';
 
 let mainWindow: BrowserWindow | null = null;
 let workerManager: WorkerManager | null = null;
-let profileService: ProfileService | null = null;
 let taskConfigService: TaskConfigService | null = null;
 let thumbnailService: ThumbnailService | null = null;
 
@@ -72,8 +73,6 @@ function createWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
-    // production auto-reload:监听 dist/ 变化,改了源码 rebuild 后自动刷新
-    watchDistAndReload(path.join(__dirname, '..', '..', 'dist'));
   }
 
   // 外部链接用系统浏览器打开
@@ -85,31 +84,6 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
-}
-
-/**
- * 监听 dist/ 目录,文件变化时 debounce 300ms 后 reload renderer
- * 等价于 HMR 体验(只是全页面 reload,不是模块 hot replace)
- * 只在 production 模式生效 — dev 模式 vite 已经自带 HMR
- */
-function watchDistAndReload(distPath: string): void {
-  let timer: NodeJS.Timeout | null = null;
-  chokidar.watch(distPath, {
-    ignored: /(^|[\\/\\\\])\../,  // 忽略 dotfile
-    persistent: true,
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
-  }).on('all', (event, filePath) => {
-    if (filePath.includes('node_modules')) return;
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        console.log(`[auto-reload] ${event} ${filePath} → reload`);
-        mainWindow.webContents.reload();
-      }
-    }, 300);
-  });
-  console.log(`[auto-reload] watching ${distPath}`);
 }
 
 function setupIpc() {
@@ -155,18 +129,17 @@ function setupIpc() {
     RequestChannel.StartWorker,
     (
       _e,
-      payload: { hwnd: number; characterName: string; taskType: TaskType; profileId?: string },
+      payload: { hwnd: number; characterName: string; taskType: TaskType },
     ): { ok: boolean; workerId?: string; error?: string } => {
-      console.log(`[IPC] StartWorker hwnd=${payload.hwnd} task=${payload.taskType} profile=${payload.profileId}`);
+      console.log(`[IPC] StartWorker hwnd=${payload.hwnd} task=${payload.taskType}`);
       try {
         if (!workerManager) workerManager = new WorkerManager();
-        if (!profileService) profileService = new ProfileService();
         if (!taskConfigService) taskConfigService = new TaskConfigService();
-        const profile = payload.profileId ? profileService.load(payload.profileId) : null;
         // 自动加载该 hwnd 的任务配置
         const storedTask = taskConfigService.load(payload.hwnd);
         const taskConfig = storedTask?.config || null;
-        const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, profile, taskConfig);
+        // 不再读 profile YAML,worker 内部用默认 profile + taskConfig 覆盖 mobFilter
+        const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, null, taskConfig);
         console.log(`[IPC] StartWorker OK wid=${wid} taskConfig=${taskConfig ? 'loaded' : 'none'}`);
         return { ok: true, workerId: wid };
       } catch (err: any) {
@@ -184,17 +157,16 @@ function setupIpc() {
     RequestChannel.BootstrapWorker,
     async (
       _e,
-      payload: { hwnd: number; characterName: string; profileId?: string },
+      payload: { hwnd: number; characterName: string },
     ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> => {
-      console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd} profile=${payload.profileId}`);
+      console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd}`);
       try {
         if (!workerManager) workerManager = new WorkerManager();
-        if (!profileService) profileService = new ProfileService();
-        const profile = payload.profileId ? profileService.load(payload.profileId) : null;
+        // 不再读 profile,worker 用默认 profile + taskConfig 覆盖
         const { dataUrl, characterName } = await workerManager.bootstrap(
           payload.hwnd,
           payload.characterName,
-          profile,
+          null,
         );
         console.log(`[IPC] BootstrapWorker OK hwnd=${payload.hwnd} thumb=${dataUrl ? 'yes' : 'no'}`);
         return { ok: true, dataUrl, characterName };
@@ -218,6 +190,26 @@ function setupIpc() {
     return { ok: workerManager.stopByHwnd(hwnd) };
   });
 
+  /**
+   * 截图测试:让 worker 截一张到 thumbnails/test-<hwnd>-<ts>.png
+   * 用于评估大漠截图精度,不影响正常 thumbnail 流
+   * 前提:该 hwnd 已有 worker(否则需先点"创建任务")
+   */
+  ipcMain.handle('worker:capture-test', async (_e, hwnd: number) => {
+    if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
+    return await workerManager.captureTest(hwnd);
+  });
+
+  /** 在 Windows 资源管理器里高亮显示某个文件 */
+  ipcMain.handle('shell:showItemInFolder', (_e, filePath: string) => {
+    try {
+      shell.showItemInFolder(filePath);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle(RequestChannel.StopWorker, (_e, workerId: string) => {
     return workerManager?.stop(workerId) ?? false;
   });
@@ -232,17 +224,6 @@ function setupIpc() {
 
   ipcMain.handle(RequestChannel.ListWorkers, (): WorkerState[] => {
     return workerManager?.list() ?? [];
-  });
-
-  // ---- Profile 相关 ----
-  ipcMain.handle(RequestChannel.ListProfiles, (): ProfileInfo[] => {
-    if (!profileService) profileService = new ProfileService();
-    return profileService.list();
-  });
-
-  ipcMain.handle(RequestChannel.LoadProfile, (_e, id: string) => {
-    if (!profileService) profileService = new ProfileService();
-    return profileService.load(id);
   });
 }
 
