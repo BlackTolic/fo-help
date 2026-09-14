@@ -1,0 +1,2 @@
+# 强制 .gitignore 按文本处理 + 转 UTF-8(去掉 BOM,避免 git 当 binary)
+.gitignore text working-tree-encoding=UTF-8

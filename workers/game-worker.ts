@@ -12,6 +12,7 @@ import {
   dmApi,
   type DamooConfig,
 } from '../core/platform/damoo/dm-api';
+import { dmErrorFull } from '../core/platform/damoo/dm-errors';
 import { DamooVisionProvider } from '../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../core/platform/input/damoo/DamooInputProvider';
 import { CoordinateReader } from '../core/state/CoordinateReader';
@@ -147,7 +148,9 @@ async function takeAndSendThumbnail(hwnd: number): Promise<void> {
     const ret = dmApi.capture(0, 0, 192, 108, filePath);
     console.log('测试ret1', ret);
     if (ret !== 1) {
-      sendLog('warn', `大漠 Capture 返回 ${ret},缩略图跳过`);
+      const code = dmApi.getLastError();
+      const { message, advice } = dmErrorFull(code);
+      sendLog('warn', `大漠 Capture 返回 ${ret} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`);
       return;
     }
     if (!fs.existsSync(filePath)) {
@@ -218,8 +221,10 @@ async function main() {
   };
   const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
   if (!bindOk) {
-    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} dm.GetLastError=${dmApi.getLastError()}`);
-    setStatus('alert', '窗口绑定失败');
+    const code = dmApi.getLastError();
+    const { message, advice } = dmErrorFull(code);
+    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`);
+    setStatus('alert', `绑定失败: ${message}`);
     // dm.Capture 不依赖 BindWindow(直接读帧缓冲),仍然能截一张
     // 让用户能看到"游戏窗口的画面",即使后面战斗循环跑不起来
     await takeAndSendThumbnail(init.hwnd);
@@ -375,6 +380,7 @@ async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
     const ts = Date.now();
     const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
     const ret = dmApi.capture(0, 0, 100, 100, filePath);
+    dmApi.getFullScreenData( `testscreen-${hwnd}-${ts}.png`);
     console.log('测试ret12')
     if (ret !== 1) {
       sendLog('warn', `测试截图 Capture 返回 ${ret}`);
