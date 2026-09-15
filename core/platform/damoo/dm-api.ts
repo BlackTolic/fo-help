@@ -78,7 +78,10 @@ function getRaw(): any {
 
 function releaseRaw(): void {
   if (_dm) {
-    try { _dm.UnBindWindow(); } catch { /* noop */ }
+    // ⚠️ 不要在这里调 _dm.UnBindWindow()!
+    //   dm.dll 是进程内 COM,UnBindWindow() 是进程级副作用 ——
+    //   会误卸掉同进程内其他 worker 的 Win32 hook + 解绑其他窗口
+    //   释放 COM 实例即可,hook 让 OS 线程终止时清理
     _dm = null;
     _initialized = false;
     log.info('COM 实例已释放');

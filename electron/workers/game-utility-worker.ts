@@ -1,28 +1,39 @@
-﻿// game-worker.ts: 每个游戏窗口一个 worker
-// P4-B: 完整战斗循环(找怪 → 接近 → 战斗 → 死亡 → 找下一个)
+// game-utility-worker.ts: utilityProcess 子进程入口
+//
+// ⚠️ 为什么用 utilityProcess 而不是 worker_threads?
+//   dm.dll v7.2543 是 in-process COM dll,内部维护进程级:
+//     - 全局绑定表(最近一次 BindWindow 的窗口)
+//     - Win32 低级鼠标/键盘 hook(user32.dll 维护,跨线程共享)
+//   多 worker_threads 在同一进程内同时绑多个窗口会:
+//     - 互相踩 hook → 鼠标/键盘操作不生效 / 段错误 → 主进程闪退
+//     - "上次未正常解绑"标记污染下次 BindWindow → code=-16
+//   utilityProcess 是独立 OS 进程,每个子进程有自己的 dm.dll 实例,
+//   完全隔离,真正支持多窗口多开
+//
+// 通信协议与 game-worker.ts 完全一致(parentPort.on/postMessage),
+// init data 通过 process.argv 传入(JSON 字符串)
 
-import { parentPort, workerData } from 'worker_threads';
-import type { TaskType, ScriptStatus, TaskName } from '../shared/types';
 import {
   getDamoo,
   bindWindow,
   DEFAULT_DAMOO_CONFIG,
   dmApi,
   type DamooConfig,
-} from '../core/platform/damoo/dm-api';
-import { dmErrorFull } from '../core/platform/damoo/dm-errors';
-import { DamooVisionProvider } from '../core/platform/vision/damoo/DamooProvider';
-import { DamooInputProvider } from '../core/platform/input/damoo/DamooInputProvider';
-import { CoordinateReader } from '../core/state/CoordinateReader';
-import { SkillManager } from '../core/state/SkillManager';
-import { TargetFinder } from '../core/combat/TargetFinder';
-import { CombatEngine, type CombatState } from '../core/combat/CombatEngine';
-import { createLogger } from '../core/logger';
+} from '../../core/platform/damoo/dm-api';
+import { dmErrorFull } from '../../core/platform/damoo/dm-errors';
+import { DamooVisionProvider } from '../../core/platform/vision/damoo/DamooProvider';
+import { DamooInputProvider } from '../../core/platform/input/damoo/DamooInputProvider';
+import { CoordinateReader } from '../../core/state/CoordinateReader';
+import { SkillManager } from '../../core/state/SkillManager';
+import { TargetFinder } from '../../core/combat/TargetFinder';
+import { CombatEngine, type CombatState } from '../../core/combat/CombatEngine';
+import { createLogger } from '../../core/logger';
+import type { TaskType, ScriptStatus, TaskName } from '../../shared/types';
 
-const log = createLogger('worker');
+const log = createLogger('utility-worker');
 
-if (!parentPort) {
-  throw new Error('必须在 worker_threads 中运行');
+if (!process.parentPort) {
+  throw new Error('必须在 Electron utilityProcess 中运行');
 }
 
 interface InitData {
@@ -31,19 +42,22 @@ interface InitData {
   taskType: TaskType;
   damooConfig?: Partial<DamooConfig>;
   profile?: any;
-  taskConfig?: any;  // 任务配置(FarmTaskConfig 等)
-  /**
-   * true = bootstrap 模式:
-   *   走完整初始化(大漠加载 / 绑窗 / 字符库 / OCR / 截图),
-   *   但不进入战斗循环,停在 idle 等 'start-task' 命令
-   * false/undefined = 直接进入战斗(老行为)
-   */
+  taskConfig?: any;
   waitForConfig?: boolean;
-  /** 缩略图本地存储目录(主进程传过来) */
   thumbsDir?: string;
 }
 
-const init = workerData as InitData;
+// 从 process.argv 取最后一个参数(JSON 序列化的 initData)
+function parseInitData(): InitData {
+  const last = process.argv[process.argv.length - 1];
+  try {
+    return JSON.parse(last);
+  } catch (e: any) {
+    throw new Error(`utilityProcess 初始化失败:无法解析 argv[last]=${last} (${e.message})`);
+  }
+}
+
+const init = parseInitData();
 
 const taskNameMap: Record<TaskType, TaskName> = {
   farm: '挂机打怪',
@@ -53,13 +67,6 @@ const taskNameMap: Record<TaskType, TaskName> = {
   reputation: '名誉任务',
 };
 
-/**
- * 默认 profile(不读 YAML):最小可用版本
- * - 职业 warrior,技能/药水都空
- * - combat.mobFilter 默认空(由 taskConfig.nameKeywords 覆盖)
- * - engine 留空(用 DEFAULT_DAMOO_CONFIG)
- * - regions 留空(OCR 不开)
- */
 const DEFAULT_PROFILE: any = {
   id: 'default',
   name: 'Default',
@@ -96,8 +103,7 @@ const _waitForConfig = init.waitForConfig === true;
 let _startResolve: (() => void) | null = null;
 
 function sendLog(level: string, msg: string) {
-  parentPort!.postMessage({ type: 'log', level, msg });
-  // 同步打到 pino(便于 dev/console 查)
+  process.parentPort!.postMessage({ type: 'log', level, msg });
   if (level === 'info') log.info(msg);
   else if (level === 'warn') log.warn(msg);
   else if (level === 'error') log.error(msg);
@@ -106,45 +112,26 @@ function sendLog(level: string, msg: string) {
 
 function setStatus(status: ScriptStatus, detail?: string) {
   currentStatus = status;
-  parentPort!.postMessage({
+  process.parentPort!.postMessage({
     type: 'state',
     state: { status, statusDetail: detail, startedAt: _startedAt },
   });
 }
 
-/**
- * OCR 读角色名(MOCK 实现)
- * 真实实现:用大漠 Ocr 读角色头像旁边的名字
- *  - 在 Profile 里配 selfName 区域(region)
- *  - dm.Ocr(x1, y1, x2, y2, "FFFFFF-FFFFFF", 0.8) 读白字
- * 现在 mock:返回传入的名字 + 随机后缀
- */
 async function readCharacterNameMock(fallback: string): Promise<string> {
-  // 真实实现应该用 dmApi.ocr(...) 读角色名,目前 mock
   await new Promise((r) => setTimeout(r, 300));
   const r = Math.floor(Math.random() * 100);
   return `${fallback || '角色'}-${r.toString().padStart(2, '0')}`;
 }
 
-/**
- * 用大漠 Capture 截游戏窗口,直接写本地 PNG,推 thumb:// URL 给主进程
- * 不依赖 BindWindow:dm.Capture 直接读帧缓冲,即使绑定失败也能用
- * (需要 dm.dll 注册成功 + 大漠注册码有效)
- *
- * 本地存储(避免 base64 dataURL 太大导致 IPC 慢 + React img 解析慢):
- *   写到 <thumbsDir>/<hwnd>.png(同 hwnd 覆盖)
- *   推 thumb://<hwnd> URL → renderer <img src> 通过自定义协议加载
- */
 async function takeAndSendThumbnail(hwnd: number): Promise<void> {
   try {
     const fs = require('fs');
     const path = require('path');
-    const thumbsDir = (workerData as InitData).thumbsDir || path.join(require('os').tmpdir(), 'fo-help-thumbnails');
+    const thumbsDir = init.thumbsDir || path.join(require('os').tmpdir(), 'fo-help-thumbnails');
     if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
     const filePath = path.join(thumbsDir, `${hwnd}.png`);
-    // 大漠 Capture 截 0,0 - 192,108(1920x1080 缩到 192x108,大漠自动处理)
     const ret = dmApi.capture(0, 0, 192, 108, filePath);
-    console.log('测试ret1', ret);
     if (ret !== 1) {
       const code = dmApi.getLastError();
       const { message, advice } = dmErrorFull(code);
@@ -156,9 +143,7 @@ async function takeAndSendThumbnail(hwnd: number): Promise<void> {
       return;
     }
     const stat = fs.statSync(filePath);
-    // 推 thumb://image/<hwnd> URL(几字节),renderer 端用 <img src> 加载
-    // (用 hostname='image' + path 放 hwnd,避免纯数字 hwnd 被 URL parser 错认为 IPv4)
-    parentPort!.postMessage({
+    process.parentPort!.postMessage({
       type: 'thumbnail',
       hwnd,
       dataUrl: `thumb://image/${hwnd}`,
@@ -182,12 +167,9 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
 } as const;
 
 async function main() {
-  sendLog('info', `Worker 启动: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
+  sendLog('info', `UtilityWorker 启动(PID=${process.pid}): hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
 
-  // 不再依赖 profile YAML;profile 为空时用默认 profile(战士模板)
-  // taskConfig.mobFilter 覆盖默认 profile 的 mobFilter(用户自定义生效)
   const profile = init.profile || DEFAULT_PROFILE;
-  // 合并 taskConfig → effectiveProfile
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
     profile.combat = profile.combat || {};
     profile.combat.mobFilter = {
@@ -199,7 +181,6 @@ async function main() {
     sendLog('info', `默认 profile: 职业=${profile.class?.name || 'warrior'}`);
   }
 
-  // 1. 加载大漠
   try {
     _dm = getDamoo();
     sendLog('info', `大漠加载成功,版本 ${dmApi.version()}`);
@@ -209,7 +190,6 @@ async function main() {
     return;
   }
 
-  // 2. 绑窗口
   const profileEngine = profile?.engine;
   const cfg: DamooConfig = {
     display: profileEngine?.display || init.damooConfig?.display || DEFAULT_DAMOO_CONFIG.display,
@@ -223,13 +203,10 @@ async function main() {
     const { message, advice } = dmErrorFull(code);
     sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`);
     setStatus('alert', `绑定失败: ${message}`);
-    // dm.Capture 不依赖 BindWindow(直接读帧缓冲),仍然能截一张
-    // 让用户能看到"游戏窗口的画面",即使后面战斗循环跑不起来
     await takeAndSendThumbnail(init.hwnd);
     return;
   }
 
-  // 3. 加载字库
   if (profile?.fontLib) {
     try {
       const path = require('path');
@@ -243,28 +220,23 @@ async function main() {
     }
   }
 
-  // 3.5 OCR 读角色名(MOCK)
   characterName = await readCharacterNameMock(init.characterName);
   sendLog('info', `OCR 角色名: ${characterName}`);
 
-  // 把角色名告诉主进程
-  parentPort!.postMessage({
+  process.parentPort!.postMessage({
     type: 'state',
     state: {
       characterName,
     },
   });
 
-  // 3.6 截 1 张缩略图(用大漠 Capture)推给主进程
   await takeAndSendThumbnail(init.hwnd);
 
-  // 4. 初始化引擎
   const vision = new DamooVisionProvider();
   const input = new DamooInputProvider();
   vision.bind(init.hwnd);
   input.bind(init.hwnd);
 
-  // profile 已保证非空(main 端 DEFAULT_PROFILE 兜底)
   const coord = new CoordinateReader(vision, profile);
   const skills = new SkillManager(input, profile);
   const finder = new TargetFinder();
@@ -286,7 +258,6 @@ async function main() {
 
   sendLog('info', '战斗引擎已就绪,开始循环...');
 
-  // 4.5 bootstrap 模式:停在 idle 等 'start-task' 命令
   if (_waitForConfig) {
     sendLog('info', 'bootstrap 模式:等待 start-task 命令...');
     setStatus('idle', '等待启动');
@@ -297,21 +268,17 @@ async function main() {
     sendLog('info', '收到 start-task,开始执行任务');
   }
 
-  // 5. 主循环
   if (init.taskType === 'farm') {
-    // 真实战斗循环
     await combat.start();
   } else {
-    // 其他任务暂未实现,fallback
     sendLog('warn', `任务 ${init.taskType} 暂未实现,只跑挂机打怪`);
     await combat.start();
   }
 
-  sendLog('info', 'Worker 主循环结束');
+  sendLog('info', 'UtilityWorker 主循环结束');
 }
 
-// 命令
-parentPort.on('message', (msg: any) => {
+process.parentPort.on('message', (msg: any) => {
   if (msg.type === 'command') {
     switch (msg.command) {
       case 'start-task':
@@ -325,25 +292,25 @@ parentPort.on('message', (msg: any) => {
       case 'stop':
         sendLog('info', '收到 stop');
         _running = false;
-        // 如果还在等命令,先 resolve 退出等待
         if (_startResolve) {
           _startResolve();
           _startResolve = null;
         }
         combat?.stop();
-        // ⚠️ 不要在这里 unbindWindow() / releaseDamoo()!
-        //   dm.dll 是进程内 COM,UnBindWindow() 是进程级副作用 ——
-        //   会误卸掉同进程内其他 worker 的 Win32 hook + 解绑其他窗口,
-        //   导致其他 worker 下一次 dm 调用时 dll 内部状态错乱 → 段错误 → 整个进程闪退
-        //   实战验证:ffo-auto-script 的 STOP_LOOP 路径也是把 dm.unbindWindow() 注释掉
-        //   worker 退出时 OS 线程终止会自动清理 hook,不需要我们手动释放
+        // ✅ utilityProcess 子进程:dm.dll 进程级副作用不影响其他子进程
+        //   每个子进程独立加载 dm.dll,UnBindWindow 只影响自己
+        try {
+          dmApi.unbindWindow();
+          sendLog('info', '已 UnBindWindow');
+        } catch (e: any) {
+          sendLog('warn', `UnBindWindow 失败: ${e.message}`);
+        }
         setStatus('idle', '已停止');
-        // 给 in-flight 的 dm 调用留 500ms 完成(CombatEngine.start() 的 await 链)
-        setTimeout(() => process.exit(0), 500);
+        // 给 in-flight 的 dm 调用留 300ms 完成
+        setTimeout(() => process.exit(0), 300);
         break;
       case 'pause':
         sendLog('info', '收到 pause');
-        // bootstrap 阶段 pause 无意义,直接 reject 等待
         if (_startResolve) {
           _startResolve();
           _startResolve = null;
@@ -358,47 +325,39 @@ parentPort.on('message', (msg: any) => {
         }
         break;
       case 'screenshot':
-        // 截图请求(主进程转发 renderer)
         handleScreenshot().catch((e) => sendLog('error', `截图失败: ${e.message}`));
         break;
       case 'screenshot-test':
-        // 测试截图(存到 thumbnails/test-<hwnd>-<ts>.png,不影响正常 thumbnail)
         takeAndSendThumbnailTest(init.hwnd).catch((e) => sendLog('error', `测试截图失败: ${e.message}`));
         break;
     }
   }
 });
 
-/**
- * 测试截图:写到 <thumbsDir>/test-<hwnd>-<ts>.png,推 type:'thumbnail-test' 消息
- * 用于评估大漠截图精度,文件保留供用户查看(不清理)
- */
 async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
-  console.log('开始测试截图', hwnd);
   try {
     const fs = require('fs');
     const path = require('path');
-    const thumbsDir = (workerData as InitData).thumbsDir;
+    const thumbsDir = init.thumbsDir;
     if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
     const ts = Date.now();
     const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
     const ret = dmApi.capture(0, 0, 100, 100, filePath);
-    dmApi.getFullScreenData( `testscreen-${hwnd}-${ts}.png`);
-    console.log('测试ret12')
+    dmApi.getFullScreenData(`testscreen-${hwnd}-${ts}.png`);
     if (ret !== 1) {
       sendLog('warn', `测试截图 Capture 返回 ${ret}`);
-      parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: `Capture 返回 ${ret}` });
+      process.parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: `Capture 返回 ${ret}` });
       return;
     }
     if (!fs.existsSync(filePath)) {
-      parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: '文件未生成' });
+      process.parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: '文件未生成' });
       return;
     }
     const stat = fs.statSync(filePath);
-    parentPort!.postMessage({ type: 'thumbnail-test', hwnd, filePath, size: stat.size });
+    process.parentPort!.postMessage({ type: 'thumbnail-test', hwnd, filePath, size: stat.size });
     sendLog('info', `测试截图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
   } catch (e: any) {
-    parentPort!.postMessage({ type: 'thumbnail-test', hwnd: init.hwnd, error: e.message });
+    process.parentPort!.postMessage({ type: 'thumbnail-test', hwnd: init.hwnd, error: e.message });
     sendLog('warn', `测试截图失败: ${e.message}`);
   }
 }
@@ -415,6 +374,11 @@ async function handleScreenshot(): Promise<void> {
 }
 
 main().catch((e) => {
-  sendLog('error', `Worker 异常: ${e.message}`);
+  sendLog('error', `UtilityWorker 异常: ${e.message}`);
   setStatus('alert', e.message);
 });
+
+// 子进程初始化完成,发 'ready' 信号给父进程,告诉它 message listener 已注册
+// ⚠️ 必须在顶层代码末尾发,保证 listener 注册后才发,父进程收到 'ready' 后
+//   再 postMessage start-task/stop 等命令,绝对不会再丢消息
+process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });

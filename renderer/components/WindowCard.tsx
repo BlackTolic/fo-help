@@ -314,9 +314,17 @@ console.log('isPaused',isPaused);
             <>
               <button
                 onClick={handleStart}
-                disabled={!isSaved || isStarting}
+                disabled={!isSaved || isStarting || !worker?.ready}
                 className="btn btn-primary flex-1 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={isSaved ? (isStarting ? '启动中…' : '启动任务') : '未保存,请先保存配置再启动'}
+                title={
+                  !isSaved
+                    ? '未保存,请先保存配置再启动'
+                    : !worker?.ready
+                    ? '子进程初始化中,请稍候…'
+                    : isStarting
+                    ? '启动中…'
+                    : '启动任务'
+                }
               >
                 {isStarting ? (
                   <>

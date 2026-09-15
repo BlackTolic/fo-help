@@ -133,7 +133,11 @@ function setupIpc() {
     ): { ok: boolean; workerId?: string; error?: string } => {
       console.log(`[IPC] StartWorker hwnd=${payload.hwnd} task=${payload.taskType}`);
       try {
-        if (!workerManager) workerManager = new WorkerManager();
+        // 初始化缩略图缓存
+        if (!thumbnailService) thumbnailService = new ThumbnailService();
+        // 初始化 worker 管理器
+        if (!workerManager) workerManager = new WorkerManager(thumbnailService);
+        // 初始化任务配置服务
         if (!taskConfigService) taskConfigService = new TaskConfigService();
         // 自动加载该 hwnd 的任务配置
         const storedTask = taskConfigService.load(payload.hwnd);
@@ -161,7 +165,8 @@ function setupIpc() {
     ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> => {
       console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd}`);
       try {
-        if (!workerManager) workerManager = new WorkerManager();
+        if (!thumbnailService) thumbnailService = new ThumbnailService();
+        if (!workerManager) workerManager = new WorkerManager(thumbnailService);
         // 不再读 profile,worker 用默认 profile + taskConfig 覆盖
         const { dataUrl, characterName } = await workerManager.bootstrap(
           payload.hwnd,

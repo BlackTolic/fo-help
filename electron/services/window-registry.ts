@@ -142,6 +142,11 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
     'Chrome_RenderWidgetHostHWND',
     'Intermediate D3D Window',
   ];
+
+  // 测试
+  if(title.includes('文本文档')){
+return true
+  }
   if (SELF_CLASSES.includes(className)) {
     return false;
   }
@@ -165,7 +170,6 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
   )) {
     return true;
   }
-
   // 2. 标题匹配(QQ幻想私服常见标题: "QQ幻想之XX" / "幻想世界")
   if (title.includes('qq幻想') || title.includes('幻想世界')) {
     return true;

@@ -1,26 +1,42 @@
-// WorkerManager: 管理所有 game worker(每游戏窗口一个)
+// WorkerManager: 管理所有 game utilityProcess(每游戏窗口一个独立 OS 进程)
+//
+// ⚠️ 为什么用 utilityProcess 而不是 worker_threads?
+//   dm.dll v7.2543 是 in-process COM dll,内部维护进程级状态:
+//     - 全局绑定表(最近一次 BindWindow 的窗口)
+//     - Win32 低级鼠标/键盘 hook(user32.dll 维护,跨线程共享)
+//   worker_threads 在同一进程内同时绑多个窗口会:
+//     - 互相踩 hook → 鼠标/键盘操作不生效 / 段错误 → 主进程闪退
+//     - "上次未正常解绑"标记污染下次 BindWindow → code=-16
+//   utilityProcess 是独立 OS 进程,每个子进程有自己的 dm.dll 实例 + 独立 hook 表
+//   → 真正支持多窗口多开,且进程隔离,一个子进程崩了不影响主进程
 
-import { Worker } from 'worker_threads';
+import { utilityProcess, type UtilityProcess } from 'electron';
 import path from 'path';
 import { app } from 'electron';
 import type { WorkerState, TaskName, TaskType } from '../../shared/types';
 import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
+import { ThumbnailService } from './thumbnail-service';
 import { getThumbsDir } from '../main';
 
 const log = createLogger('worker-manager');
 
 interface ManagedWorker {
-  worker: Worker;
+  worker: UtilityProcess;
   state: WorkerState;
 }
 
 export class WorkerManager {
   private workers = new Map<string, ManagedWorker>(); // workerId -> ManagedWorker
   private byHwnd = new Map<number, string>();        // hwnd -> workerId
+  private thumbs: ThumbnailService;                  // 缩略图缓存(子进程 → 主进程 → renderer)
+
+  constructor(thumbs?: ThumbnailService) {
+    this.thumbs = thumbs || new ThumbnailService();
+  }
 
   /**
-   * 启动一个 worker 绑定到指定游戏窗口
+   * 启动一个 utilityProcess 子进程,加载 game-utility-worker.js 绑定到指定游戏窗口
    * @param waitForConfig true = bootstrap 模式,worker 走完初始化后停在 idle 等 'start-task' 命令
    */
   start(
@@ -36,26 +52,55 @@ export class WorkerManager {
     }
 
     const workerId = `w-${hwnd}-${Date.now()}`;
+    // utilityProcess 子进程入口(由 electron/tsconfig 编译到 dist-electron)
     const workerScript = path.join(
       app.getAppPath(),
-      'dist-workers',
+      'dist-electron',
+      'electron',
       'workers',
-      'game-worker.js',
+      'game-utility-worker.js',
     );
 
     log.info(
-      `[WorkerManager] 启动 worker ${workerId},hwnd=${hwnd},profile=${profile?.id || 'default'},waitForConfig=${waitForConfig}`,
+      `[WorkerManager] 启动 utilityProcess ${workerId},hwnd=${hwnd},profile=${profile?.id || 'default'},waitForConfig=${waitForConfig}`,
     );
 
     // 缩略图本地存储目录:用 main.ts 统一的 getThumbsDir()(dev = 项目根,packaged = userData)
     const thumbsDir = getThumbsDir();
 
-    const worker = new Worker(workerScript, {
-      workerData: {
-        hwnd, characterName, taskType, profile, taskConfig, waitForConfig,
-        thumbsDir,
-      },
+    // init data 通过 process.argv 传入(JSON 字符串,子进程从 argv[last] 取)
+    const initPayload = JSON.stringify({
+      hwnd, characterName, taskType, profile, taskConfig, waitForConfig,
+      thumbsDir,
     });
+
+    // 32-bit Electron 启动的 utilityProcess 默认也是 32-bit,能加载 32-bit dm.dll
+    const worker = utilityProcess.fork(workerScript, [initPayload], {
+      serviceName: `fo-help-game-${hwnd}`,
+      // stdio 用 'pipe'(默认)而不是 'inherit':
+      //   Electron 主进程是 GUI 应用,没有真正的 console;stdio:'inherit' 时
+      //   子进程的 stdout/stderr 继承父进程的无效句柄,pino-pretty 等异步 transport
+      //   可能在 pipe buffer 满时阻塞子进程 → 表现为"启动无反应 / 停止无反应"
+      //   改成 'pipe' 后,父进程主动 drain 转发,不会阻塞子进程
+      stdio: 'pipe',
+    });
+
+    // 把子进程的 stdout/stderr 转发到主进程的 pino 日志 + 终端
+    // (stdio: 'pipe' 必须主动消费,否则 buffer 满了子进程会阻塞)
+    const tag = `[w-${hwnd}]`;
+    worker.stdout?.on('data', (chunk: Buffer) => {
+      const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log.info(`${tag} ${line}`);
+      }
+    });
+    worker.stderr?.on('data', (chunk: Buffer) => {
+      const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        log.warn(`${tag} ${line}`);
+      }
+    });
+
     const initialState: WorkerState = {
       workerId,
       hwnd,
@@ -73,9 +118,8 @@ export class WorkerManager {
 
     this.workers.set(workerId, { worker, state: initialState });
     this.byHwnd.set(hwnd, workerId);
-    
+
     worker.on('message', (msg) => this.onWorkerMessage(workerId, msg));
-    worker.on('error', (err) => this.onWorkerError(workerId, err));
     worker.on('exit', (code) => this.onWorkerExit(workerId, code));
 
     return workerId;
@@ -92,11 +136,21 @@ export class WorkerManager {
   }
 
   /**
-   * 停止 worker
+   * 停止 utilityProcess 子进程(发 'stop' 命令,等它自己清理 + exit)
    */
   stop(workerId: string): boolean {
     const m = this.workers.get(workerId);
-    if (!m) return false;
+    if (!m) {
+      log.warn(`[WorkerManager] stop: workerId=${workerId} 不存在`);
+      return false;
+    }
+    if (!m.state.ready) {
+      log.warn(`[WorkerManager] stop: workerId=${workerId} 未 ready(消息可能丢失),先 kill 兜底`);
+      // 兜底:未 ready 时直接 kill 强制退出,避免"停止无反应"
+      try { m.worker.kill(); } catch (e: any) { log.warn(`kill 失败: ${e.message}`); }
+      return true;
+    }
+    log.info(`[WorkerManager] → stop 已发给 ${workerId} (hwnd=${m.state.hwnd})`);
     m.worker.postMessage({ type: 'command', command: 'stop' });
     return true;
   }
@@ -106,6 +160,18 @@ export class WorkerManager {
     const wid = this.byHwnd.get(hwnd);
     if (!wid) return false;
     return this.stop(wid);
+  }
+
+  /** 强制终止(不等 stop 命令,直接 kill) */
+  kill(workerId: string): boolean {
+    const m = this.workers.get(workerId);
+    if (!m) return false;
+    try {
+      m.worker.kill();
+    } catch (e: any) {
+      log.warn(`[WorkerManager] kill ${workerId} 失败: ${e.message}`);
+    }
+    return true;
   }
 
   /**
@@ -181,9 +247,19 @@ export class WorkerManager {
   /** 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环 */
   startTask(hwnd: number): boolean {
     const wid = this.byHwnd.get(hwnd);
-    if (!wid) return false;
+    if (!wid) {
+      log.warn(`[WorkerManager] startTask: hwnd=${hwnd} 没找到 worker`);
+      return false;
+    }
     const m = this.workers.get(wid);
-    if (!m) return false;
+    if (!m) {
+      log.warn(`[WorkerManager] startTask: workerId=${wid} 不在 workers map`);
+      return false;
+    }
+    if (!m.state.ready) {
+      log.warn(`[WorkerManager] startTask: worker ${wid} 未 ready,start-task 消息可能丢失`);
+    }
+    log.info(`[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, ready=${m.state.ready})`);
     m.worker.postMessage({ type: 'command', command: 'start-task' });
     return true;
   }
@@ -277,6 +353,7 @@ export class WorkerManager {
     return map[t];
   }
 
+  // 处理 worker 发来的的消息
   private onWorkerMessage(workerId: string, msg: any) {
     const m = this.workers.get(workerId);
     if (!m) return;
@@ -298,25 +375,28 @@ export class WorkerManager {
         timestamp: Date.now(),
       });
     } else if (msg.type === 'thumbnail') {
-      // 缩略图:缓存到主进程 + 推给 renderer
-      this.broadcast('thumbnail:update', { hwnd: msg.hwnd, dataUrl: msg.dataUrl });
+      // 缩略图:缓存到主进程 ThumbnailService + 推给 renderer
+      // (renderer 主要用 onThumbnailUpdate 订阅推送,但 CaptureWindow IPC handler
+      //  也读这个缓存,二者保持一致)
+      this.thumbs.set(msg.hwnd, msg.dataUrl);
+      this.broadcast(PushChannel.ThumbnailUpdate, { hwnd: msg.hwnd, dataUrl: msg.dataUrl });
     } else if (msg.type === 'thumbnail-test') {
       // 测试截图:只 log,不 broadcast(由 captureTest await 模式接走)
       log.info(`[WorkerManager] 测试截图: hwnd=${msg.hwnd} → ${msg.filePath || msg.error}`);
+    } else if (msg.type === 'ready') {
+      // 子进程初始化完成,message listener 已注册,可以安全 postMessage
+      log.info(`[WorkerManager] utilityProcess ${workerId} 报告 ready`);
+      m.state = { ...m.state, ready: true };
+    } else {
+      log.warn(`[WorkerManager] utilityProcess ${workerId} 未知消息类型: ${msg.type}`);
     }
   }
 
-  private onWorkerError(workerId: string, err: Error) {
-    log.error(`[WorkerManager] worker ${workerId} 错误:`, err);
-    this.broadcast(PushChannel.WorkerError, {
-      workerId,
-      error: { message: err.message, stack: err.stack },
-      timestamp: Date.now(),
-    });
-  }
-
-  private onWorkerExit(workerId: string, code: number) {
-    log.info(`[WorkerManager] worker ${workerId} 退出 code=${code}`);
+  private onWorkerExit(workerId: string, code: number | null) {
+    log.info(`[WorkerManager] utilityProcess ${workerId} 退出 code=${code}`);
+    if (code !== 0 && code !== null) {
+      log.warn(`[WorkerManager] utilityProcess ${workerId} 非正常退出 code=${code},可能是 dm.dll 崩溃或子进程被 kill`);
+    }
     const m = this.workers.get(workerId);
     if (m) {
       this.byHwnd.delete(m.state.hwnd);
@@ -329,19 +409,25 @@ export class WorkerManager {
     });
   }
 
-  private broadcast(channel: string, payload: unknown) {
+  // 广播事件到所有窗口
+  private broadcast(channel: PushChannel, payload: unknown) {
     // 通过 BrowserWindow.webContents.send 推送
     const { BrowserWindow } = require('electron');
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(channel, payload);
+        log.info(`[WorkerManager] 广播 ${channel} ${JSON.stringify(payload)}`);
       }
     }
   }
 
   shutdownAll() {
     for (const m of this.workers.values()) {
-      m.worker.terminate();
+      try {
+        m.worker.kill();
+      } catch (e: any) {
+        log.warn(`[WorkerManager] shutdown kill 失败: ${e.message}`);
+      }
     }
     this.workers.clear();
     this.byHwnd.clear();

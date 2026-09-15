@@ -112,6 +112,8 @@ export interface WorkerState {
   taskConfig?: TaskConfig;
   /** 缩略图(base64 dataURL,可选) */
   thumbnail?: string;
+  /** 子进程是否已 ready(顶层代码执行完,message listener 已注册,可以安全发命令) */
+  ready?: boolean;
 }
 
 /** IPC 消息基础结构 */
