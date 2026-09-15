@@ -109,19 +109,47 @@ function setupIpc() {
   });
 
   // ---- 任务配置 ----
-  ipcMain.handle(RequestChannel.SaveTaskConfig, (_e, hwnd: number, config: TaskConfig) => {
-    if (!taskConfigService) taskConfigService = new TaskConfigService();
-    return taskConfigService.save(hwnd, config);
-  });
+  /**
+   * 保存任务配置(按 name 唯一存储,重名拒绝)
+   * payload: { hwnd?: number, config: TaskConfig, name: string }
+   * 返回: { ok: boolean, stored?: StoredTaskConfig, error?: string }
+   */
+  ipcMain.handle(
+    RequestChannel.SaveTaskConfig,
+    (_e, payload: { hwnd?: number; config: TaskConfig; name: string }) => {
+      if (!taskConfigService) taskConfigService = new TaskConfigService();
+      if (!payload?.name || !payload?.config) {
+        return { ok: false, error: '缺少 name 或 config' };
+      }
+      return taskConfigService.saveByName(payload.name, payload.config);
+    },
+  );
 
   ipcMain.handle(RequestChannel.GetTaskConfig, (_e, hwnd: number) => {
-    if (!taskConfigService) taskConfigService = new TaskConfigService();
-    return taskConfigService.load(hwnd);
+    // 旧 API:按 hwnd 加载(新流程不再使用,保留返回 null 兼容)
+    void hwnd;
+    return null;
   });
 
   ipcMain.handle(RequestChannel.ListTaskConfigs, () => {
     if (!taskConfigService) taskConfigService = new TaskConfigService();
     return taskConfigService.listAll();
+  });
+
+  /**
+   * 列出所有已保存的任务配置(全局,跨窗口)
+   */
+  ipcMain.handle(RequestChannel.ListAllTaskConfigs, () => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    return taskConfigService.listAll();
+  });
+
+  /**
+   * 按任务名加载配置
+   */
+  ipcMain.handle(RequestChannel.LoadTaskByName, (_e, name: string) => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    return taskConfigService.loadByName(name);
   });
 
   // ---- Worker 相关 ----
@@ -139,9 +167,8 @@ function setupIpc() {
         if (!workerManager) workerManager = new WorkerManager(thumbnailService);
         // 初始化任务配置服务
         if (!taskConfigService) taskConfigService = new TaskConfigService();
-        // 自动加载该 hwnd 的任务配置
-        const storedTask = taskConfigService.load(payload.hwnd);
-        const taskConfig = storedTask?.config || null;
+        // 新流程:不再按 hwnd 自动加载配置 — 配置由调用方(创建任务/历史任务)显式传入
+        const taskConfig = null;
         // 不再读 profile YAML,worker 内部用默认 profile + taskConfig 覆盖 mobFilter
         const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, null, taskConfig);
         console.log(`[IPC] StartWorker OK wid=${wid} taskConfig=${taskConfig ? 'loaded' : 'none'}`);
@@ -182,11 +209,11 @@ function setupIpc() {
     },
   );
 
-  /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环 */
-  ipcMain.handle(RequestChannel.StartTask, (_e, hwnd: number): { ok: boolean } => {
+  /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环(等 worker ready 后再发) */
+  ipcMain.handle(RequestChannel.StartTask, async (_e, hwnd: number): Promise<{ ok: boolean; error?: string }> => {
     console.log(`[IPC] StartTask hwnd=${hwnd}`);
-    if (!workerManager) return { ok: false };
-    return { ok: workerManager.startTask(hwnd) };
+    if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
+    return await workerManager.startTask(hwnd);
   });
 
   /** 通过 hwnd 找到 workerId 停止(用于取消 bootstrap) */

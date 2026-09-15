@@ -215,8 +215,11 @@ export class WorkerManager {
       }
 
       // 新启动(bootstrap 模式)
+      const t0 = Date.now();
       const wid = this.start(hwnd, characterName, 'farm', profile, null, true);
       const m = this.workers.get(wid)!;
+      log.info(`[WorkerManager] bootstrap start: hwnd=${hwnd}, fork 耗时 ${Date.now() - t0}ms`);
+
       let settled = false;
       const finish = (fn: () => void) => {
         if (settled) return;
@@ -226,7 +229,13 @@ export class WorkerManager {
         fn();
       };
       const onMsg = (msg: any) => {
-        if (msg.type === 'thumbnail' && msg.hwnd === hwnd) {
+        const elapsed = Date.now() - t0;
+        if (msg.type === 'ready' && msg.hwnd === hwnd) {
+          log.info(`[WorkerManager] 子进程 ready: hwnd=${hwnd}, 累计 ${elapsed}ms`);
+        } else if (msg.type === 'log') {
+          log.info(`[WorkerManager] [w-${hwnd}] ${msg.level}: ${msg.msg}`);
+        } else if (msg.type === 'thumbnail' && msg.hwnd === hwnd) {
+          log.info(`[WorkerManager] 收到 thumbnail: hwnd=${hwnd}, 累计 ${elapsed}ms`);
           finish(() =>
             resolve({
               dataUrl: msg.dataUrl || null,
@@ -234,34 +243,54 @@ export class WorkerManager {
             }),
           );
         } else if (msg.type === 'state' && msg.state.status === 'alert') {
+          log.warn(`[WorkerManager] worker 进入 alert: hwnd=${hwnd}, 累计 ${elapsed}ms, detail=${msg.state.statusDetail}`);
           finish(() => reject(new Error(msg.state.statusDetail || 'worker 进入 alert')));
         }
       };
       m.worker.on('message', onMsg);
+      // 延长到 30s:首次启动 fork + dm.dll 加载 + bindWindow + Capture 累计可能要 15-25s
+      const BOOTSTRAP_TIMEOUT_MS = 30000;
       const timer = setTimeout(() => {
-        finish(() => reject(new Error('bootstrap 超时(15s) — 检查大漠注册码/游戏窗口')));
-      }, 15000);
+        const elapsed = Date.now() - t0;
+        log.error(
+          `[WorkerManager] bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s): hwnd=${hwnd}, 累计 ${elapsed}ms — ` +
+          `可能卡在 fork/loadDamoo/bindWindow/Capture,请看上面 [w-${hwnd}] 日志定位`
+        );
+        finish(() => reject(new Error(`bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s) — 检查大漠注册码/游戏窗口`)));
+      }, BOOTSTRAP_TIMEOUT_MS);
     });
   }
 
-  /** 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环 */
-  startTask(hwnd: number): boolean {
+  /**
+   * 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环
+   * 异步:如果 worker 未 ready,等 ready(最多 30s)再发,避免消息丢失
+   */
+  async startTask(hwnd: number): Promise<{ ok: boolean; error?: string }> {
     const wid = this.byHwnd.get(hwnd);
     if (!wid) {
       log.warn(`[WorkerManager] startTask: hwnd=${hwnd} 没找到 worker`);
-      return false;
+      return { ok: false, error: '该 hwnd 没有 worker' };
     }
     const m = this.workers.get(wid);
     if (!m) {
       log.warn(`[WorkerManager] startTask: workerId=${wid} 不在 workers map`);
-      return false;
+      return { ok: false, error: 'worker 已退出' };
+    }
+
+    // 等 worker ready(最多 30s,避免 bootstrap 慢时 start-task 消息丢失)
+    const WAIT_READY_MS = 30000;
+    const t0 = Date.now();
+    while (!m.state.ready && Date.now() - t0 < WAIT_READY_MS) {
+      await new Promise<void>((r) => setTimeout(r, 100));
     }
     if (!m.state.ready) {
-      log.warn(`[WorkerManager] startTask: worker ${wid} 未 ready,start-task 消息可能丢失`);
+      log.error(`[WorkerManager] startTask 超时: worker ${wid} 等 ready 超 ${WAIT_READY_MS / 1000}s`);
+      return { ok: false, error: 'worker 初始化未完成,稍后重试' };
     }
-    log.info(`[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, ready=${m.state.ready})`);
+
+    log.info(`[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, 等 ready 耗时 ${Date.now() - t0}ms)`);
     m.worker.postMessage({ type: 'command', command: 'start-task' });
-    return true;
+    return { ok: true };
   }
 
   pause(workerId: string): boolean {
@@ -416,7 +445,6 @@ export class WorkerManager {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
         win.webContents.send(channel, payload);
-        log.info(`[WorkerManager] 广播 ${channel} ${JSON.stringify(payload)}`);
       }
     }
   }

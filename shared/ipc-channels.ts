@@ -18,9 +18,11 @@ export enum RequestChannel {
   ListWorkers = 'worker:list',
 
   // 任务配置
-  SaveTaskConfig = 'task:save',             // 保存任务配置(挂到 hwnd)
-  GetTaskConfig = 'task:get',               // 读任务配置
-  ListTaskConfigs = 'task:list',            // 列出所有任务
+  SaveTaskConfig = 'task:save',             // 保存任务配置(按 name 唯一存储,重名拒绝)
+  GetTaskConfig = 'task:get',               // 读任务配置(旧 API,新流程用 loadTaskByName)
+  ListTaskConfigs = 'task:list',            // 列出所有任务(旧 API,新流程用 listAllTaskConfigs)
+  ListAllTaskConfigs = 'task:list-all',     // 列出所有保存的任务(全局,按 name 去重)
+  LoadTaskByName = 'task:load-by-name',     // 按任务名加载配置
 
   // Profile
   ListProfiles = 'profile:list',

@@ -1,157 +1,245 @@
 // WindowCard: 单个游戏窗口卡片
-// 状态机:
-//   unconfigured  → [创建任务]
-//     ↓ (点创建任务,启动 bootstrap)
-//   creating      → loading(连接大漠/绑窗/截图)
-//     ↓ (bootstrap 完成: thumbnail 已推送 + worker idle='等待启动')
-//   ready         → [启动] [编辑]  (有 taskConfig + worker 已就绪等命令)
-//     ↓ (点启动,发 start-task)
-//   running       → [暂停] [停止]
-//   paused        → [继续] [停止]
+// 状态机(新流程):
+//   unconfigured  → [创建任务] [历史任务]   (同级两个入口)
+//     ↓ 选创建任务 → bootstrap + 开 dialog → 保存配置 / 确认 → 自动 startTask
+//     ↓ 选历史任务 → 开 history dialog → 选中 → bootstrap + 自动 startTask
+//   creating      → loading(bootstrap 中,等 thumbnail + worker ready)
+//   running       → [查看详情(只读)] [暂停] [停止]
+//   paused        → [查看详情(只读)] [继续] [停止]
+//   editable      → [重新选择]            (停止后回到这,可以编辑/选历史/新建)
 //
-// ready/running/paused 状态下的"停止"会 exit worker,下次点"启动"要重新 bootstrap
+// 启动整合到 dialog:不再有独立的"启动"按钮,配置确认后自动进入战斗循环
 
 import { useState } from 'react';
-import { Play, Pause, Square, Settings, Pencil, RefreshCw, Loader2, Camera, History } from 'lucide-react';
+import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
-import type { GameWindow, TaskConfig, WorkerState } from '../../shared/types';
+import type { GameWindow, TaskConfig, WorkerState, StoredTaskConfig } from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
   gameWindow: GameWindow;
   worker?: WorkerState;
-  characterName?: string;     // OCR mock 出来的角色名
+  characterName?: string;
   taskConfig?: TaskConfig | null;
-  isSaved?: boolean;          // 该 taskConfig 是否已持久化(默认 true)
-  onStart: (hwnd: number, characterName: string, taskType: string) => void;
-  onStartTask: (hwnd: number) => void;
+  /** 当前已应用的任务名(用户自定义,显示在卡片上) */
+  appliedTaskName?: string | null;
   onBootstrap: (hwnd: number, characterName: string) => Promise<{ ok: boolean; error?: string }>;
   onCancelBootstrap: (hwnd: number) => void;
+  onStartTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
   onStop: (workerId: string) => void;
   onPause: (workerId: string) => void;
   onResume: (workerId: string) => void;
-  onTaskSaved: (hwnd: number, config: TaskConfig) => void;
-  /** "确认"按钮回调:仅写内存,不存磁盘(默认不传=回退到 onTaskSaved) */
-  onTaskConfirm?: (hwnd: number, config: TaskConfig) => void;
+  /** 应用配置到当前 hwnd(创建保存后 / 历史选中后) */
+  onApplyConfig: (hwnd: number, config: TaskConfig, name?: string) => void;
+  /** 清除当前 hwnd 的应用配置(停止任务后回到 unconfigured) */
+  onClearConfig: (hwnd: number) => void;
 }
 
 export function WindowCard({
-  gameWindow, worker, characterName, taskConfig, isSaved = true,
-  onStart, onStartTask, onBootstrap, onCancelBootstrap,
-  onStop, onPause, onResume, onTaskSaved, onTaskConfirm,
+  gameWindow, worker, characterName, taskConfig, appliedTaskName,
+  onBootstrap, onCancelBootstrap, onStartTask,
+  onStop, onPause, onResume,
+  onApplyConfig, onClearConfig,
 }: Props) {
-  const [dialogOpen, setDialogOpen] = useState(false);
-  // bootstrap 进行中(从点"创建任务"到 dialog 打开 / 失败)
-  const [isCreating, setIsCreating] = useState(false);
-  // 标记 dialog 是不是 create 流程开的(用于关闭时是否 cancel bootstrap)
-  const [dialogFromCreate, setDialogFromCreate] = useState(false);
-  // 错误信息(bootstrap 失败)
-  const [error, setError] = useState<string | null>(null);
-  // 历史任务 dialog
-  const [historyOpen, setHistoryOpen] = useState(false);
-  // 拉取所有已保存 cfg(用于"📜 历史任务"列表)
-  const savedHwnds = useStore((s) => s.savedHwnds);
-  const taskConfigs = useStore((s) => s.taskConfigs);
-  // 拼出历史列表:所有 taskConfigs 里有的 hwnd,过滤掉当前 hwnd
-  // (包含"未保存"的 cfg,因为可能用户从确认路径里也配置过)
-  const historyItems = Array.from(taskConfigs.keys())
-    .filter((h) => h !== gameWindow.hwnd)
-    .map((h) => ({ hwnd: h, config: taskConfigs.get(h)!, saved: savedHwnds.has(h) }))
-    .filter((it) => !!it.config);
+  const taskHistory = useStore((s) => s.taskHistory);
+  const saveTaskByName = useStore((s) => s.saveTaskByName);
 
-  // 从 store 读主进程推送的缩略图
-  const thumbnail = useStore((s) => s.thumbnails.get(gameWindow.hwnd));
-  console.log(thumbnail);
+  // ---- dialog 状态 ----
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<'create' | 'edit' | 'view'>('create');
+  /** dialog 打开期间,标记是否应该自动 startTask(创建流程用) */
+  const [autoStartAfterClose, setAutoStartAfterClose] = useState(false);
+  /** "创建任务"按钮 loading 状态 — bootstrap 中显示 spinner,bind+截图完成后打开 dialog */
+  const [isCreating, setIsCreating] = useState(false);
+
+  // 错误信息(bootstrap 失败 / 保存失败)
+  const [error, setError] = useState<string | null>(null);
+
   const status = worker?.status || 'idle';
   const isConfigured = !!taskConfig;
   const isRunning = worker && status !== 'idle' && status !== 'paused';
   const isPaused = worker && status === 'paused';
 
-  // 派生 UI 状态
-  let uiState: 'unconfigured' | 'creating' | 'ready' | 'running' | 'paused';
+  // ---- 派生 UI 状态 ----
+  let uiState: 'unconfigured' | 'creating' | 'running' | 'paused' | 'editable';
   if (!isConfigured) {
     uiState = 'unconfigured';
-  } else if (isCreating) {
-    uiState = 'creating';
+  } else if (worker && status === 'alert') {
+    // alert 状态:绑窗/启动失败 → 允许重新尝试
+    uiState = 'editable';
   } else if (isRunning) {
     uiState = 'running';
   } else if (isPaused) {
     uiState = 'paused';
+  } else if (worker && worker.ready === false) {
+    // worker 已存在但未 ready(bootstrap 中)
+    uiState = 'creating';
   } else {
-    uiState = 'ready';
+    // 任务停止后(worker 已 exit)/创建后未启动 → editable
+    uiState = 'editable';
   }
-console.log('uiState',uiState);
-console.log('isConfigured',isConfigured);
-console.log('isCreating',isCreating);
-console.log('isRunning',isRunning);
-console.log('isPaused',isPaused);
-  // ---- handlers ----
 
-  const handleCreateTask = async () => {
+  // ---- 入口按钮 handlers ----
+
+  /**
+   * 创建任务:按钮变 loading + dialog 立即弹出 + bootstrap 后台异步
+   * ⚠️ 关键:dialog 不等 bootstrap 完成才弹,而是立刻弹
+   *   原因:bootstrap 卡住(子进程 fork 慢/dm 加载慢/IPC 问题)时,dialog 也能立刻可见
+   *   loading 状态让用户知道 worker 还在初始化,bootstrap 完成后 loading 消失
+   *   bootstrap 失败时:loading 消失 + 显示错误条(dialog 保持打开,用户可手动关闭)
+   */
+  const handleCreateTask = () => {
     setError(null);
-    setIsCreating(true);
-    const name = characterName || worker?.character?.name || '角色';
-    const res = await onBootstrap(gameWindow.hwnd, name);
-    if (!res.ok) {
+    setIsCreating(true);  // 按钮变 loading(用户看到"系统准备中")
+    // dialog 立刻弹,不等 bootstrap
+    setDialogMode('create');
+    setAutoStartAfterClose(true);
+    setDialogOpen(true);
+    // 后台异步 bootstrap
+    const name = characterName || '角色';
+    onBootstrap(gameWindow.hwnd, name).then((res) => {
+      setIsCreating(false);  // loading 消失
+      if (!res.ok) {
+        setError(res.error || '启动 worker 失败');
+      }
+    }).catch((err) => {
       setIsCreating(false);
-      setError(res.error || '启动 worker 失败');
-      return;
+      setError(err?.message || '启动 worker 失败');
+    });
+  };
+
+  /** 历史任务:打开历史任务 dialog */
+  const handleOpenHistory = () => {
+    setError(null);
+    setHistoryOpen(true);
+  };
+
+  /**
+   * 选中历史任务后:加载配置 + 应用到当前 hwnd + 启动 worker
+   * 如果已有 worker(可复用),只发 startTask;否则先 bootstrap
+   */
+  const handleHistorySelect = async (stored: StoredTaskConfig) => {
+    setHistoryOpen(false);
+    setError(null);
+    onApplyConfig(gameWindow.hwnd, stored.config, stored.name);
+
+    if (worker) {
+      // 已有 worker,直接发 start-task(等 worker ready,最多 30s)
+      const startRes = await onStartTask(gameWindow.hwnd);
+      if (!startRes.ok) {
+        alert(`启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
+      }
+    } else {
+      // 还没有 worker:bootstrap + 自动 startTask
+      const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
+      if (!res.ok) {
+        setError(res.error || '启动 worker 失败');
+        return;
+      }
+      const startRes = await onStartTask(gameWindow.hwnd);
+      if (!startRes.ok) {
+        alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
+      }
     }
-    setIsCreating(false);
-    setDialogFromCreate(true);
+  };
+
+  // ---- dialog handlers ----
+
+  /** dialog 关闭:取消自动启动标记,如果是 creating 流程且没保存则 cancelBootstrap */
+  const handleDialogClose = () => {
+    // 如果是 create 流程且还没自动启动 → cancel worker
+    if (dialogMode === 'create' && autoStartAfterClose && !worker?.taskConfig) {
+      // dialog 在配置阶段被关掉,worker 在 idle 等命令
+      // → cancelBootstrap(停掉 worker,回到 unconfigured)
+      // 不调 cancel,因为 worker 可能还活着(以后想用可以直接 startTask)
+      // 这里选择:保留 worker(用户可以再次点创建),不 cancel
+      // 但如果用户彻底关掉,下次进来还是看到 idle worker 孤儿
+      // 简单起见:cancel
+      onCancelBootstrap(gameWindow.hwnd);
+    }
+    setDialogOpen(false);
+    setAutoStartAfterClose(false);
+  };
+
+  /**
+   * "保存配置":接收 dialog 传来的 name(替代 Electron 不支持的 window.prompt)
+   * 持久化到磁盘 + 自动 startTask;重名拒绝,返回 error 让 dialog 留在 name 步骤
+   */
+  const handleTaskSaved = async (config: TaskConfig, name: string): Promise<{ ok: boolean; error?: string }> => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return { ok: false, error: '任务名不能为空' };
+    }
+    const res = await saveTaskByName(trimmed, config);
+    if (!res.ok) {
+      // 重名或其他错误 — 返回 error,dialog 停留在 name 步骤让用户改名重试
+      return { ok: false, error: res.error };
+    }
+    // 保存成功:应用到当前 hwnd + 关 dialog + 自动 startTask(等 worker ready)
+    onApplyConfig(gameWindow.hwnd, config, trimmed);
+    setDialogOpen(false);
+    setAutoStartAfterClose(false);
+    const startRes = await onStartTask(gameWindow.hwnd);
+    if (!startRes.ok) {
+      // startTask 失败(worker 未 ready 超时等)— 提示用户
+      alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
+    }
+    return { ok: true };
+  };
+
+  /**
+   * "确认":仅写内存,不持久化 → 自动 startTask(关 app 丢)
+   */
+  const handleTaskConfirm = async (config: TaskConfig) => {
+    onApplyConfig(gameWindow.hwnd, config);
+    setDialogOpen(false);
+    setAutoStartAfterClose(false);
+    const startRes = await onStartTask(gameWindow.hwnd);
+    if (!startRes.ok) {
+      alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
+    }
+  };
+
+  /**
+   * editable 状态下编辑:打开 dialog(允许编辑),保存后重启 worker
+   */
+  const handleEditConfig = () => {
+    setDialogMode('edit');
+    setAutoStartAfterClose(true);
     setDialogOpen(true);
   };
 
-  const handleDialogClose = () => {
-    // create 流程的 dialog 没保存就关闭 -> 停掉 worker
-    if (dialogFromCreate) {
-      onCancelBootstrap(gameWindow.hwnd);
-      setDialogFromCreate(false);
-    }
-    setDialogOpen(false);
+  /**
+   * editable 状态下重新选择历史任务
+   */
+  const handleReselectHistory = () => {
+    setHistoryOpen(true);
   };
 
-  const handleTaskSaved = (cfg: TaskConfig) => {
-    onTaskSaved(gameWindow.hwnd, cfg);
-    setDialogFromCreate(false);
-    setDialogOpen(false);
+  /**
+   * editable 状态下放弃当前任务,回到 unconfigured
+   */
+  const handleAbandon = () => {
+    onClearConfig(gameWindow.hwnd);
+    // worker 已经退出了(exit 时 cleanup 了),不需要 cancelBootstrap
   };
 
-  // "确认"按钮:仅写内存,不存磁盘(关 dialog 同 handleTaskSaved)
-  const handleTaskConfirm = (cfg: TaskConfig) => {
-    onTaskConfirm?.(gameWindow.hwnd, cfg);
-    setDialogFromCreate(false);
-    setDialogOpen(false);
+  // ---- 运行控制 ----
+
+  const handlePause = () => {
+    if (worker) onPause(worker.workerId);
   };
 
-  // 启动中状态(启动按钮 loading + 防重复点击)
-  const [isStarting, setIsStarting] = useState(false);
+  const handleResume = () => {
+    if (worker) onResume(worker.workerId);
+  };
 
-  const handleStart = async () => {
-    if (isStarting) return;  // 防重复
-    if (isSaved === false) return;  // 未保存不允许启动(双重保险)
-    setIsStarting(true);
-    const start = Date.now();
-    try {
-      if (worker) {
-        // worker 已存在(从 create 流程来的) -> 发 start-task
-        await onStartTask(gameWindow.hwnd);
-      } else {
-        // 没 worker(reload 后) -> 走老逻辑(直接启动进战斗)
-        const name = characterName || '角色';
-        await onStart(gameWindow.hwnd, name, taskConfig!.type);
-      }
-    } finally {
-      // 最少显示 500ms loading,避免 IPC 太快看起来"没生效"
-      const elapsed = Date.now() - start;
-      if (elapsed < 500) {
-        setTimeout(() => setIsStarting(false), 500 - elapsed);
-      } else {
-        setIsStarting(false);
-      }
-    }
+  const handleStop = () => {
+    if (worker) onStop(worker.workerId);
+    // stop 后 worker exit,UI 自动回到 editable(worker 不再在 workers Map)
   };
 
   return (
@@ -159,56 +247,52 @@ console.log('isPaused',isPaused);
       <div className="card overflow-hidden flex flex-col">
         {/* 缩略图 */}
         <div className="relative aspect-[4/3] bg-bg-input border-b border-border-base flex items-center justify-center">
-          {thumbnail ? (
-            <img
-              src={thumbnail}
-              alt={`hwnd ${gameWindow.hwnd}`}
-              className="w-full h-full object-contain"
-              draggable={false}
-            />         
-          ) : gameWindow.isMinimized ? (
-            <div className="text-text-muted text-xs text-center p-3">
-              <div className="text-2xl mb-1 opacity-50">📉</div>
-              <div>窗口已最小化</div>
-            </div>
-          ) : isCreating ? (
-            <div className="text-text-muted text-xs text-center p-3">
-              <Loader2 size={24} className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan" />
-              <div>正在连接游戏…</div>
-              <div className="text-text-muted/60 mt-1 text-[10px]">大漠绑定 + 截图</div>
-            </div>
-          ) : (
-            <div className="text-text-muted text-xs text-center p-3">
-              <div className="text-2xl mb-1 opacity-50">🚫</div>
-              <div>无法截取</div>
-              <div className="text-text-muted/60 mt-1 text-[10px]">游戏可能启用了反截图保护</div>
-            </div>
-          )}
+          {(() => {
+            const thumbnail = useStore.getState().thumbnails.get(gameWindow.hwnd);
+            if (thumbnail) {
+              return (
+                <img
+                  src={thumbnail}
+                  alt={`hwnd ${gameWindow.hwnd}`}
+                  className="w-full h-full object-contain"
+                  draggable={false}
+                />
+              );
+            }
+            if (gameWindow.isMinimized) {
+              return (
+                <div className="text-text-muted text-xs text-center p-3">
+                  <div className="text-2xl mb-1 opacity-50">📉</div>
+                  <div>窗口已最小化</div>
+                </div>
+              );
+            }
+            if (uiState === 'creating') {
+              return (
+                <div className="text-text-muted text-xs text-center p-3">
+                  <Loader2 size={24} className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan" />
+                  <div>正在连接游戏…</div>
+                  <div className="text-text-muted/60 mt-1 text-[10px]">大漠绑定 + 截图</div>
+                </div>
+              );
+            }
+            return (
+              <div className="text-text-muted text-xs text-center p-3">
+                <div className="text-2xl mb-1 opacity-50">🚫</div>
+                <div>无法截取</div>
+                <div className="text-text-muted/60 mt-1 text-[10px]">游戏可能启用了反截图保护</div>
+              </div>
+            );
+          })()}
           <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-black/60 rounded text-[10px] font-mono text-text-secondary">
             hwnd {gameWindow.hwnd}
           </div>
-          {/* 右上角状态标签 + 刷新按钮 */}
+          {/* 右上角:状态标签 + 工具按钮 */}
           <div className="absolute top-1.5 right-1.5 flex items-center gap-1.5">
-            {!isConfigured && (
-              <span className="px-1.5 py-0.5 bg-accent-yellow/20 text-accent-yellow rounded text-[10px] font-medium">
-                未配置
+            {appliedTaskName && (
+              <span className="px-1.5 py-0.5 bg-accent-cyan/20 text-accent-cyan rounded text-[10px] font-medium" title="当前任务">
+                📋 {appliedTaskName}
               </span>
-            )}
-            {isConfigured && (
-              <>
-                <span className="px-1.5 py-0.5 bg-accent-green/20 text-accent-green rounded text-[10px] font-medium">
-                  {taskConfig!.type === 'farm' && '挂机打怪'}
-                  {taskConfig!.type === 'mine' && '挖矿'}
-                  {taskConfig!.type === 'catch-pet' && '捕捉宠物'}
-                  {taskConfig!.type === 'refine' && '装备炼化'}
-                  {taskConfig!.type === 'reputation' && '名誉任务'}
-                </span>
-                {!isSaved && (
-                  <span className="px-1.5 py-0.5 bg-accent-yellow/20 text-accent-yellow rounded text-[10px] font-medium">
-                    未保存
-                  </span>
-                )}
-              </>
             )}
             <button
               onClick={async () => {
@@ -221,18 +305,9 @@ console.log('isPaused',isPaused);
               <RefreshCw size={10} />
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); setHistoryOpen(true); }}
-              className="p-1 bg-black/60 hover:bg-black/80 rounded text-text-muted hover:text-text-primary"
-              title="历史任务:从其他窗口选已保存的配置"
-            >
-              <History size={10} />
-            </button>
-            <button
-              onClick={async (e) => {
-                e.stopPropagation();
+              onClick={async () => {
                 if (!window.fohelp) return;
                 const res = await window.fohelp.captureTest(gameWindow.hwnd);
-                console.log(res,'res11111')
                 if (res.ok && res.filePath) {
                   await window.fohelp.showItemInFolder(res.filePath);
                 } else {
@@ -240,7 +315,7 @@ console.log('isPaused',isPaused);
                 }
               }}
               className="p-1 bg-black/60 hover:bg-black/80 rounded text-text-muted hover:text-text-primary"
-              title="大漠截图测试:存到 thumbnails/test-*.png,自动打开资源管理器"
+              title="大漠截图测试"
             >
               <Camera size={10} />
             </button>
@@ -254,23 +329,6 @@ console.log('isPaused',isPaused);
               <span className="text-sm font-medium truncate">
                 {characterName || worker?.character?.name || '(未识别)'}
               </span>
-              {uiState === 'ready' && (
-                <button
-                  onClick={() => setDialogOpen(true)}
-                  className="text-text-muted hover:text-accent-cyan"
-                  title="编辑任务"
-                >
-                  <Pencil size={12} />
-                </button>
-              )}
-              {(uiState === 'running' || uiState === 'paused') && (
-                <span
-                  className="text-text-muted/40 cursor-not-allowed"
-                  title="运行中不能编辑,需先停止"
-                >
-                  <Pencil size={12} />
-                </span>
-              )}
             </div>
             <div className="flex items-center justify-between">
               <StatusBadge status={status} animate={status === 'combat'} />
@@ -294,13 +352,34 @@ console.log('isPaused',isPaused);
         {/* 操作按钮 */}
         <div className="p-2 flex gap-1.5">
           {uiState === 'unconfigured' && (
-            <button
-              onClick={handleCreateTask}
-              className="btn btn-primary flex-1 flex items-center justify-center gap-1"
-            >
-              <Settings size={12} />
-              创建任务
-            </button>
+            <>
+              <button
+                onClick={handleCreateTask}
+                disabled={isCreating}
+                className="btn btn-primary flex-1 flex items-center justify-center gap-1 disabled:opacity-70"
+              >
+                {isCreating ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin" />
+                    连接中…
+                  </>
+                ) : (
+                  <>
+                    <Settings size={12} />
+                    创建任务
+                  </>
+                )}
+              </button>
+              <button
+                onClick={handleOpenHistory}
+                disabled={isCreating || taskHistory.length === 0}
+                className="btn btn-primary flex-1 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={taskHistory.length === 0 ? '还没有保存过的任务' : '从已保存的任务列表中选择'}
+              >
+                <Settings size={12} />
+                历史任务
+              </button>
+            </>
           )}
 
           {uiState === 'creating' && (
@@ -310,56 +389,24 @@ console.log('isPaused',isPaused);
             </button>
           )}
 
-          {uiState === 'ready' && (
-            <>
-              <button
-                onClick={handleStart}
-                disabled={!isSaved || isStarting || !worker?.ready}
-                className="btn btn-primary flex-1 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={
-                  !isSaved
-                    ? '未保存,请先保存配置再启动'
-                    : !worker?.ready
-                    ? '子进程初始化中,请稍候…'
-                    : isStarting
-                    ? '启动中…'
-                    : '启动任务'
-                }
-              >
-                {isStarting ? (
-                  <>
-                    <Loader2 size={12} className="animate-spin" />
-                    启动中…
-                  </>
-                ) : (
-                  <>
-                    <Play size={12} />
-                    启动
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => setDialogOpen(true)}
-                disabled={isStarting}
-                className="btn btn-secondary flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
-                title="编辑任务"
-              >
-                <Pencil size={12} />
-              </button>
-            </>
-          )}
-
           {uiState === 'running' && (
             <>
               <button
-                onClick={() => worker && onPause(worker.workerId)}
+                onClick={() => { setDialogMode('view'); setDialogOpen(true); }}
+                className="btn btn-secondary flex items-center justify-center"
+                title="查看任务详情(只读)"
+              >
+                <Settings size={12} />
+              </button>
+              <button
+                onClick={handlePause}
                 className="btn btn-secondary flex-1 flex items-center justify-center gap-1"
               >
                 <Pause size={12} />
                 暂停
               </button>
               <button
-                onClick={() => worker && onStop(worker.workerId)}
+                onClick={handleStop}
                 className="btn btn-danger flex-1 flex items-center justify-center gap-1"
               >
                 <Square size={12} />
@@ -371,14 +418,21 @@ console.log('isPaused',isPaused);
           {uiState === 'paused' && (
             <>
               <button
-                onClick={() => worker && onResume(worker.workerId)}
+                onClick={() => { setDialogMode('view'); setDialogOpen(true); }}
+                className="btn btn-secondary flex items-center justify-center"
+                title="查看任务详情(只读)"
+              >
+                <Settings size={12} />
+              </button>
+              <button
+                onClick={handleResume}
                 className="btn btn-primary flex-1 flex items-center justify-center gap-1"
               >
                 <Play size={12} />
                 继续
               </button>
               <button
-                onClick={() => worker && onStop(worker.workerId)}
+                onClick={handleStop}
                 className="btn btn-danger flex-1 flex items-center justify-center gap-1"
               >
                 <Square size={12} />
@@ -386,33 +440,60 @@ console.log('isPaused',isPaused);
               </button>
             </>
           )}
+
+          {uiState === 'editable' && (
+            <>
+              <button
+                onClick={handleEditConfig}
+                className="btn btn-secondary flex-1 flex items-center justify-center gap-1"
+                title="编辑当前配置"
+              >
+                <Edit3 size={12} />
+                编辑配置
+              </button>
+              <button
+                onClick={handleReselectHistory}
+                disabled={taskHistory.length === 0}
+                className="btn btn-secondary flex-1 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={taskHistory.length === 0 ? '还没有保存过的任务' : '从历史任务中选择其他任务'}
+              >
+                <Settings size={12} />
+                历史任务
+              </button>
+              <button
+                onClick={handleAbandon}
+                className="btn btn-danger flex items-center justify-center"
+                title="放弃当前任务,回到未配置状态"
+              >
+                <Square size={12} />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* 任务配置 dialog */}
-      {dialogOpen && (
+      {/* 任务配置 dialog — 渲染条件:dialogOpen + (已有 taskConfig 或 创建流程中)
+          创建流程时 taskConfig 还是 null(没保存),但要能开 dialog 让用户配置 */}
+      {(dialogOpen && (taskConfig || dialogMode === 'create')) && (
         <TaskConfigDialog
           hwnd={gameWindow.hwnd}
-          initialConfig={taskConfig || null}
-          thumbnail={thumbnail}
+          initialConfig={taskConfig}
+          thumbnail={useStore.getState().thumbnails.get(gameWindow.hwnd)}
           workerState={worker || null}
+          readOnly={dialogMode === 'view'}
           onClose={handleDialogClose}
           onSaved={handleTaskSaved}
-          onConfirm={handleTaskConfirm}
+          onConfirm={dialogMode === 'view' ? undefined : handleTaskConfirm}
         />
       )}
 
       {/* 历史任务 dialog */}
       {historyOpen && (
         <HistoryTaskDialog
-          history={historyItems}
+          history={taskHistory}
           currentHwnd={gameWindow.hwnd}
           onClose={() => setHistoryOpen(false)}
-          onApply={(_hwnd, cfg) => {
-            // 应用到当前窗口(走"未保存"路径,关 app 丢)
-            onTaskConfirm ? onTaskConfirm(gameWindow.hwnd, cfg) : onTaskSaved(gameWindow.hwnd, cfg);
-            setHistoryOpen(false);
-          }}
+          onApply={(stored) => handleHistorySelect(stored)}
         />
       )}
     </>

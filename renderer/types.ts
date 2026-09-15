@@ -1,6 +1,6 @@
 // 全局声明:window.fohelp (preload 暴露的 API)
 
-import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
+import type { GameWindow, TaskType, TaskConfig, WorkerState, StoredTaskConfig } from '../shared/types';
 
 interface FohelpAPI {
   listGameWindows: () => Promise<GameWindow[]>;
@@ -25,8 +25,18 @@ interface FohelpAPI {
   pauseWorker: (workerId: string) => Promise<boolean>;
   resumeWorker: (workerId: string) => Promise<boolean>;
   listWorkers: () => Promise<WorkerState[]>;
-  saveTaskConfig: (hwnd: number, config: TaskConfig) => Promise<any>;
-  getTaskConfig: (hwnd: number) => Promise<any>;
+  /** 保存任务配置(按 name 唯一,重名拒绝) */
+  saveTaskConfig: (
+    hwnd: number,
+    config: TaskConfig,
+    name: string,
+  ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
+  /** 列出所有已保存的任务(全局) */
+  listAllTaskConfigs: () => Promise<StoredTaskConfig[]>;
+  /** 按任务名加载配置 */
+  loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
+  /** 旧 API 保留(返回 null) */
+  getTaskConfig: (hwnd: number) => Promise<TaskConfig | null>;
   onWorkerStateChanged: (cb: (state: WorkerState) => void) => () => void;
   onWorkerLog: (cb: (log: { workerId: string; level: string; msg: string; timestamp: number }) => void) => () => void;
   onWorkerError: (cb: (err: { workerId: string; error: any; timestamp: number }) => void) => () => void;

@@ -36,6 +36,31 @@ if (!process.parentPort) {
   throw new Error('必须在 Electron utilityProcess 中运行');
 }
 
+/**
+ * 兜底异常处理 — 防止 dm.dll / winax 的 native SEH 异常绕过 V8 TryCatch
+ * 触发 STATUS_FATAL_USER_CALLBACK_EXCEPTION (0xC00000D0) → 子进程非正常退出
+ *
+ * 注意:这些 handler 不能真正"处理"native SEH(SEH 异常 V8 接不住),
+ * 只能 log + 让 Node.js 不进一步把进程状态搞乱
+ */
+process.on('uncaughtException', (err, origin) => {
+  try {
+    log.error(`[uncaughtException] origin=${origin}: ${err?.message || err}`);
+    if (err?.stack) log.error(err.stack);
+  } catch {
+    /* noop — log 本身崩了就放弃 */
+  }
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  try {
+    const msg = reason?.message || reason?.toString() || String(reason);
+    log.error(`[unhandledRejection] ${msg}`);
+  } catch {
+    /* noop */
+  }
+});
+
 interface InitData {
   hwnd: number;
   characterName: string;
@@ -57,6 +82,7 @@ function parseInitData(): InitData {
   }
 }
 
+// 获取主进程参数：'{"hwnd":12345,"characterName":"...","taskType":"farm",...}'
 const init = parseInitData();
 
 const taskNameMap: Record<TaskType, TaskName> = {
@@ -167,7 +193,9 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
 } as const;
 
 async function main() {
-  sendLog('info', `UtilityWorker 启动(PID=${process.pid}): hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
+  const t0 = Date.now();
+  const elapsed = () => `[+${Date.now() - t0}ms]`;
+  sendLog('info', `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
 
   const profile = init.profile || DEFAULT_PROFILE;
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
@@ -182,8 +210,9 @@ async function main() {
   }
 
   try {
+    const tLoad = Date.now();
     _dm = getDamoo();
-    sendLog('info', `大漠加载成功,版本 ${dmApi.version()}`);
+    sendLog('info', `大漠加载成功,版本 ${dmApi.version()} (耗时 ${Date.now() - tLoad}ms)`);
   } catch (e: any) {
     log.error(`大漠加载失败: ${e.message}`);
     setStatus('alert', '大漠未加载');
@@ -197,7 +226,9 @@ async function main() {
     keypad: profileEngine?.keypad || init.damooConfig?.keypad || DEFAULT_DAMOO_CONFIG.keypad,
     mode: profileEngine?.mode ?? init.damooConfig?.mode ?? DEFAULT_DAMOO_CONFIG.mode,
   };
+  const tBind = Date.now();
   const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
+  sendLog('info', `bindWindow 完成: ${bindOk ? '成功' : '失败'} (耗时 ${Date.now() - tBind}ms)`);
   if (!bindOk) {
     const code = dmApi.getLastError();
     const { message, advice } = dmErrorFull(code);
@@ -230,7 +261,9 @@ async function main() {
     },
   });
 
+  const tCap = Date.now();
   await takeAndSendThumbnail(init.hwnd);
+  sendLog('info', `thumbnail 发送完成 (耗时 ${Date.now() - tCap}ms)`);
 
   const vision = new DamooVisionProvider();
   const input = new DamooInputProvider();
@@ -297,7 +330,7 @@ process.parentPort.on('message', (msg: any) => {
           _startResolve = null;
         }
         combat?.stop();
-        // ✅ utilityProcess 子进程:dm.dll 进程级副作用不影响其他子进程
+        // utilityProcess 子进程:dm.dll 进程级副作用不影响其他子进程
         //   每个子进程独立加载 dm.dll,UnBindWindow 只影响自己
         try {
           dmApi.unbindWindow();
@@ -373,7 +406,9 @@ async function handleScreenshot(): Promise<void> {
   }
 }
 
-main().catch((e) => {
+main().then(() => {
+process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
+}).catch((e) => {
   sendLog('error', `UtilityWorker 异常: ${e.message}`);
   setStatus('alert', e.message);
 });
@@ -381,4 +416,4 @@ main().catch((e) => {
 // 子进程初始化完成,发 'ready' 信号给父进程,告诉它 message listener 已注册
 // ⚠️ 必须在顶层代码末尾发,保证 listener 注册后才发,父进程收到 'ready' 后
 //   再 postMessage start-task/stop 等命令,绝对不会再丢消息
-process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
+// process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });

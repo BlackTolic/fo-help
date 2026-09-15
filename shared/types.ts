@@ -84,9 +84,11 @@ export interface PlaceholderTaskConfig {
 /** 任务配置联合类型 */
 export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig;
 
-/** 任务配置存储(挂到 window) */
+/** 任务配置存储(按"任务名"维度存储,跨窗口复用) */
 export interface StoredTaskConfig {
-  id: string;            // 唯一 ID
+  id: string;            // 唯一 ID(默认等于 name,但允许 name 重命名时保留稳定 id)
+  /** 用户自定义的任务名(全局唯一,创建时必填,跨窗口复用) */
+  name: string;
   taskType: TaskType;
   config: TaskConfig;
   createdAt: number;

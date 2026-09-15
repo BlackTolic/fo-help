@@ -2,7 +2,7 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import { RequestChannel, PushChannel } from '../shared/ipc-channels';
-import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
+import type { GameWindow, TaskType, TaskConfig, StoredTaskConfig, WorkerState } from '../shared/types';
 
 // 类型化 API
 const api = {
@@ -58,9 +58,21 @@ const api = {
   listWorkers: (): Promise<WorkerState[]> => ipcRenderer.invoke(RequestChannel.ListWorkers),
 
   // 任务配置
-  saveTaskConfig: (hwnd: number, config: TaskConfig) =>
-    ipcRenderer.invoke(RequestChannel.SaveTaskConfig, hwnd, config),
-  getTaskConfig: (hwnd: number) =>
+  /** 保存任务配置(按 name 唯一存储,hwnd 参数保留仅用于兼容) */
+  saveTaskConfig: (
+    hwnd: number,
+    config: TaskConfig,
+    name: string,
+  ): Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.SaveTaskConfig, { hwnd, config, name }),
+  /** 列出所有已保存的任务(全局,按任务名) */
+  listAllTaskConfigs: (): Promise<StoredTaskConfig[]> =>
+    ipcRenderer.invoke(RequestChannel.ListAllTaskConfigs),
+  /** 按任务名加载配置 */
+  loadTaskByName: (name: string): Promise<StoredTaskConfig | null> =>
+    ipcRenderer.invoke(RequestChannel.LoadTaskByName, name),
+  /** 旧 API 保留(返回 null,新流程不再按 hwnd 加载) */
+  getTaskConfig: (hwnd: number): Promise<TaskConfig | null> =>
     ipcRenderer.invoke(RequestChannel.GetTaskConfig, hwnd),
 
   // 事件订阅

@@ -4,19 +4,19 @@ import { useEffect } from 'react';
 import { RefreshCw, Activity } from 'lucide-react';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
-import type { TaskConfig } from '../shared/types';
 
 function App() {
   const gameWindows = useStore((s) => s.gameWindows);
   const workers = useStore((s) => s.workers);
   const taskConfigs = useStore((s) => s.taskConfigs);
+  const appliedTaskNames = useStore((s) => s.appliedTaskNames);
   const characterNames = useStore((s) => s.characterNames);
-  const savedHwnds = useStore((s) => s.savedHwnds);
   const refreshWindows = useStore((s) => s.refreshWindows);
-  const loadTaskConfig = useStore((s) => s.loadTaskConfig);
-  const setTaskConfig = useStore((s) => s.setTaskConfig);
-  const setTaskConfigUnsaved = useStore((s) => s.setTaskConfigUnsaved);
+  const loadTaskHistory = useStore((s) => s.loadTaskHistory);
+  const applyTaskConfig = useStore((s) => s.applyTaskConfig);
+  const clearTaskConfig = useStore((s) => s.clearTaskConfig);
   const startWorker = useStore((s) => s.startWorker);
+  void startWorker; // 旧 API 保留(直接启动战斗循环),新流程用 bootstrapWorker
   const bootstrapWorker = useStore((s) => s.bootstrapWorker);
   const startTask = useStore((s) => s.startTask);
   const cancelBootstrap = useStore((s) => s.cancelBootstrap);
@@ -25,23 +25,18 @@ function App() {
   const resumeWorker = useStore((s) => s.resumeWorker);
 
   useEffect(() => {
+    // 订阅 IPC 事件
     subscribeToIpc();
+    // 刷新窗口列表
     refreshWindows();
+    // 加载全局历史任务列表
+    loadTaskHistory();
     // 每 3 秒刷新窗口列表
     const t = setInterval(refreshWindows, 3000);
     return () => clearInterval(t);
-  }, [refreshWindows]);
+  }, [refreshWindows, loadTaskHistory]);
 
-  // 当窗口列表变化时,加载每个窗口的任务配置
-  useEffect(() => {
-    gameWindows.forEach((w) => {
-      if (!taskConfigs.has(w.hwnd)) {
-        loadTaskConfig(w.hwnd);
-      }
-    });
-    // 仅在窗口列表变化时跑
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameWindows]);
+  // ⚠️ 新流程:不再自动 loadTaskConfig(每个窗口都需要用户主动选"创建/历史")
 
   const workersByHwnd = new Map<number, string>();
   for (const [wid, w] of workers) workersByHwnd.set(w.hwnd, wid);
@@ -107,23 +102,21 @@ function App() {
                   worker={worker}
                   characterName={characterNames.get(win.hwnd)}
                   taskConfig={taskConfigs.get(win.hwnd) || null}
-                  onStart={startWorker}
-                  onStartTask={startTask}
+                  appliedTaskName={appliedTaskNames.get(win.hwnd) || null}
                   onBootstrap={async (hwnd, name) => {
                     const res = await bootstrapWorker(hwnd, name);
                     return { ok: res.ok, error: res.error };
                   }}
                   onCancelBootstrap={cancelBootstrap}
+                  onStartTask={startTask}
                   onStop={stopWorker}
                   onPause={pauseWorker}
                   onResume={resumeWorker}
-                  isSaved={savedHwnds.has(win.hwnd)}
-                  onTaskSaved={(_hwnd, config: TaskConfig) => {
-                    setTaskConfig(win.hwnd, config);
+                  onApplyConfig={(hwnd, config, name) => {
+                    applyTaskConfig(hwnd, config, name);
                   }}
-                  onTaskConfirm={(_hwnd, config: TaskConfig) => {
-                    // 确认/历史加载:仅写内存
-                    setTaskConfigUnsaved(win.hwnd, config);
+                  onClearConfig={(hwnd) => {
+                    clearTaskConfig(hwnd);
                   }}
                 />
               );
