@@ -7,34 +7,33 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "dev": "npm run build:main && concurrently -k -n vite,main,worker -c blue,green,magenta \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:worker\"",
+    "dev": "npm run build:main && concurrently -k -n vite,main -c blue,green \"npm:dev:renderer\" \"npm:dev:main\"",
     "dev:renderer": "vite",
-    "dev:main": "wait-on http-get://localhost:5173 dist-electron/electron/main.js && cross-env NODE_ENV=development electron .",
-    "dev:worker": "tsc -p workers/tsconfig.json --outDir dist-workers --watch --preserveWatchOutput",
+    "dev:main": "wait-on http-get://localhost:5174 dist-electron/electron/main.js && cross-env NODE_ENV=development electron .",
     "build:main": "tsc -p electron/tsconfig.json",
-    "build:worker": "tsc -p workers/tsconfig.json --outDir dist-workers",
     "build:renderer": "vite build",
-    "build": "npm run build:main && npm run build:worker && npm run build:renderer",
+    "build": "npm run build:main && npm run build:renderer",
     "start": "cmd /c \"chcp 65001 >nul & cross-env NODE_ENV=production electron .\"",
     "start:legacy": "cross-env NODE_ENV=production electron .",
     "dev:utf8": "cmd /c \"chcp 65001 >nul & npm run dev\"",
-    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit && tsc -p workers/tsconfig.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,css,html}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,css,html}\"",
     "package": "npm run build && electron-builder"
   },
   "dependencies": {
-    "chokidar": "^3.6.0",
     "clsx": "^2.1.1",
-    "koffi": "^2.10.0",
     "lucide-react": "^0.460.0",
     "pino": "^10.3.1",
-    "pino-pretty": "^13.1.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "winax": "^3.6.2",
-    "yaml": "^2.9.0",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@eslint/js": "9.18.0",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -44,11 +43,20 @@
     "cross-env": "^7.0.3",
     "electron": "^32.3.3",
     "electron-builder": "^25.1.8",
+    "eslint": "9.18.0",
+    "eslint-config-prettier": "9.1.0",
+    "globals": "15.14.0",
     "postcss": "^8.4.49",
+    "prettier": "3.4.2",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
+    "typescript-eslint": "8.20.0",
     "vite": "^5.4.11",
     "wait-on": "^8.0.1"
+  },
+  "overrides": {
+    "minimatch": "3.1.2",
+    "browserslist": "4.28.1"
   },
   "build": {
     "appId": "com.fohelp.assistant",
@@ -58,7 +66,6 @@
     },
     "files": [
       "dist-electron/**/*",
-      "dist-workers/**/*",
       "dist/**/*",
       "assets/**/*",
       "profiles/**/*",
@@ -67,7 +74,7 @@
     "win": {
       "target": "nsis",
       "arch": [
-        "x64"
+        "ia32"
       ]
     },
     "nsis": {

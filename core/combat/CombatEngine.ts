@@ -73,7 +73,7 @@ export class CombatEngine {
 
   /** 单个 tick(由 start() 循环调用) */
   private async tick(): Promise<void> {
-    const t = (this.profile.combat.findTargetIntervalMs || 1500);
+    const t = this.profile.combat.findTargetIntervalMs || 1500;
     const now = Date.now();
 
     // 1. 找怪(节流:每 t 毫秒找一次)
@@ -96,7 +96,10 @@ export class CombatEngine {
         await this.wait(t);
         return;
       }
-      this.cb.onLog?.('info', `找到目标: ${target.name} @ (${target.screenPos.x}, ${target.screenPos.y})`);
+      this.cb.onLog?.(
+        'info',
+        `找到目标: ${target.name} @ (${target.screenPos.x}, ${target.screenPos.y})`,
+      );
 
       // 2. 点击怪物(QQ 幻想:左键点怪 = 选中 + 攻击,有时还需走近)
       this.setState({ kind: 'approaching', target });
@@ -185,7 +188,7 @@ export class CombatEngine {
         if (ok) this.cb.onLog?.('debug', `释放技能 ${best}`);
       }
 
-      this.currentCtx.onCombatStart = false;  // 只在战斗开始时 true 一次
+      this.currentCtx.onCombatStart = false; // 只在战斗开始时 true 一次
       await this.wait(300);
     }
   }
@@ -210,8 +213,12 @@ export class CombatEngine {
     this.cb.onStateChange?.(s);
   }
 
-  getState(): CombatState { return this.state; }
-  getKillCount(): number { return this.killCount; }
+  getState(): CombatState {
+    return this.state;
+  }
+  getKillCount(): number {
+    return this.killCount;
+  }
 
   private wait(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));

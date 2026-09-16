@@ -5,14 +5,48 @@ import type { Point } from '../vision/IVisionProvider';
 export type MouseButton = 'left' | 'right' | 'middle';
 
 export type KeyCode =
-  | 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9'
-  | 'Q' | 'W' | 'E' | 'R' | 'A' | 'S' | 'D' | 'F' | 'G' | 'H' | 'Z' | 'X' | 'C' | 'V' | 'B'
-  | 'Tab' | 'Space' | 'Enter' | 'Esc'
-  | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+  | 'F1'
+  | 'F2'
+  | 'F3'
+  | 'F4'
+  | 'F5'
+  | 'F6'
+  | 'F7'
+  | 'F8'
+  | 'F9'
+  | 'Q'
+  | 'W'
+  | 'E'
+  | 'R'
+  | 'A'
+  | 'S'
+  | 'D'
+  | 'F'
+  | 'G'
+  | 'H'
+  | 'Z'
+  | 'X'
+  | 'C'
+  | 'V'
+  | 'B'
+  | 'Tab'
+  | 'Space'
+  | 'Enter'
+  | 'Esc'
+  | '0'
+  | '1'
+  | '2'
+  | '3'
+  | '4'
+  | '5'
+  | '6'
+  | '7'
+  | '8'
+  | '9';
 
 export type MoveStyle =
-  | { kind: 'instant' }                            // 瞬移
-  | { kind: 'human'; durationMs: number }          // 拟人化(指定时长)
+  | { kind: 'instant' } // 瞬移
+  | { kind: 'human'; durationMs: number } // 拟人化(指定时长)
   | { kind: 'bezier'; durationMs: number; jitter: boolean }; // 贝塞尔曲线
 
 export interface IInputProvider {

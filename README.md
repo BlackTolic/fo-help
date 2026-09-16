@@ -5,6 +5,7 @@
 ## 项目状态
 
 **P1 脚手架阶段** —— 已完成:
+
 - ✅ Electron + Vite + React + TypeScript + Tailwind 工程
 - ✅ 主进程 / Worker / 渲染进程 三层架构
 - ✅ Win32 API 窗口枚举(koffi)
@@ -13,6 +14,7 @@
 - ✅ 主面板 UI(窗口列表 + 4 元素卡片)
 
 **P2 待做** —— 战斗/移动/识别引擎:
+
 - ⏳ 大漠 DLL 真实绑定(P1 是 stub)
 - ⏳ 坐标读取(小地图)
 - ⏳ 找怪(OCR 头顶名字)

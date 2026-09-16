@@ -73,29 +73,29 @@
 
 ### 2.1 运行环境
 
-| 项 | 版本 |
-|---|---|
+| 项       | 版本                          |
+| -------- | ----------------------------- |
 | 操作系统 | Windows 10 / Windows 11 (x64) |
-| Node.js | 20 LTS |
-| Electron | 32 LTS |
-| QQ幻想 | 任意私服(通过 Profile 适配) |
+| Node.js  | 20 LTS                        |
+| Electron | 32 LTS                        |
+| QQ幻想   | 任意私服(通过 Profile 适配)   |
 
 ### 2.2 核心栈
 
-| 层 | 选型 | 理由 |
-|---|---|---|
-| 框架 | Electron | 跨平台桌面首选,生态成熟,打包 / 更新成熟 |
-| 语言 | TypeScript | 类型安全,工程化 |
-| UI | React 18 + Zustand | 生态成熟,状态管理轻 |
-| 样式 | Tailwind CSS | 快速样式 |
-| 进程隔离 | Node `worker_threads` | 同进程多线程,共享 native,启动快 |
-| 图像识别 (P1-P3) | 大漠插件 | 起步快,识别强 |
-| 图像识别 (P4+) | 自研 | 零授权,代码可控,长期方案 |
-| 鼠标 / 键盘 | 大漠 / SendInput | P1-P3 用大漠,P4+ 切原生 |
-| 打包 | electron-builder | 主流方案 |
-| 更新 | electron-updater | 主流方案 |
-| 日志 | electron-log | 持久化日志 |
-| 崩溃上报 | Sentry | 业内标准 |
+| 层               | 选型                  | 理由                                    |
+| ---------------- | --------------------- | --------------------------------------- |
+| 框架             | Electron              | 跨平台桌面首选,生态成熟,打包 / 更新成熟 |
+| 语言             | TypeScript            | 类型安全,工程化                         |
+| UI               | React 18 + Zustand    | 生态成熟,状态管理轻                     |
+| 样式             | Tailwind CSS          | 快速样式                                |
+| 进程隔离         | Node `worker_threads` | 同进程多线程,共享 native,启动快         |
+| 图像识别 (P1-P3) | 大漠插件              | 起步快,识别强                           |
+| 图像识别 (P4+)   | 自研                  | 零授权,代码可控,长期方案                |
+| 鼠标 / 键盘      | 大漠 / SendInput      | P1-P3 用大漠,P4+ 切原生                 |
+| 打包             | electron-builder      | 主流方案                                |
+| 更新             | electron-updater      | 主流方案                                |
+| 日志             | electron-log          | 持久化日志                              |
+| 崩溃上报         | Sentry                | 业内标准                                |
 
 ### 2.3 关键依赖
 
@@ -245,22 +245,25 @@ export interface IInputProvider {
 ```ts
 // core/platform/vision/damoo/DamooProvider.ts
 export class DamooVisionProvider implements IVisionProvider {
-  private dm: DmDll;  // 绑定的大漠对象
-  
+  private dm: DmDll; // 绑定的大漠对象
+
   constructor() {
     this.dm = loadDamooDll(); // 每个 worker 独立 LoadLibrary
   }
-  
+
   async findImage(roi, template, opts) {
     const result = this.dm.FindPic(
-      roi.x, roi.y, roi.x + roi.w, roi.y + roi.h,
+      roi.x,
+      roi.y,
+      roi.x + roi.w,
+      roi.y + roi.h,
       template.toString('base64'),
       opts?.similarity ?? 0.8,
-      opts?.direction ?? 'leftTop'
+      opts?.direction ?? 'leftTop',
     );
     // 解析 "x|y" 格式
   }
-  
+
   // ... 其他方法
 }
 ```
@@ -367,7 +370,7 @@ interface SkillConfig {
   key: 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9';
   name: string;
   cooldownMs: number;
-  priority: number;        // 1-100
+  priority: number; // 1-100
   condition?: Condition;
   interruptible?: boolean;
   preemptedBy?: string[];
@@ -436,14 +439,14 @@ pickBest(ctx: CombatContext): SkillConfig | null {
 
 **坐标源:小地图**
 
-| 位置 | 内容 | 用途 |
-|---|---|---|
-| 右上角 | 小地图(俯视 2D) | 角色在地图上的真实 2D 坐标 |
-| 左上角 | 头像 + HP/MP 数字 | 读自己血蓝 |
-| 角色头顶 | 名字 + 等级 | 自己的状态 |
-| 怪头顶 | 名字 + 血条 | 找怪 + 读怪血 |
-| 中央 | 2.5D 游戏画面 | 点击地面移动 / 点击怪物 |
-| 底部 | 技能栏 F1-F9 | 释放技能 |
+| 位置     | 内容              | 用途                       |
+| -------- | ----------------- | -------------------------- |
+| 右上角   | 小地图(俯视 2D)   | 角色在地图上的真实 2D 坐标 |
+| 左上角   | 头像 + HP/MP 数字 | 读自己血蓝                 |
+| 角色头顶 | 名字 + 等级       | 自己的状态                 |
+| 怪头顶   | 名字 + 血条       | 找怪 + 读怪血              |
+| 中央     | 2.5D 游戏画面     | 点击地面移动 / 点击怪物    |
+| 底部     | 技能栏 F1-F9      | 释放技能                   |
 
 ```ts
 class MovementEngine {
@@ -460,9 +463,9 @@ class MovementEngine {
   // 通过小地图判定到达
   async waitForArrive(target: WorldPoint, opts?: ArriveOpts): Promise<ArriveResult> {
     const {
-      threshold = 5,    // 距离阈值(世界坐标)
-      timeout = 30000,  // 30s 超时
-      pollMs = 200,     // 200ms 轮询
+      threshold = 5, // 距离阈值(世界坐标)
+      timeout = 30000, // 30s 超时
+      pollMs = 200, // 200ms 轮询
     } = opts || {};
 
     const start = Date.now();
@@ -497,11 +500,11 @@ class MovementEngine {
 
 **移动策略分级:**
 
-| 场景 | 鼠标轨迹 | 速度 |
-|---|---|---|
-| 战斗内走位 | 短直线 | 快 |
-| 战斗外走路 | 短贝塞尔 | 中 |
-| 紧急逃跑 | 直线瞬移 | 极快 |
+| 场景       | 鼠标轨迹 | 速度 |
+| ---------- | -------- | ---- |
+| 战斗内走位 | 短直线   | 快   |
+| 战斗外走路 | 短贝塞尔 | 中   |
+| 紧急逃跑   | 直线瞬移 | 极快 |
 
 ### 5.5 CoordinateReader
 
@@ -550,8 +553,8 @@ class Vision {
 
 interface FindOpts {
   roi?: Rect;
-  similarity?: number;     // 0-1, 默认 0.8
-  direction?: Direction;   // 扫描方向
+  similarity?: number; // 0-1, 默认 0.8
+  direction?: Direction; // 扫描方向
   maxResults?: number;
 }
 ```
@@ -580,7 +583,7 @@ interface TargetFilter {
 }
 
 interface CombatTarget {
-  id: string;          // 临时 ID(基于位置 hash)
+  id: string; // 临时 ID(基于位置 hash)
   screenPos: Point;
   worldPos: WorldPoint;
   name: string;
@@ -646,15 +649,23 @@ class ThreatMonitor {
     const hp = await this.coordReader.readSelfHp();
     const dropping = await this.isHpDropping();
 
-    if (hp < 15) this.onCritical();         // 致命:瞬移逃跑
-    else if (hp < 40) this.onLowHp();       // 低血:自愈 + 喝药
+    if (hp < 15)
+      this.onCritical(); // 致命:瞬移逃跑
+    else if (hp < 40)
+      this.onLowHp(); // 低血:自愈 + 喝药
     else if (dropping) this.onUnderAttack(); // 被攻击:风筝走位
   }
 
   // 三级响应
-  private onCritical()  { /* F7 瞬移 + 暂停脚本 */ }
-  private onLowHp()     { /* F8 自愈 + 喝药 */ }
-  private onUnderAttack(){ /* 斜线走位风筝 */ }
+  private onCritical() {
+    /* F7 瞬移 + 暂停脚本 */
+  }
+  private onLowHp() {
+    /* F8 自愈 + 喝药 */
+  }
+  private onUnderAttack() {
+    /* 斜线走位风筝 */
+  }
 }
 ```
 
@@ -674,7 +685,7 @@ class LootHandler {
     if (drops.length === 0) return { collected: 0 };
 
     // 2. 过滤白名单 / 黑名单
-    const targets = drops.filter(d => !opts.skip.includes(d.itemId));
+    const targets = drops.filter((d) => !opts.skip.includes(d.itemId));
 
     // 3. 走过去点
     for (const drop of targets) {
@@ -697,9 +708,9 @@ class CityRun {
     await this.recallToCity();
 
     // 2. 主城内补给
-    await this.sellJunk();       // 找商人卖垃圾
-    await this.repairEquipment();// 找修理
-    await this.buyPotions();     // 买血药 / 蓝药
+    await this.sellJunk(); // 找商人卖垃圾
+    await this.repairEquipment(); // 找修理
+    await this.buyPotions(); // 买血药 / 蓝药
 
     // 3. 离开主城
     await this.leaveCity();
@@ -732,9 +743,9 @@ version: 1
 
 # 窗口匹配规则
 windowMatch:
-  className: "TMainForm"
-  processName: "QQ幻想.exe"
-  titlePattern: "QQ幻想.*"
+  className: 'TMainForm'
+  processName: 'QQ幻想.exe'
+  titlePattern: 'QQ幻想.*'
 
 # UI 区域配置(屏幕坐标)
 regions:
@@ -834,13 +845,13 @@ script:
 
 // Main → Renderer (推送)
 export enum PushChannel {
-  WorkerStatus = 'worker.status',          // Worker 状态变化
-  WindowList = 'window.list',              // 游戏窗口列表
-  CombatEvent = 'combat.event',            // 战斗事件
-  Log = 'log',                             // 日志
-  Error = 'error',                         // 错误
-  UpdateAvailable = 'update.available',    // 有新版本
-  LicenseStatus = 'license.status',        // 授权状态
+  WorkerStatus = 'worker.status', // Worker 状态变化
+  WindowList = 'window.list', // 游戏窗口列表
+  CombatEvent = 'combat.event', // 战斗事件
+  Log = 'log', // 日志
+  Error = 'error', // 错误
+  UpdateAvailable = 'update.available', // 有新版本
+  LicenseStatus = 'license.status', // 授权状态
 }
 
 // Renderer → Main (请求)
@@ -853,8 +864,8 @@ export enum RequestChannel {
   GetProfiles = 'profile.list',
   LoadProfile = 'profile.load',
   SaveProfile = 'profile.save',
-  CaptureRegion = 'tool.captureRegion',    // 截图辅助工具
-  TestSkill = 'tool.testSkill',            // 测试技能
+  CaptureRegion = 'tool.captureRegion', // 截图辅助工具
+  TestSkill = 'tool.testSkill', // 测试技能
   ActivateLicense = 'license.activate',
 }
 ```
@@ -863,7 +874,7 @@ export enum RequestChannel {
 
 ```ts
 interface IpcMessage<T = any> {
-  id: string;        // UUID,请求 / 响应匹配
+  id: string; // UUID,请求 / 响应匹配
   type: 'request' | 'response' | 'event';
   channel: string;
   payload: T;
@@ -1045,16 +1056,16 @@ directories:
 
 files:
   - dist/**
-  - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
-  - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
-  - "!**/node_modules/*.d.ts"
-  - "!**/node_modules/.bin"
+  - '!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}'
+  - '!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}'
+  - '!**/node_modules/*.d.ts'
+  - '!**/node_modules/.bin'
 
 extraResources:
-  - from: "assets/templates"
-    to: "templates"
-  - from: "assets/dll"
-    to: "dll"
+  - from: 'assets/templates'
+    to: 'templates'
+  - from: 'assets/dll'
+    to: 'dll'
 
 win:
   target:
@@ -1116,18 +1127,18 @@ publish:
 
 ### 11.1 功能分级
 
-| 功能 | 免费版 | 高级版 |
-|---|---|---|
-| 同时运行窗口数 | 1 | 4(可加包) |
-| 战斗循环 | ✓ | ✓ |
-| 移动 / 拾取 | ✓ | ✓ |
-| AOE 群刷 | ✗ | ✓ |
-| 回城补给 | ✗ | ✓ |
-| 威胁自保 | ✗ | ✓ |
-| 自定义 Profile | ✓ | ✓ |
-| 云端 Profile 同步 | ✗ | ✓ |
-| 优先更新 | ✗ | ✓ |
-| 客服支持 | 社区 | 1v1 |
+| 功能              | 免费版 | 高级版    |
+| ----------------- | ------ | --------- |
+| 同时运行窗口数    | 1      | 4(可加包) |
+| 战斗循环          | ✓      | ✓         |
+| 移动 / 拾取       | ✓      | ✓         |
+| AOE 群刷          | ✗      | ✓         |
+| 回城补给          | ✗      | ✓         |
+| 威胁自保          | ✗      | ✓         |
+| 自定义 Profile    | ✓      | ✓         |
+| 云端 Profile 同步 | ✗      | ✓         |
+| 优先更新          | ✗      | ✓         |
+| 客服支持          | 社区   | 1v1       |
 
 ### 11.2 授权实现
 
@@ -1235,24 +1246,24 @@ publish:
 
 ### 13.1 技术风险
 
-| 风险 | 影响 | 应对 |
-|---|---|---|
-| 大漠 DLL 加载失败 | 全功能不可用 | 提示用户安装 / 切到自研 |
-| 杀软报毒 | 用户流失 | 签名 + 白名单申请 |
-| SmartScreen 警告 | 安装率下降 | 证书 + 用户教育 |
+| 风险                | 影响         | 应对                      |
+| ------------------- | ------------ | ------------------------- |
+| 大漠 DLL 加载失败   | 全功能不可用 | 提示用户安装 / 切到自研   |
+| 杀软报毒            | 用户流失     | 签名 + 白名单申请         |
+| SmartScreen 警告    | 安装率下降   | 证书 + 用户教育           |
 | QQ幻想 私服版本差异 | Profile 失效 | Profile 多版本 + 玩家自定 |
-| 2.5D 坐标精度 | 走位偏差 | 小地图 + 屏幕双校验 |
-| 反外挂检测(私服) | 封号 | 拟人化点击 + 随机延迟 |
+| 2.5D 坐标精度       | 走位偏差     | 小地图 + 屏幕双校验       |
+| 反外挂检测(私服)    | 封号         | 拟人化点击 + 随机延迟     |
 
 ### 13.2 业务风险
 
-| 风险 | 影响 | 应对 |
-|---|---|---|
-| 私服关服 | 用户归零 | 扩展其他老游戏 |
-| 法律风险 | 工具被封 | 免责声明 + 不绕过客户端 |
+| 风险         | 影响     | 应对                        |
+| ------------ | -------- | --------------------------- |
+| 私服关服     | 用户归零 | 扩展其他老游戏              |
+| 法律风险     | 工具被封 | 免责声明 + 不绕过客户端     |
 | 付费转化率低 | 收入不足 | 免费版够用,高级版是体验升级 |
-| 客服压力 | 人力成本 | 文档 + FAQ + 社区 |
-| 盗版 | 收入损失 | 联网校验 + 机器绑定 |
+| 客服压力     | 人力成本 | 文档 + FAQ + 社区           |
+| 盗版         | 收入损失 | 联网校验 + 机器绑定         |
 
 ### 13.3 开放问题(待定)
 

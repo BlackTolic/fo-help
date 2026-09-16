@@ -38,7 +38,10 @@ interface AppState {
   clearTaskConfig: (hwnd: number) => void;
 
   /** 保存任务配置(按 name,重名拒绝) — 返回 { ok, stored?, error? } */
-  saveTaskByName: (name: string, config: TaskConfig) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
+  saveTaskByName: (
+    name: string,
+    config: TaskConfig,
+  ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
   /** 按 name 加载配置(从历史任务 dialog 选中时用) */
   loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
 
@@ -72,6 +75,14 @@ interface AppState {
   logs: LogEntry[];
   appendLog: (log: Omit<LogEntry, 'id'>) => void;
   clearLogs: () => void;
+
+  // 大漠插件注册
+  damooStatus: 'idle' | 'checking' | 'ok' | 'warn' | 'registering' | 'error';
+  damooMessage: string;
+  damooExpectedPath: string | null;
+  damooRegisteredPath: string | null;
+  checkDamoo: () => Promise<void>;
+  registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
 }
 
 let logIdCounter = 1;
@@ -232,6 +243,62 @@ export const useStore = create<AppState>((set) => ({
     });
   },
   clearLogs: () => set({ logs: [] }),
+
+  // 大漠插件注册
+  damooStatus: 'idle',
+  damooMessage: '',
+  damooExpectedPath: null,
+  damooRegisteredPath: null,
+  checkDamoo: async () => {
+    if (!window.fohelp) return;
+    set({ damooStatus: 'checking' });
+    try {
+      const res = await window.fohelp.checkDamoo();
+      if (!res.ok) {
+        set({ damooStatus: 'error', damooMessage: res.error || res.message || '检查失败' });
+        return;
+      }
+      const kind = res.status?.kind;
+      if (kind === 'ok') {
+        set({
+          damooStatus: 'ok',
+          damooMessage: res.message || '大漠已注册',
+          damooExpectedPath: res.status?.path ?? null,
+          damooRegisteredPath: res.status?.path ?? null,
+        });
+      } else if (kind === 'wrong' || kind === 'missing') {
+        set({
+          damooStatus: 'warn',
+          damooMessage: res.message || '大漠未注册或指向错误',
+          damooExpectedPath: res.status?.expectedPath ?? null,
+          damooRegisteredPath: res.status?.registeredPath ?? null,
+        });
+      } else if (kind === 'no-dll') {
+        set({
+          damooStatus: 'error',
+          damooMessage: res.message || '项目内未找到 dm.dll',
+          damooExpectedPath: null,
+          damooRegisteredPath: null,
+        });
+      } else {
+        set({ damooStatus: 'idle', damooMessage: res.message || '' });
+      }
+    } catch (e: any) {
+      set({ damooStatus: 'error', damooMessage: `IPC 异常: ${e?.message || String(e)}` });
+    }
+  },
+  registerDamoo: async () => {
+    if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
+    set({ damooStatus: 'registering', damooMessage: '等待 UAC 授权...' });
+    const res = await window.fohelp.registerDamoo();
+    if (res.ok) {
+      // 注册成功后立即重查一次,刷新 banner 状态
+      await useStore.getState().checkDamoo();
+    } else {
+      set({ damooStatus: 'warn', damooMessage: res.error || '注册失败或被取消' });
+    }
+    return res;
+  },
 }));
 
 // 启动时订阅 IPC 事件

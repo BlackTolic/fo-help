@@ -6,7 +6,7 @@ import { RefreshCw } from 'lucide-react';
 
 interface Props {
   hwnd: number;
-  refreshMs?: number;       // 自动刷新间隔,0 = 不自动刷新
+  refreshMs?: number; // 自动刷新间隔,0 = 不自动刷新
   className?: string;
 }
 
@@ -43,7 +43,9 @@ export function Thumbnail({ hwnd, refreshMs = 0, className = '' }: Props) {
   }, [hwnd, refreshMs]);
 
   return (
-    <div className={`relative w-full h-full bg-bg-input flex items-center justify-center ${className}`}>
+    <div
+      className={`relative w-full h-full bg-bg-input flex items-center justify-center ${className}`}
+    >
       {dataUrl ? (
         <img
           src={dataUrl}

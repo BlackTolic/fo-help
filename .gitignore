@@ -55,3 +55,13 @@ _*
 
 # 运行时数据(每个 hwnd 一个 JSON,本地生成)
 task-configs/
+
+# Lint & 格式 缓存
+.eslintcache
+*.tsbuildinfo
+
+# 死代码临时备份(死代码清理时挪过去的,确认无问题后可手动删除该目录)
+.deprecated/
+
+# 杂项临时 dll(本地测试时掉进来的,不入库)
+assets/dll/j3j3b.dll

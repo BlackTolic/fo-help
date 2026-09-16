@@ -9,6 +9,7 @@ import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
 import { TaskConfigService } from './services/task-config-service';
 import { ThumbnailService } from './services/thumbnail-service';
+import { DamooRegistrar } from './services/damoo-registrar';
 
 /**
  * 缩略图本地存储方案:
@@ -22,7 +23,9 @@ import { ThumbnailService } from './services/thumbnail-service';
 const THUMBS_DIR = app.isPackaged
   ? path.join(app.getPath('userData'), 'thumbnails')
   : path.join(app.getAppPath(), 'thumbnails');
-export function getThumbsDir(): string { return THUMBS_DIR; }
+export function getThumbsDir(): string {
+  return THUMBS_DIR;
+}
 
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
 if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
@@ -49,6 +52,7 @@ let mainWindow: BrowserWindow | null = null;
 let workerManager: WorkerManager | null = null;
 let taskConfigService: TaskConfigService | null = null;
 let thumbnailService: ThumbnailService | null = null;
+const damooRegistrar = new DamooRegistrar();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -60,7 +64,7 @@ function createWindow() {
     backgroundColor: '#0a0e1a',
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),  // dist-electron/electron/preload.js
+      preload: path.join(__dirname, 'preload.js'), // dist-electron/electron/preload.js
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -69,8 +73,8 @@ function createWindow() {
 
   // 加载页面
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    mainWindow.loadURL('http://localhost:5174');
+    mainWindow.webContents.openDevTools({ mode: 'bottom' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
   }
@@ -170,7 +174,13 @@ function setupIpc() {
         // 新流程:不再按 hwnd 自动加载配置 — 配置由调用方(创建任务/历史任务)显式传入
         const taskConfig = null;
         // 不再读 profile YAML,worker 内部用默认 profile + taskConfig 覆盖 mobFilter
-        const wid = workerManager.start(payload.hwnd, payload.characterName, payload.taskType, null, taskConfig);
+        const wid = workerManager.start(
+          payload.hwnd,
+          payload.characterName,
+          payload.taskType,
+          null,
+          taskConfig,
+        );
         console.log(`[IPC] StartWorker OK wid=${wid} taskConfig=${taskConfig ? 'loaded' : 'none'}`);
         return { ok: true, workerId: wid };
       } catch (err: any) {
@@ -189,7 +199,12 @@ function setupIpc() {
     async (
       _e,
       payload: { hwnd: number; characterName: string },
-    ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> => {
+    ): Promise<{
+      ok: boolean;
+      dataUrl?: string | null;
+      characterName?: string;
+      error?: string;
+    }> => {
       console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd}`);
       try {
         if (!thumbnailService) thumbnailService = new ThumbnailService();
@@ -200,7 +215,9 @@ function setupIpc() {
           payload.characterName,
           null,
         );
-        console.log(`[IPC] BootstrapWorker OK hwnd=${payload.hwnd} thumb=${dataUrl ? 'yes' : 'no'}`);
+        console.log(
+          `[IPC] BootstrapWorker OK hwnd=${payload.hwnd} thumb=${dataUrl ? 'yes' : 'no'}`,
+        );
         return { ok: true, dataUrl, characterName };
       } catch (err: any) {
         console.error(`[IPC] BootstrapWorker FAIL: ${err.message}`);
@@ -210,11 +227,14 @@ function setupIpc() {
   );
 
   /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环(等 worker ready 后再发) */
-  ipcMain.handle(RequestChannel.StartTask, async (_e, hwnd: number): Promise<{ ok: boolean; error?: string }> => {
-    console.log(`[IPC] StartTask hwnd=${hwnd}`);
-    if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
-    return await workerManager.startTask(hwnd);
-  });
+  ipcMain.handle(
+    RequestChannel.StartTask,
+    async (_e, hwnd: number): Promise<{ ok: boolean; error?: string }> => {
+      console.log(`[IPC] StartTask hwnd=${hwnd}`);
+      if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
+      return await workerManager.startTask(hwnd);
+    },
+  );
 
   /** 通过 hwnd 找到 workerId 停止(用于取消 bootstrap) */
   ipcMain.handle(RequestChannel.StopWorkerByHwnd, (_e, hwnd: number): { ok: boolean } => {
@@ -257,6 +277,32 @@ function setupIpc() {
   ipcMain.handle(RequestChannel.ListWorkers, (): WorkerState[] => {
     return workerManager?.list() ?? [];
   });
+
+  // ---- 大漠插件注册 ----
+  /**
+   * 检查大漠 dll 是否已注册到当前项目自带的 dm.dll
+   * 返回: { status, message } 见 DamooRegistrar.check()
+   */
+  ipcMain.handle(RequestChannel.CheckDamoo, async () => {
+    try {
+      const result = await damooRegistrar.check();
+      return { ok: true, ...result };
+    } catch (e: any) {
+      return { ok: false, error: e.message, message: `检查失败: ${e.message}` };
+    }
+  });
+
+  /**
+   * 触发 UAC → regsvr32 /s 注册当前项目自带的 dm.dll
+   * 用户需在桌面 UAC 弹窗中点"是"
+   * 返回: { ok, error? }
+   */
+  ipcMain.handle(
+    RequestChannel.RegisterDamoo,
+    async (): Promise<{ ok: boolean; error?: string }> => {
+      return await damooRegistrar.register();
+    },
+  );
 }
 
 // 自定义协议 thumb://<hwnd> 必须在 app ready 之前注册 scheme privilege
@@ -272,9 +318,17 @@ function cleanupThumbs(): void {
   try {
     if (fs.existsSync(THUMBS_DIR)) {
       for (const f of fs.readdirSync(THUMBS_DIR)) {
-        try { fs.unlinkSync(path.join(THUMBS_DIR, f)); } catch { /* noop */ }
+        try {
+          fs.unlinkSync(path.join(THUMBS_DIR, f));
+        } catch {
+          /* noop */
+        }
       }
-      try { fs.rmdirSync(THUMBS_DIR); } catch { /* noop */ }
+      try {
+        fs.rmdirSync(THUMBS_DIR);
+      } catch {
+        /* noop */
+      }
       console.log(`[thumbs] 清理目录: ${THUMBS_DIR}`);
     }
   } catch (e) {
@@ -308,6 +362,14 @@ app.whenReady().then(() => {
 
   setupIpc();
   createWindow();
+  // 启动体检:大漠注册状态(异步,不影响窗口创建)
+  damooRegistrar
+    .check()
+    .then((r) => {
+      const tag = r.status.kind === 'ok' ? '✅' : '⚠️';
+      console.log(`[main] ${tag} 大漠注册: ${r.message}`);
+    })
+    .catch((e) => console.warn('[main] 大漠检查异常:', e));
   console.log('✅ QQ幻想助手 已启动 v0.1 · 本地版');
   console.log('   - 窗口枚举:PowerShell + Win32 API');
   console.log('   - 大漠:winax 32-bit COM 集成');

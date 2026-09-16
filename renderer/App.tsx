@@ -1,7 +1,7 @@
 // 主面板
 
 import { useEffect } from 'react';
-import { RefreshCw, Activity } from 'lucide-react';
+import { RefreshCw, Activity, AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
 
@@ -24,6 +24,13 @@ function App() {
   const pauseWorker = useStore((s) => s.pauseWorker);
   const resumeWorker = useStore((s) => s.resumeWorker);
 
+  // 大漠注册相关状态
+  const damooStatus = useStore((s) => s.damooStatus);
+  const damooMessage = useStore((s) => s.damooMessage);
+  const damooExpectedPath = useStore((s) => s.damooExpectedPath);
+  const checkDamoo = useStore((s) => s.checkDamoo);
+  const registerDamoo = useStore((s) => s.registerDamoo);
+
   useEffect(() => {
     // 订阅 IPC 事件
     subscribeToIpc();
@@ -31,10 +38,12 @@ function App() {
     refreshWindows();
     // 加载全局历史任务列表
     loadTaskHistory();
+    // 启动体检:大漠注册状态(异步,横幅会自己刷新)
+    checkDamoo();
     // 每 3 秒刷新窗口列表
     const t = setInterval(refreshWindows, 3000);
     return () => clearInterval(t);
-  }, [refreshWindows, loadTaskHistory]);
+  }, [refreshWindows, loadTaskHistory, checkDamoo]);
 
   // ⚠️ 新流程:不再自动 loadTaskConfig(每个窗口都需要用户主动选"创建/历史")
 
@@ -42,7 +51,9 @@ function App() {
   for (const [wid, w] of workers) workersByHwnd.set(w.hwnd, wid);
 
   const allWorkers = Array.from(workers.values());
-  const runningCount = allWorkers.filter((w) => w.status !== 'paused' && w.status !== 'idle').length;
+  const runningCount = allWorkers.filter(
+    (w) => w.status !== 'paused' && w.status !== 'idle',
+  ).length;
 
   return (
     <div className="h-full flex flex-col">
@@ -75,6 +86,69 @@ function App() {
           </button>
         </div>
       </header>
+
+      {/* 大漠插件健康条 */}
+      {(damooStatus === 'warn' ||
+        damooStatus === 'checking' ||
+        damooStatus === 'registering' ||
+        damooStatus === 'error') && (
+        <div
+          className={[
+            'flex items-center gap-3 px-6 py-2 text-sm border-b border-border-base',
+            damooStatus === 'warn'
+              ? 'bg-amber-500/10 text-amber-200'
+              : damooStatus === 'registering'
+                ? 'bg-blue-500/10 text-blue-200'
+                : damooStatus === 'checking'
+                  ? 'bg-bg-card/40 text-text-secondary'
+                  : 'bg-red-500/10 text-red-200',
+          ].join(' ')}
+        >
+          {damooStatus === 'warn' && <AlertTriangle size={16} className="shrink-0" />}
+          {damooStatus === 'registering' && <Loader2 size={16} className="shrink-0 animate-spin" />}
+          {damooStatus === 'checking' && <Loader2 size={16} className="shrink-0 animate-spin" />}
+          {damooStatus === 'error' && <AlertTriangle size={16} className="shrink-0" />}
+          <span className="flex-1 truncate">
+            {damooStatus === 'checking' && '正在检查大漠注册状态...'}
+            {damooStatus === 'registering' && '正在等待 UAC 授权...'}
+            {(damooStatus === 'warn' || damooStatus === 'error') &&
+              (damooMessage || '大漠插件异常')}
+            {damooExpectedPath && (damooStatus === 'warn' || damooStatus === 'error') && (
+              <span className="ml-2 text-xs text-text-muted font-mono truncate">
+                期望: {damooExpectedPath}
+              </span>
+            )}
+          </span>
+          {damooStatus === 'warn' && (
+            <button
+              className="btn btn-secondary text-xs"
+              onClick={async () => {
+                const res = await registerDamoo();
+                if (!res.ok) {
+                  console.warn('[damoo] 注册失败:', res.error);
+                }
+              }}
+            >
+              <ShieldCheck size={12} className="mr-1" />
+              立即修复
+            </button>
+          )}
+          {damooStatus === 'error' && (
+            <button className="btn btn-secondary text-xs" onClick={() => checkDamoo()}>
+              重试
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 大漠健康绿色徽章(收起,不打扰) */}
+      {damooStatus === 'ok' && (
+        <div className="flex items-center gap-2 px-6 py-1.5 text-[11px] text-text-muted border-b border-border-base bg-bg-card/30">
+          <CheckCircle2 size={12} className="text-accent-green shrink-0" />
+          <span>大漠已就绪</span>
+          <span className="font-mono truncate text-text-secondary">{damooExpectedPath}</span>
+        </div>
+      )}
 
       {/* 主内容 */}
       <main className="flex-1 overflow-y-auto p-6">

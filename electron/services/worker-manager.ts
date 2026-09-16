@@ -30,8 +30,8 @@ interface ManagedWorker {
 
 export class WorkerManager {
   private workers = new Map<string, ManagedWorker>(); // workerId -> ManagedWorker
-  private byHwnd = new Map<number, string>();        // hwnd -> workerId
-  private thumbs: ThumbnailService;                  // 缩略图缓存(子进程 → 主进程 → renderer)
+  private byHwnd = new Map<number, string>(); // hwnd -> workerId
+  private thumbs: ThumbnailService; // 缩略图缓存(子进程 → 主进程 → renderer)
 
   constructor(thumbs?: ThumbnailService) {
     this.thumbs = thumbs || new ThumbnailService();
@@ -47,7 +47,7 @@ export class WorkerManager {
     taskType: TaskType,
     profile: any | null,
     taskConfig: any = null,
-    waitForConfig: boolean = false,
+    waitForConfig = false,
   ): string {
     if (this.byHwnd.has(hwnd)) {
       return this.byHwnd.get(hwnd)!;
@@ -72,7 +72,12 @@ export class WorkerManager {
 
     // init data 通过 process.argv 传入(JSON 字符串,子进程从 argv[last] 取)
     const initPayload = JSON.stringify({
-      hwnd, characterName, taskType, profile, taskConfig, waitForConfig,
+      hwnd,
+      characterName,
+      taskType,
+      profile,
+      taskConfig,
+      waitForConfig,
       thumbsDir,
     });
 
@@ -157,7 +162,11 @@ export class WorkerManager {
     if (!m.state.ready) {
       log.warn(`[WorkerManager] stop: workerId=${workerId} 未 ready(消息可能丢失),先 kill 兜底`);
       // 兜底:未 ready 时直接 kill 强制退出,避免"停止无反应"
-      try { m.worker.kill(); } catch (e: any) { log.warn(`kill 失败: ${e.message}`); }
+      try {
+        m.worker.kill();
+      } catch (e: any) {
+        log.warn(`kill 失败: ${e.message}`);
+      }
       return true;
     }
     log.info(`[WorkerManager] → stop 已发给 ${workerId} (hwnd=${m.state.hwnd})`);
@@ -253,7 +262,9 @@ export class WorkerManager {
             }),
           );
         } else if (msg.type === 'state' && msg.state.status === 'alert') {
-          log.warn(`[WorkerManager] worker 进入 alert: hwnd=${hwnd}, 累计 ${elapsed}ms, detail=${msg.state.statusDetail}`);
+          log.warn(
+            `[WorkerManager] worker 进入 alert: hwnd=${hwnd}, 累计 ${elapsed}ms, detail=${msg.state.statusDetail}`,
+          );
           finish(() => reject(new Error(msg.state.statusDetail || 'worker 进入 alert')));
         }
       };
@@ -265,37 +276,52 @@ export class WorkerManager {
         // 根据 stderr 环形缓冲匹配当前卡在哪一步,给出可操作的诊断
         const lastLines = m.recentStderr;
         const lastStepStart = [...lastLines].reverse().find((l) => l.includes('[STEP-START]'));
-        const phase = lastStepStart ? lastStepStart.replace(/.*\[STEP-START\]\s*/, '').trim() : '(未匹配到 STEP-START)';
+        const phase = lastStepStart
+          ? lastStepStart.replace(/.*\[STEP-START\]\s*/, '').trim()
+          : '(未匹配到 STEP-START)';
         const diagnosis = (() => {
           // 没有任何 stderr → 子进程根本没启动 / require 阶段就挂了
           if (m.recentStderr.length === 0) {
             return '子进程未输出任何 stderr → 极可能 dm.dll 未注册/位数不对/fork 启动即崩溃。检查 dist-electron/electron/workers/game-utility-worker.js 是否存在,32/64 位是否匹配。';
           }
-          if (/\[STEP-START\] loadDamoo\(.*\)/.test(lastLines.join('\n')) && !/\[STEP-END\] loadDamoo/.test(lastLines.join('\n'))) {
+          if (
+            /\[STEP-START\] loadDamoo\(.*\)/.test(lastLines.join('\n')) &&
+            !/\[STEP-END\] loadDamoo/.test(lastLines.join('\n'))
+          ) {
             return '卡在 loadDamoo(同步 COM 初始化) → 大概率是大漠注册码无效、dm.dll 未注册,或被 360/火绒隔离。请单独运行 regsvr32 dm.dll 验证。';
           }
-          if (/\[STEP-START\] bindWindow/.test(lastLines.join('\n')) && !/\[STEP-END\] bindWindow/.test(lastLines.join('\n'))) {
+          if (
+            /\[STEP-START\] bindWindow/.test(lastLines.join('\n')) &&
+            !/\[STEP-END\] bindWindow/.test(lastLines.join('\n'))
+          ) {
             return `卡在 bindWindow(hwnd=${hwnd}) → 检查:1) 游戏窗口是否最小化/被遮挡/未进入游戏主界面 2) mode=${'?'} 在窗口后台时可能 hang 3) 反作弊拦截 user32 hook。试试前台+最大化+切到 mode=normal。`;
           }
-          if (/\[STEP-START\] capture/.test(lastLines.join('\n')) && !/\[STEP-END\] capture/.test(lastLines.join('\n'))) {
+          if (
+            /\[STEP-START\] capture/.test(lastLines.join('\n')) &&
+            !/\[STEP-END\] capture/.test(lastLines.join('\n'))
+          ) {
             return `卡在 dmApi.capture(hwnd=${hwnd}) → 大概率 hwnd 已失效/窗口被关闭,或绑定关系异常。刷新一次窗口列表重试。`;
           }
           return `未匹配到已知步骤(stderr 已收到 ${m.recentStderr.length} 行)。请看上面 [w-${hwnd}] stderr 日志。`;
         })();
         log.error(
           `[WorkerManager] bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s): hwnd=${hwnd}, 累计 ${elapsed}ms\n` +
-          `  当前阶段: ${phase}\n` +
-          `  诊断: ${diagnosis}`,
+            `  当前阶段: ${phase}\n` +
+            `  诊断: ${diagnosis}`,
         );
         // 把最近 stderr dump 出来,方便一眼定位
         if (m.recentStderr.length > 0) {
-          log.error(`[WorkerManager] 子进程 ${wid} 最近 ${m.recentStderr.length} 行 stderr:\n` +
-            m.recentStderr.map((l) => `  | ${l}`).join('\n'));
+          log.error(
+            `[WorkerManager] 子进程 ${wid} 最近 ${m.recentStderr.length} 行 stderr:\n` +
+              m.recentStderr.map((l) => `  | ${l}`).join('\n'),
+          );
         }
         // 主动 kill utilityProcess 子进程,释放 hang 的主线程(否则 fork 进程会永远卡)
         try {
           m.worker.kill();
-          log.warn(`[WorkerManager] bootstrap 超时 → 已 kill 子进程 ${wid},下次创建任务会重新 fork`);
+          log.warn(
+            `[WorkerManager] bootstrap 超时 → 已 kill 子进程 ${wid},下次创建任务会重新 fork`,
+          );
         } catch (e: any) {
           log.warn(`[WorkerManager] kill 失败: ${e.message}`);
         }
@@ -303,9 +329,9 @@ export class WorkerManager {
           reject(
             new Error(
               `bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s)\n` +
-              `当前阶段: ${phase}\n` +
-              `诊断: ${diagnosis}\n` +
-              `请查看终端 [w-${hwnd}] 标记的 stderr 日志`,
+                `当前阶段: ${phase}\n` +
+                `诊断: ${diagnosis}\n` +
+                `请查看终端 [w-${hwnd}] 标记的 stderr 日志`,
             ),
           ),
         );
@@ -336,11 +362,15 @@ export class WorkerManager {
       await new Promise<void>((r) => setTimeout(r, 100));
     }
     if (!m.state.ready) {
-      log.error(`[WorkerManager] startTask 超时: worker ${wid} 等 ready 超 ${WAIT_READY_MS / 1000}s`);
+      log.error(
+        `[WorkerManager] startTask 超时: worker ${wid} 等 ready 超 ${WAIT_READY_MS / 1000}s`,
+      );
       return { ok: false, error: 'worker 初始化未完成,稍后重试' };
     }
 
-    log.info(`[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, 等 ready 耗时 ${Date.now() - t0}ms)`);
+    log.info(
+      `[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, 等 ready 耗时 ${Date.now() - t0}ms)`,
+    );
     m.worker.postMessage({ type: 'command', command: 'start-task' });
     return { ok: true };
   }
@@ -468,6 +498,9 @@ export class WorkerManager {
       // 子进程初始化完成,message listener 已注册,可以安全 postMessage
       log.info(`[WorkerManager] utilityProcess ${workerId} 报告 ready`);
       m.state = { ...m.state, ready: true };
+      // ⚠️ 必须广播,否则渲染端 worker.ready 永远是 undefined,
+      //   UI 无法精确定位 "bootstrap 完成但 start-task 还没到" 这种状态(便于排查 race-condition)
+      this.broadcast(PushChannel.WorkerStateChanged, m.state);
     } else {
       log.warn(`[WorkerManager] utilityProcess ${workerId} 未知消息类型: ${msg.type}`);
     }
@@ -476,7 +509,9 @@ export class WorkerManager {
   private onWorkerExit(workerId: string, code: number | null) {
     log.info(`[WorkerManager] utilityProcess ${workerId} 退出 code=${code}`);
     if (code !== 0 && code !== null) {
-      log.warn(`[WorkerManager] utilityProcess ${workerId} 非正常退出 code=${code},可能是 dm.dll 崩溃或子进程被 kill`);
+      log.warn(
+        `[WorkerManager] utilityProcess ${workerId} 非正常退出 code=${code},可能是 dm.dll 崩溃或子进程被 kill`,
+      );
     }
     const m = this.workers.get(workerId);
     if (m) {

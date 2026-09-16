@@ -20,29 +20,20 @@ export interface CharacterInfo {
 }
 
 /** 任务类型 */
-export type TaskType =
-  | 'farm'
-  | 'mine'
-  | 'catch-pet'
-  | 'refine'
-  | 'reputation';
+export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation';
 
 /** 脚本状态(主面板卡片显示) */
 export type ScriptStatus =
-  | 'idle'      // 空闲
-  | 'combat'    // 战斗中
-  | 'moving'    // 移动中
-  | 'resupply'  // 回城中
-  | 'alert'     // 异常
-  | 'paused';   // 暂停
+  | 'idle' // 已停止 / 未运行(无 task)
+  | 'pending' // bootstrap 已就绪,等待 start-task 启动命令
+  | 'combat' // 战斗中
+  | 'moving' // 移动中
+  | 'resupply' // 回城中
+  | 'alert' // 异常
+  | 'paused'; // 暂停
 
 /** 任务名称(显示用) */
-export type TaskName =
-  | '挂机打怪'
-  | '挖矿'
-  | '捕捉宠物'
-  | '装备炼化'
-  | '名誉任务';
+export type TaskName = '挂机打怪' | '挖矿' | '捕捉宠物' | '装备炼化' | '名誉任务';
 
 /** 路径点 */
 export interface Waypoint {
@@ -86,7 +77,7 @@ export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig;
 
 /** 任务配置存储(按"任务名"维度存储,跨窗口复用) */
 export interface StoredTaskConfig {
-  id: string;            // 唯一 ID(默认等于 name,但允许 name 重命名时保留稳定 id)
+  id: string; // 唯一 ID(默认等于 name,但允许 name 重命名时保留稳定 id)
   /** 用户自定义的任务名(全局唯一,创建时必填,跨窗口复用) */
   name: string;
   taskType: TaskType;
@@ -116,14 +107,4 @@ export interface WorkerState {
   thumbnail?: string;
   /** 子进程是否已 ready(顶层代码执行完,message listener 已注册,可以安全发命令) */
   ready?: boolean;
-}
-
-/** IPC 消息基础结构 */
-export interface IpcMessage<T = unknown> {
-  id: string;
-  type: 'request' | 'response' | 'event';
-  channel: string;
-  payload: T;
-  timestamp: number;
-  error?: { code: string; message: string };
 }

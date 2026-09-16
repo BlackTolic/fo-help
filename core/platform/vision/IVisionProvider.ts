@@ -15,7 +15,7 @@ export interface Rect {
 export type Direction = 'leftTop' | 'leftBottom' | 'rightTop' | 'rightBottom' | 'center';
 
 export interface FindOpts {
-  similarity?: number;     // 0-1, 默认 0.8
+  similarity?: number; // 0-1, 默认 0.8
   direction?: Direction;
   maxResults?: number;
 }

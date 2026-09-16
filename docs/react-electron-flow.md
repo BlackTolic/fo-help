@@ -26,6 +26,7 @@
 ```
 
 **3 类 IPC 通信**:
+
 1. **invoke**(request/response):renderer `await window.fohelp.x()` → 主进程返回 Promise
 2. **send**(push event):主进程 `webContents.send` → renderer `window.fohelp.onXxx(cb)` 触发回调
 3. **utilityProcess.postMessage / on('message')**:主进程 ↔ utilityProcess 子进程(Renderer 不参与)
@@ -34,14 +35,14 @@
 
 ## 2. 文件清单
 
-| 文件 | 职责 |
-|---|---|
-| `renderer/types.ts` | `window.fohelp` API 的 TypeScript 类型定义 |
-| `renderer/store/useStore.ts` | Zustand 全局状态 + IPC 订阅入口 |
-| `renderer/App.tsx` | 顶层布局 + 自动刷新窗口列表 + 加载任务历史 |
-| `renderer/components/WindowCard.tsx` | 单游戏窗口卡片,5 状态机 + 所有 task 控制按钮 |
-| `renderer/components/TaskConfigDialog.tsx` | 任务配置 dialog(select / config / name 3 步) |
-| `renderer/components/HistoryTaskDialog.tsx` | 历史任务列表 dialog |
+| 文件                                        | 职责                                         |
+| ------------------------------------------- | -------------------------------------------- |
+| `renderer/types.ts`                         | `window.fohelp` API 的 TypeScript 类型定义   |
+| `renderer/store/useStore.ts`                | Zustand 全局状态 + IPC 订阅入口              |
+| `renderer/App.tsx`                          | 顶层布局 + 自动刷新窗口列表 + 加载任务历史   |
+| `renderer/components/WindowCard.tsx`        | 单游戏窗口卡片,5 状态机 + 所有 task 控制按钮 |
+| `renderer/components/TaskConfigDialog.tsx`  | 任务配置 dialog(select / config / name 3 步) |
+| `renderer/components/HistoryTaskDialog.tsx` | 历史任务列表 dialog                          |
 
 ---
 
@@ -49,48 +50,48 @@
 
 ### 3.1 `useStore` 全局状态(`renderer/store/useStore.ts`)
 
-| State | 类型 | 说明 |
-|---|---|---|
-| `gameWindows` | `GameWindow[]` | 当前检测到的所有 QQ幻想 窗口(每 3 秒刷新) |
-| `taskConfigs` | `Map<number, TaskConfig>` | 每个 hwnd 当前已应用的任务配置(运行时,reload 后清空) |
-| `appliedTaskNames` | `Map<number, string>` | 每个 hwnd 应用的"任务名"(显示在卡片) |
-| `taskHistory` | `StoredTaskConfig[]` | 全局已保存的任务列表(跨窗口共享) |
-| `characterNames` | `Map<number, string>` | 每个 hwnd OCR 出来的角色名 |
-| `thumbnails` | `Map<number, string>` | 每个 hwnd 的最新缩略图 URL (`thumb://image/<hwnd>`) |
-| `workers` | `Map<string, WorkerState>` | 所有活跃 worker(按 workerId) |
-| `logs` | `LogEntry[]` | 全局日志(最多 500 条,新进前部) |
+| State              | 类型                       | 说明                                                 |
+| ------------------ | -------------------------- | ---------------------------------------------------- |
+| `gameWindows`      | `GameWindow[]`             | 当前检测到的所有 QQ幻想 窗口(每 3 秒刷新)            |
+| `taskConfigs`      | `Map<number, TaskConfig>`  | 每个 hwnd 当前已应用的任务配置(运行时,reload 后清空) |
+| `appliedTaskNames` | `Map<number, string>`      | 每个 hwnd 应用的"任务名"(显示在卡片)                 |
+| `taskHistory`      | `StoredTaskConfig[]`       | 全局已保存的任务列表(跨窗口共享)                     |
+| `characterNames`   | `Map<number, string>`      | 每个 hwnd OCR 出来的角色名                           |
+| `thumbnails`       | `Map<number, string>`      | 每个 hwnd 的最新缩略图 URL (`thumb://image/<hwnd>`)  |
+| `workers`          | `Map<string, WorkerState>` | 所有活跃 worker(按 workerId)                         |
+| `logs`             | `LogEntry[]`               | 全局日志(最多 500 条,新进前部)                       |
 
 ### 3.2 `WindowCard` 组件 state(`renderer/components/WindowCard.tsx`)
 
-| State | 类型 | 说明 |
-|---|---|---|
-| `dialogOpen` | `boolean` | TaskConfigDialog 是否打开 |
-| `historyOpen` | `boolean` | HistoryTaskDialog 是否打开 |
-| `dialogMode` | `'create' \| 'edit' \| 'view'` | dialog 当前模式(决定行为) |
-| `autoStartAfterClose` | `boolean` | dialog 关闭后是否自动触发 startTask |
-| `isCreating` | `boolean` | "创建任务"按钮的 loading 状态(bootstrap 中) |
-| `error` | `string \| null` | 错误信息条(bootstrap 失败 / 保存失败等) |
+| State                 | 类型                           | 说明                                        |
+| --------------------- | ------------------------------ | ------------------------------------------- |
+| `dialogOpen`          | `boolean`                      | TaskConfigDialog 是否打开                   |
+| `historyOpen`         | `boolean`                      | HistoryTaskDialog 是否打开                  |
+| `dialogMode`          | `'create' \| 'edit' \| 'view'` | dialog 当前模式(决定行为)                   |
+| `autoStartAfterClose` | `boolean`                      | dialog 关闭后是否自动触发 startTask         |
+| `isCreating`          | `boolean`                      | "创建任务"按钮的 loading 状态(bootstrap 中) |
+| `error`               | `string \| null`               | 错误信息条(bootstrap 失败 / 保存失败等)     |
 
 ### 3.3 `TaskConfigDialog` 组件 state(`renderer/components/TaskConfigDialog.tsx`)
 
-| State | 类型 | 说明 |
-|---|---|---|
-| `step` | `'select' \| 'config' \| 'name'` | dialog 内部步骤 |
-| `taskType` | `TaskType \| null` | 选中的任务类型 |
-| `historyOpen` | `boolean` | 内部嵌套的 HistoryTaskDialog(选任务类型页打开) |
-| `mapId` / `customMapName` | `string` | farm 任务的地图 |
-| `mode` | `'single' \| 'aoe' \| 'patrol'` | farm 任务的打怪模式 |
-| `waypoints` | `Waypoint[]` | patrol 模式的路径点 |
-| `nameKeywords` | `string` | 找怪关键字(逗号分隔字符串) |
-| `note` | `string` | 任务备注 |
-| `taskName` | `string` | 命名步骤中用户输入的任务名 |
-| `nameError` | `string \| null` | 命名步骤错误(重名时显示) |
+| State                     | 类型                             | 说明                                           |
+| ------------------------- | -------------------------------- | ---------------------------------------------- |
+| `step`                    | `'select' \| 'config' \| 'name'` | dialog 内部步骤                                |
+| `taskType`                | `TaskType \| null`               | 选中的任务类型                                 |
+| `historyOpen`             | `boolean`                        | 内部嵌套的 HistoryTaskDialog(选任务类型页打开) |
+| `mapId` / `customMapName` | `string`                         | farm 任务的地图                                |
+| `mode`                    | `'single' \| 'aoe' \| 'patrol'`  | farm 任务的打怪模式                            |
+| `waypoints`               | `Waypoint[]`                     | patrol 模式的路径点                            |
+| `nameKeywords`            | `string`                         | 找怪关键字(逗号分隔字符串)                     |
+| `note`                    | `string`                         | 任务备注                                       |
+| `taskName`                | `string`                         | 命名步骤中用户输入的任务名                     |
+| `nameError`               | `string \| null`                 | 命名步骤错误(重名时显示)                       |
 
 ### 3.4 `HistoryTaskDialog` 组件 state
 
-| State | 类型 | 说明 |
-|---|---|---|
-| (无内部 state) | - | 完全受控组件,所有数据来自 props |
+| State          | 类型 | 说明                            |
+| -------------- | ---- | ------------------------------- |
+| (无内部 state) | -    | 完全受控组件,所有数据来自 props |
 
 ---
 
@@ -137,13 +138,13 @@ if (!isConfigured) {
 }
 ```
 
-| uiState | 显示按钮 |
-|---|---|
-| `unconfigured` | `[创建任务] [历史任务]` |
-| `creating` | `[连接中…]`(loading) |
-| `running` | `[查看详情] [暂停] [停止]` |
-| `paused` | `[查看详情] [继续] [停止]` |
-| `editable` | `[编辑配置] [历史任务] [放弃]` |
+| uiState        | 显示按钮                       |
+| -------------- | ------------------------------ |
+| `unconfigured` | `[创建任务] [历史任务]`        |
+| `creating`     | `[连接中…]`(loading)           |
+| `running`      | `[查看详情] [暂停] [停止]`     |
+| `paused`       | `[查看详情] [继续] [停止]`     |
+| `editable`     | `[编辑配置] [历史任务] [放弃]` |
 
 ---
 
@@ -151,30 +152,30 @@ if (!isConfigured) {
 
 ### 5.1 入口按钮 handlers
 
-| Handler | 触发 | 流程 |
-|---|---|---|
-| `handleCreateTask()` | 点"创建任务" | setIsCreating(true) → 立即 setDialogOpen(true) → 后台 onBootstrap |
-| `handleOpenHistory()` | 点"历史任务" | setHistoryOpen(true) |
-| `handleHistorySelect(stored)` | 选中历史 | onApplyConfig → 复用或 bootstrap → onStartTask |
-| `handleEditConfig()` | editable 模式点"编辑配置" | dialogMode='edit' + setDialogOpen(true) |
-| `handleReselectHistory()` | editable 模式点"历史任务" | setHistoryOpen(true) |
-| `handleAbandon()` | editable 模式点"放弃" | onClearConfig |
+| Handler                       | 触发                      | 流程                                                              |
+| ----------------------------- | ------------------------- | ----------------------------------------------------------------- |
+| `handleCreateTask()`          | 点"创建任务"              | setIsCreating(true) → 立即 setDialogOpen(true) → 后台 onBootstrap |
+| `handleOpenHistory()`         | 点"历史任务"              | setHistoryOpen(true)                                              |
+| `handleHistorySelect(stored)` | 选中历史                  | onApplyConfig → 复用或 bootstrap → onStartTask                    |
+| `handleEditConfig()`          | editable 模式点"编辑配置" | dialogMode='edit' + setDialogOpen(true)                           |
+| `handleReselectHistory()`     | editable 模式点"历史任务" | setHistoryOpen(true)                                              |
+| `handleAbandon()`             | editable 模式点"放弃"     | onClearConfig                                                     |
 
 ### 5.2 任务运行控制 handlers
 
-| Handler | 触发 | 流程 |
-|---|---|---|
-| `handlePause()` | 点"暂停" | onPause(worker.workerId) |
+| Handler          | 触发     | 流程                      |
+| ---------------- | -------- | ------------------------- |
+| `handlePause()`  | 点"暂停" | onPause(worker.workerId)  |
 | `handleResume()` | 点"继续" | onResume(worker.workerId) |
-| `handleStop()` | 点"停止" | onStop(worker.workerId) |
+| `handleStop()`   | 点"停止" | onStop(worker.workerId)   |
 
 ### 5.3 Dialog handlers
 
-| Handler | 触发 | 流程 |
-|---|---|---|
-| `handleDialogClose()` | 点 dialog 关闭按钮 / ESC | create 模式且未保存 → onCancelBootstrap(hwnd);关闭 |
-| `handleTaskSaved(config, name)` | 命名步骤点"确认保存" | saveTaskByName(name, config) → onApplyConfig → onStartTask |
-| `handleTaskConfirm(config)` | config 步骤点"确认"(不持久化) | onApplyConfig(hwnd, config, 无 name) → onStartTask |
+| Handler                         | 触发                          | 流程                                                       |
+| ------------------------------- | ----------------------------- | ---------------------------------------------------------- |
+| `handleDialogClose()`           | 点 dialog 关闭按钮 / ESC      | create 模式且未保存 → onCancelBootstrap(hwnd);关闭         |
+| `handleTaskSaved(config, name)` | 命名步骤点"确认保存"          | saveTaskByName(name, config) → onApplyConfig → onStartTask |
+| `handleTaskConfirm(config)`     | config 步骤点"确认"(不持久化) | onApplyConfig(hwnd, config, 无 name) → onStartTask         |
 
 ---
 
@@ -351,6 +352,7 @@ renderer/index.tsx → App.tsx
 ### 6.5 任务运行控制
 
 #### 暂停
+
 ```
 WindowCard.handlePause()
   └─ onPause(worker.workerId)                                [useStore.pauseWorker]
@@ -371,6 +373,7 @@ WindowCard.handlePause()
 ```
 
 #### 继续
+
 ```
 类似暂停,command='resume',worker 收到后:
   case 'resume':
@@ -378,6 +381,7 @@ WindowCard.handlePause()
 ```
 
 #### 停止
+
 ```
 WindowCard.handleStop()
   └─ onStop(worker.workerId)                                 [useStore.stopWorker]
@@ -456,42 +460,44 @@ onClick → window.fohelp.captureTest(hwnd)
 
 ### 7.1 invoke (Renderer → Main → Renderer)
 
-| Channel | Renderer 调用 | Main handler | 主进程服务 |
-|---|---|---|---|
-| `window:list` | `listGameWindows()` | `window-registry.ts` | - |
-| `window:refresh` | `refreshGameWindows()` | 同上 | - |
-| `window:capture` | `captureWindow(hwnd)` | `ThumbnailService.getCached()` | - |
-| `thumbnail:recapture` | `recaptureThumbnail(hwnd)` | `worker-manager.requestThumbnail()` | - |
-| `worker:bootstrap` | `bootstrapWorker(hwnd, name)` | `worker-manager.bootstrap()` | - |
-| `worker:start-task` | `startTask(hwnd)` | `worker-manager.startTask()` | - |
-| `worker:stop-by-hwnd` | `stopWorkerByHwnd(hwnd)` | `worker-manager.stopByHwnd()` | - |
-| `worker:start` | `startWorker(hwnd, name, type)` | `worker-manager.start()` | - |
-| `worker:stop` | `stopWorker(workerId)` | `worker-manager.stop()` | - |
-| `worker:pause` | `pauseWorker(workerId)` | `worker-manager.pause()` | - |
-| `worker:resume` | `resumeWorker(workerId)` | `worker-manager.resume()` | - |
-| `worker:list` | `listWorkers()` | `worker-manager.list()` | - |
-| `worker:capture-test` | `captureTest(hwnd)` | `worker-manager.captureTest()` | - |
-| `task:save` | `saveTaskConfig(hwnd, config, name)` | `task-config-service.saveByName()` | - |
-| `task:get` | `getTaskConfig(hwnd)` | 返回 null(旧 API) | - |
-| `task:list-all` | `listAllTaskConfigs()` | `task-config-service.listAll()` | - |
-| `task:load-by-name` | `loadTaskByName(name)` | `task-config-service.loadByName()` | - |
-| `shell:showItemInFolder` | `showItemInFolder(filePath)` | `shell.showItemInFolder()` | - |
+| Channel                  | Renderer 调用                        | Main handler                        | 主进程服务 |
+| ------------------------ | ------------------------------------ | ----------------------------------- | ---------- |
+| `window:list`            | `listGameWindows()`                  | `window-registry.ts`                | -          |
+| `window:refresh`         | `refreshGameWindows()`               | 同上                                | -          |
+| `window:capture`         | `captureWindow(hwnd)`                | `ThumbnailService.getCached()`      | -          |
+| `thumbnail:recapture`    | `recaptureThumbnail(hwnd)`           | `worker-manager.requestThumbnail()` | -          |
+| `worker:bootstrap`       | `bootstrapWorker(hwnd, name)`        | `worker-manager.bootstrap()`        | -          |
+| `worker:start-task`      | `startTask(hwnd)`                    | `worker-manager.startTask()`        | -          |
+| `worker:stop-by-hwnd`    | `stopWorkerByHwnd(hwnd)`             | `worker-manager.stopByHwnd()`       | -          |
+| `worker:start`           | `startWorker(hwnd, name, type)`      | `worker-manager.start()`            | -          |
+| `worker:stop`            | `stopWorker(workerId)`               | `worker-manager.stop()`             | -          |
+| `worker:pause`           | `pauseWorker(workerId)`              | `worker-manager.pause()`            | -          |
+| `worker:resume`          | `resumeWorker(workerId)`             | `worker-manager.resume()`           | -          |
+| `worker:list`            | `listWorkers()`                      | `worker-manager.list()`             | -          |
+| `worker:capture-test`    | `captureTest(hwnd)`                  | `worker-manager.captureTest()`      | -          |
+| `task:save`              | `saveTaskConfig(hwnd, config, name)` | `task-config-service.saveByName()`  | -          |
+| `task:get`               | `getTaskConfig(hwnd)`                | 返回 null(旧 API)                   | -          |
+| `task:list-all`          | `listAllTaskConfigs()`               | `task-config-service.listAll()`     | -          |
+| `task:load-by-name`      | `loadTaskByName(name)`               | `task-config-service.loadByName()`  | -          |
+| `shell:showItemInFolder` | `showItemInFolder(filePath)`         | `shell.showItemInFolder()`          | -          |
 
 ### 7.2 send (Main → Renderer, push)
 
-| Channel | 推送时机 | Renderer handler(useStore) | 更新 state |
-|---|---|---|---|
-| `worker:state` | worker state 变化 / ready / 退出 | `onWorkerStateChanged` | `updateWorkerState` / `removeWorker` / `setCharacterName` |
-| `worker:log` | worker 推 log | `onWorkerLog` | `appendLog` |
-| `worker:error` | worker 报错 | `onWorkerError` | `appendLog`(level='error') |
-| `thumbnail:update` | worker 发 thumbnail | `onThumbnailUpdate` | `setThumbnail` |
+| Channel            | 推送时机                         | Renderer handler(useStore) | 更新 state                                                |
+| ------------------ | -------------------------------- | -------------------------- | --------------------------------------------------------- |
+| `worker:state`     | worker state 变化 / ready / 退出 | `onWorkerStateChanged`     | `updateWorkerState` / `removeWorker` / `setCharacterName` |
+| `worker:log`       | worker 推 log                    | `onWorkerLog`              | `appendLog`                                               |
+| `worker:error`     | worker 报错                      | `onWorkerError`            | `appendLog`(level='error')                                |
+| `thumbnail:update` | worker 发 thumbnail              | `onThumbnailUpdate`        | `setThumbnail`                                            |
 
 ### 7.3 utilityProcess message(主进程 ↔ 子进程)
 
 **主进程 → 子进程(command)**:
+
 - `start-task` / `stop` / `pause` / `resume` / `screenshot` / `screenshot-test`
 
 **子进程 → 主进程(state / data)**:
+
 - `ready` — 子进程初始化完成(message listener 已注册)
 - `state` — worker 状态变化(setStatus 调用)
 - `log` — worker 日志
@@ -601,32 +607,32 @@ App.tsx mount:
 
 ## 10. 已知陷阱(踩过的坑)
 
-| 坑 | 修复 |
-|---|---|
-| `window.prompt()` 在 Electron 中禁用 | 改成 TaskConfigDialog 内部 `step='name'` inline UI |
+| 坑                                                        | 修复                                                             |
+| --------------------------------------------------------- | ---------------------------------------------------------------- |
+| `window.prompt()` 在 Electron 中禁用                      | 改成 TaskConfigDialog 内部 `step='name'` inline UI               |
 | dialog 渲染条件 `dialogOpen && taskConfig` 创建流程不显示 | 改成 `(dialogOpen && (taskConfig \|\| dialogMode === 'create'))` |
-| bootstrap 卡住时 `setDialogOpen(true)` 不执行 | handleCreateTask 同步设置,bootstrap 后台跑 |
-| `dm.UnBindWindow()` 在某些 hwnd 触发 `0xC00000D0` | 加 `process.on('uncaughtException')` 兜底 |
-| 多 worker 共享 dm.dll hook 冲突 | 改用 utilityProcess(独立 OS 进程) |
-| utilityProcess IPC 通道可能丢消息(子进程 listener 未注册) | 加 `ready` 信号,父进程只对 ready 后发 start-task |
-| `stdio: 'inherit'` 在 GUI 环境可能阻塞 | 改 `'pipe'` + 父进程主动 drain stdout/stderr |
-| start-task 在 worker 未 ready 时丢消息 | `worker-manager.startTask` 改为 async + 等 ready |
+| bootstrap 卡住时 `setDialogOpen(true)` 不执行             | handleCreateTask 同步设置,bootstrap 后台跑                       |
+| `dm.UnBindWindow()` 在某些 hwnd 触发 `0xC00000D0`         | 加 `process.on('uncaughtException')` 兜底                        |
+| 多 worker 共享 dm.dll hook 冲突                           | 改用 utilityProcess(独立 OS 进程)                                |
+| utilityProcess IPC 通道可能丢消息(子进程 listener 未注册) | 加 `ready` 信号,父进程只对 ready 后发 start-task                 |
+| `stdio: 'inherit'` 在 GUI 环境可能阻塞                    | 改 `'pipe'` + 父进程主动 drain stdout/stderr                     |
+| start-task 在 worker 未 ready 时丢消息                    | `worker-manager.startTask` 改为 async + 等 ready                 |
 
 ---
 
 ## 11. 关键文件速查表
 
-| 文件 | 行数 | 关键导出 |
-|---|---|---|
-| `renderer/App.tsx` | ~150 | `App` 组件 |
-| `renderer/store/useStore.ts` | ~250 | `useStore`, `subscribeToIpc` |
-| `renderer/components/WindowCard.tsx` | ~530 | `WindowCard` |
-| `renderer/components/TaskConfigDialog.tsx` | ~620 | `TaskConfigDialog` |
-| `renderer/components/HistoryTaskDialog.tsx` | ~110 | `HistoryTaskDialog` |
-| `renderer/types.ts` | ~70 | `FohelpAPI` |
-| `electron/preload.ts` | ~100 | `api` (exposed as `window.fohelp`) |
-| `electron/services/worker-manager.ts` | ~410 | `WorkerManager` |
-| `electron/workers/game-utility-worker.ts` | ~390 | (子进程入口) |
+| 文件                                        | 行数 | 关键导出                           |
+| ------------------------------------------- | ---- | ---------------------------------- |
+| `renderer/App.tsx`                          | ~150 | `App` 组件                         |
+| `renderer/store/useStore.ts`                | ~250 | `useStore`, `subscribeToIpc`       |
+| `renderer/components/WindowCard.tsx`        | ~530 | `WindowCard`                       |
+| `renderer/components/TaskConfigDialog.tsx`  | ~620 | `TaskConfigDialog`                 |
+| `renderer/components/HistoryTaskDialog.tsx` | ~110 | `HistoryTaskDialog`                |
+| `renderer/types.ts`                         | ~70  | `FohelpAPI`                        |
+| `electron/preload.ts`                       | ~100 | `api` (exposed as `window.fohelp`) |
+| `electron/services/worker-manager.ts`       | ~410 | `WorkerManager`                    |
+| `electron/workers/game-utility-worker.ts`   | ~390 | (子进程入口)                       |
 
 ---
 

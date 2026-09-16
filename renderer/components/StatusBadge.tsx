@@ -3,13 +3,23 @@
 import { clsx } from 'clsx';
 import type { ScriptStatus } from '../../shared/types';
 
-const STATUS_MAP: Record<ScriptStatus, { color: string; bg: string; dot: string; text: string; label: string }> = {
+const STATUS_MAP: Record<
+  ScriptStatus,
+  { color: string; bg: string; dot: string; text: string; label: string }
+> = {
   idle: {
     color: 'text-text-muted',
     bg: 'bg-text-muted/10',
     dot: 'bg-text-muted',
     text: '○',
-    label: '空闲',
+    label: '已停止',
+  },
+  pending: {
+    color: 'text-accent-cyan',
+    bg: 'bg-accent-cyan/10',
+    dot: 'bg-accent-cyan',
+    text: '◌',
+    label: '待启动',
   },
   combat: {
     color: 'text-accent-red',
@@ -48,11 +58,29 @@ const STATUS_MAP: Record<ScriptStatus, { color: string; bg: string; dot: string;
   },
 };
 
-export function StatusBadge({ status, animate = false }: { status: ScriptStatus; animate?: boolean }) {
+export function StatusBadge({
+  status,
+  animate = false,
+}: {
+  status: ScriptStatus;
+  animate?: boolean;
+}) {
   const cfg = STATUS_MAP[status];
   return (
-    <span className={clsx('inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium', cfg.color, cfg.bg)}>
-      <span className={clsx('inline-block w-1.5 h-1.5 rounded-full', cfg.dot, animate && status === 'combat' && 'animate-pulse')} />
+    <span
+      className={clsx(
+        'inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium',
+        cfg.color,
+        cfg.bg,
+      )}
+    >
+      <span
+        className={clsx(
+          'inline-block w-1.5 h-1.5 rounded-full',
+          cfg.dot,
+          animate && status === 'combat' && 'animate-pulse',
+        )}
+      />
       {cfg.text} {cfg.label}
     </span>
   );

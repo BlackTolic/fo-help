@@ -83,7 +83,9 @@ export class TaskConfigService {
     for (const f of fs.readdirSync(STORAGE_DIR)) {
       if (!f.endsWith('.json')) continue;
       try {
-        const raw = JSON.parse(fs.readFileSync(path.join(STORAGE_DIR, f), 'utf-8')) as StoredTaskConfig;
+        const raw = JSON.parse(
+          fs.readFileSync(path.join(STORAGE_DIR, f), 'utf-8'),
+        ) as StoredTaskConfig;
         // 跳过旧版本数据(没 name 字段)
         if (!raw.name) continue;
         results.push(raw);

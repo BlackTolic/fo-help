@@ -1,12 +1,13 @@
 // 统一日志抽象
 // Node 端用 pino,浏览器端用 console 包装(API 兼容)
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 import pino from 'pino';
 
 const isDev = process.env.NODE_ENV !== 'production';
 // 用 typeof 检查环境,避免 SSR/Worker 出错
-const isRenderer = typeof (globalThis as any).window !== 'undefined' && typeof (globalThis as any).document !== 'undefined';
+const isRenderer =
+  typeof (globalThis as any).window !== 'undefined' &&
+  typeof (globalThis as any).document !== 'undefined';
 
 interface Logger {
   debug: (msg: string, ...args: any[]) => void;
@@ -53,7 +54,8 @@ function browserLogger(prefix: string): Logger {
     info: (msg, ...args) => fn('info', [msg, ...args]),
     warn: (msg, ...args) => fn('warn', [msg, ...args]),
     error: (msg, ...args) => fn('error', [msg, ...args]),
-    child: (bindings) => browserLogger(`${prefix}.${bindings.component || bindings.module || 'child'}`),
+    child: (bindings) =>
+      browserLogger(`${prefix}.${bindings.component || bindings.module || 'child'}`),
   };
 }
 

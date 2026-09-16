@@ -3,17 +3,24 @@
 
 import { useState } from 'react';
 import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History } from 'lucide-react';
-import type { TaskType, TaskConfig, FarmTaskConfig, Waypoint, StoredTaskConfig } from '../../shared/types';
+import type {
+  TaskType,
+  TaskConfig,
+  FarmTaskConfig,
+  Waypoint,
+  StoredTaskConfig,
+} from '../../shared/types';
 import { useStore } from '../store/useStore';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
 
-const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] = [
-  { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
-  { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
-  { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
-  { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
-  { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
-];
+const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] =
+  [
+    { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
+    { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
+    { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
+    { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
+    { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
+  ];
 
 const FARM_MAPS = [
   { id: 'chang-an', name: '长安城周边' },
@@ -28,24 +35,38 @@ const FARM_MAPS = [
 /** 把 worker.status 映射成短标签(右上角状态徽章) */
 function statusLabel(status?: string): string {
   switch (status) {
-    case 'idle':     return '待启动';
-    case 'moving':   return '移动中';
-    case 'combat':   return '战斗中';
-    case 'resupply': return '回城中';
-    case 'paused':   return '已暂停';
-    case 'alert':    return '异常';
-    default:         return status || '未知';
+    case 'idle':
+      return '待启动';
+    case 'moving':
+      return '移动中';
+    case 'combat':
+      return '战斗中';
+    case 'resupply':
+      return '回城中';
+    case 'paused':
+      return '已暂停';
+    case 'alert':
+      return '异常';
+    default:
+      return status || '未知';
   }
 }
 function statusBg(status?: string): string {
   switch (status) {
-    case 'idle':     return 'bg-accent-cyan/20 text-accent-cyan';
-    case 'moving':   return 'bg-yellow-500/20 text-yellow-500';
-    case 'combat':   return 'bg-red-500/20 text-red-500';
-    case 'resupply': return 'bg-blue-500/20 text-blue-500';
-    case 'paused':   return 'bg-gray-500/20 text-gray-400';
-    case 'alert':    return 'bg-orange-500/20 text-orange-500';
-    default:         return 'bg-text-muted/20 text-text-muted';
+    case 'idle':
+      return 'bg-accent-cyan/20 text-accent-cyan';
+    case 'moving':
+      return 'bg-yellow-500/20 text-yellow-500';
+    case 'combat':
+      return 'bg-red-500/20 text-red-500';
+    case 'resupply':
+      return 'bg-blue-500/20 text-blue-500';
+    case 'paused':
+      return 'bg-gray-500/20 text-gray-400';
+    case 'alert':
+      return 'bg-orange-500/20 text-orange-500';
+    default:
+      return 'bg-text-muted/20 text-text-muted';
   }
 }
 function formatUptime(ms: number): string {
@@ -77,8 +98,14 @@ interface Props {
 }
 
 export function TaskConfigDialog({
-  hwnd, initialConfig, thumbnail, workerState, readOnly = false,
-  onClose, onSaved, onConfirm,
+  hwnd,
+  initialConfig,
+  thumbnail,
+  workerState,
+  readOnly = false,
+  onClose,
+  onSaved,
+  onConfirm,
 }: Props) {
   const [step, setStep] = useState<'select' | 'config' | 'name'>(
     initialConfig ? 'config' : 'select',
@@ -153,7 +180,10 @@ export function TaskConfigDialog({
         mode,
         waypoints,
         mobFilter: {
-          nameKeywords: nameKeywords.split(',').map((s) => s.trim()).filter(Boolean),
+          nameKeywords: nameKeywords
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
         },
         note: note || undefined,
       };
@@ -235,13 +265,17 @@ export function TaskConfigDialog({
             {taskType && (
               <>
                 <ChevronRight size={14} className="text-text-muted" />
-                <span className="text-accent-cyan">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</span>
+                <span className="text-accent-cyan">
+                  {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
+                </span>
               </>
             )}
             {/* 当前任务运行状态回显 */}
             {workerState && step === 'config' && (
               <span className="ml-2 inline-flex items-center gap-2 text-[11px] text-text-muted">
-                <span className={`px-1.5 py-0.5 rounded font-medium ${statusBg(workerState.status)}`}>
+                <span
+                  className={`px-1.5 py-0.5 rounded font-medium ${statusBg(workerState.status)}`}
+                >
                   {statusLabel(workerState.status)}
                 </span>
                 {workerState.stats && (
@@ -292,43 +326,46 @@ export function TaskConfigDialog({
                 >
                   <History size={14} className="text-accent-cyan" />
                   <span className="font-medium">从历史任务中选择</span>
-                  <span className="ml-auto text-[11px] text-text-muted">{taskHistory.length} 条</span>
+                  <span className="ml-auto text-[11px] text-text-muted">
+                    {taskHistory.length} 条
+                  </span>
                 </button>
               )}
               <div className="grid grid-cols-2 gap-3">
                 {TASK_OPTIONS.map((opt) => (
-                <button
-                  key={opt.type}
-                  disabled={!opt.ready}
-                  onClick={() => {
-                    if (opt.ready) {
-                      setTaskType(opt.type);
-                      setStep('config');
-                    }
-                  }}
-                  className={`
+                  <button
+                    key={opt.type}
+                    disabled={!opt.ready}
+                    onClick={() => {
+                      if (opt.ready) {
+                        setTaskType(opt.type);
+                        setStep('config');
+                      }
+                    }}
+                    className={`
                     p-4 rounded-lg border text-left transition-all
-                    ${opt.ready
-                      ? 'bg-bg-hover border-border-base hover:border-accent-cyan cursor-pointer'
-                      : 'bg-bg-input/50 border-border-base/50 opacity-50 cursor-not-allowed'}
+                    ${
+                      opt.ready
+                        ? 'bg-bg-hover border-border-base hover:border-accent-cyan cursor-pointer'
+                        : 'bg-bg-input/50 border-border-base/50 opacity-50 cursor-not-allowed'
+                    }
                   `}
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-2xl">{opt.icon}</span>
-                    <span className="text-base font-medium">{opt.name}</span>
-                    {!opt.ready && (
-                      <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-text-muted/20 text-text-muted">
-                        即将推出
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-text-secondary">{opt.desc}</div>
-                </button>
-              ))}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-2xl">{opt.icon}</span>
+                      <span className="text-base font-medium">{opt.name}</span>
+                      {!opt.ready && (
+                        <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-text-muted/20 text-text-muted">
+                          即将推出
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-text-secondary">{opt.desc}</div>
+                  </button>
+                ))}
               </div>
             </>
           )}
-       
 
           {step === 'config' && taskType === 'farm' && (
             <FarmConfig
@@ -356,7 +393,9 @@ export function TaskConfigDialog({
               <div className="text-4xl mb-3 opacity-30">
                 {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
               </div>
-              <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
+              <div className="text-base mb-1">
+                {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
+              </div>
               <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
             </div>
           )}
@@ -372,10 +411,16 @@ export function TaskConfigDialog({
                 <input
                   type="text"
                   value={taskName}
-                  onChange={(e) => { setTaskName(e.target.value); setNameError(null); }}
+                  onChange={(e) => {
+                    setTaskName(e.target.value);
+                    setNameError(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') void handleConfirmName();
-                    if (e.key === 'Escape') { setStep('config'); setNameError(null); }
+                    if (e.key === 'Escape') {
+                      setStep('config');
+                      setNameError(null);
+                    }
                   }}
                   autoFocus
                   placeholder="任务名(全局唯一)"
@@ -392,7 +437,10 @@ export function TaskConfigDialog({
                 {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-accent-cyan/20">
                   <button
-                    onClick={() => { setStep('config'); setNameError(null); }}
+                    onClick={() => {
+                      setStep('config');
+                      setNameError(null);
+                    }}
                     className="btn btn-secondary flex items-center gap-1"
                   >
                     返回配置
@@ -425,7 +473,9 @@ export function TaskConfigDialog({
           {readOnly ? (
             // 只读模式:只显示"关闭"按钮
             <div className="w-full flex justify-end">
-              <button onClick={onClose} className="btn btn-secondary">关闭</button>
+              <button onClick={onClose} className="btn btn-secondary">
+                关闭
+              </button>
             </div>
           ) : (
             <>
@@ -459,7 +509,10 @@ export function TaskConfigDialog({
                     </button>
                   )}
                   {/* "保存配置"按钮:持久化到磁盘(新流程会弹窗输入名字) */}
-                  <button onClick={handleSave} className="btn btn-primary flex items-center gap-1.5">
+                  <button
+                    onClick={handleSave}
+                    className="btn btn-primary flex items-center gap-1.5"
+                  >
                     <Check size={14} />
                     保存配置
                   </button>
@@ -502,9 +555,21 @@ interface FarmConfigProps {
 function FarmConfig(props: FarmConfigProps) {
   const {
     readOnly = false,
-    mapId, setMapId, customMapName, setCustomMapName,
-    mode, setMode, waypoints, addWaypoint, removeWaypoint, moveWaypoint, updateWaypoint,
-    nameKeywords, setNameKeywords, note, setNote,
+    mapId,
+    setMapId,
+    customMapName,
+    setCustomMapName,
+    mode,
+    setMode,
+    waypoints,
+    addWaypoint,
+    removeWaypoint,
+    moveWaypoint,
+    updateWaypoint,
+    nameKeywords,
+    setNameKeywords,
+    note,
+    setNote,
   } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
@@ -521,7 +586,9 @@ function FarmConfig(props: FarmConfigProps) {
           className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
         >
           {FARM_MAPS.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
           ))}
         </select>
         {mapId === 'custom' && (
@@ -547,9 +614,11 @@ function FarmConfig(props: FarmConfigProps) {
               disabled={readOnly}
               className={`
                 px-3 py-2 rounded border text-sm transition-colors ${disabledCls}
-                ${mode === m
-                  ? 'bg-accent-cyan/15 border-accent-cyan/50 text-accent-cyan'
-                  : 'bg-bg-input border-border-base text-text-secondary hover:border-border-active'}
+                ${
+                  mode === m
+                    ? 'bg-accent-cyan/15 border-accent-cyan/50 text-accent-cyan'
+                    : 'bg-bg-input border-border-base text-text-secondary hover:border-border-active'
+                }
               `}
             >
               {m === 'single' && '🎯 单怪'}
@@ -572,7 +641,10 @@ function FarmConfig(props: FarmConfigProps) {
             路径点 <span className="text-text-muted text-[11px]">(patrol 模式必填,其他选填)</span>
           </label>
           {!readOnly && (
-            <button onClick={addWaypoint} className="text-xs btn btn-secondary flex items-center gap-1">
+            <button
+              onClick={addWaypoint}
+              className="text-xs btn btn-secondary flex items-center gap-1"
+            >
               <Plus size={12} />
               添加点
             </button>

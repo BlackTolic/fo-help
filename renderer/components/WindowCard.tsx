@@ -38,10 +38,19 @@ interface Props {
 }
 
 export function WindowCard({
-  gameWindow, worker, characterName, taskConfig, appliedTaskName,
-  onBootstrap, onCancelBootstrap, onStartTask,
-  onStop, onPause, onResume,
-  onApplyConfig, onClearConfig,
+  gameWindow,
+  worker,
+  characterName,
+  taskConfig,
+  appliedTaskName,
+  onBootstrap,
+  onCancelBootstrap,
+  onStartTask,
+  onStop,
+  onPause,
+  onResume,
+  onApplyConfig,
+  onClearConfig,
 }: Props) {
   const taskHistory = useStore((s) => s.taskHistory);
   const saveTaskByName = useStore((s) => s.saveTaskByName);
@@ -60,16 +69,20 @@ export function WindowCard({
 
   const status = worker?.status || 'idle';
   const isConfigured = !!taskConfig;
-  const isRunning = worker && status !== 'idle' && status !== 'paused';
+  const isPending = worker && status === 'pending';
+  const isRunning = worker && status !== 'idle' && status !== 'paused' && status !== 'pending';
   const isPaused = worker && status === 'paused';
 
   // ---- 派生 UI 状态 ----
-  let uiState: 'unconfigured' | 'creating' | 'running' | 'paused' | 'editable';
+  let uiState: 'unconfigured' | 'creating' | 'pending' | 'running' | 'paused' | 'editable';
   if (!isConfigured) {
     uiState = 'unconfigured';
   } else if (worker && status === 'alert') {
     // alert 状态:绑窗/启动失败 → 允许重新尝试
     uiState = 'editable';
+  } else if (isPending) {
+    // bootstrap 完成,等 start-task(通常 1-2 秒自动进 combat;若卡住可让用户重试)
+    uiState = 'pending';
   } else if (isRunning) {
     uiState = 'running';
   } else if (isPaused) {
@@ -93,22 +106,25 @@ export function WindowCard({
    */
   const handleCreateTask = () => {
     setError(null);
-    setIsCreating(true);  // 按钮变 loading(用户看到"系统准备中")
-    // dialog 立刻弹,不等 bootstrap
-    setDialogMode('create');
+    setIsCreating(true); // 按钮变 loading(用户看到"系统准备中")
+
     setAutoStartAfterClose(true);
     setDialogOpen(true);
     // 后台异步 bootstrap
     const name = characterName || '角色';
-    onBootstrap(gameWindow.hwnd, name).then((res) => {
-      setIsCreating(false);  // loading 消失
-      if (!res.ok) {
-        setError(res.error || '启动 worker 失败');
-      }
-    }).catch((err) => {
-      setIsCreating(false);
-      setError(err?.message || '启动 worker 失败');
-    });
+    onBootstrap(gameWindow.hwnd, name)
+      .then((res) => {
+        setIsCreating(false); // loading 消失
+        // dialog 立刻弹,不等 bootstrap
+        setDialogMode('create');
+        if (!res.ok) {
+          setError(res.error || '启动 worker 失败');
+        }
+      })
+      .catch((err) => {
+        setIsCreating(false);
+        setError(err?.message || '启动 worker 失败');
+      });
   };
 
   /** 历史任务:打开历史任务 dialog */
@@ -168,7 +184,10 @@ export function WindowCard({
    * "保存配置":接收 dialog 传来的 name(替代 Electron 不支持的 window.prompt)
    * 持久化到磁盘 + 自动 startTask;重名拒绝,返回 error 让 dialog 留在 name 步骤
    */
-  const handleTaskSaved = async (config: TaskConfig, name: string): Promise<{ ok: boolean; error?: string }> => {
+  const handleTaskSaved = async (
+    config: TaskConfig,
+    name: string,
+  ): Promise<{ ok: boolean; error?: string }> => {
     const trimmed = name.trim();
     if (!trimmed) {
       return { ok: false, error: '任务名不能为空' };
@@ -270,7 +289,10 @@ export function WindowCard({
             if (uiState === 'creating') {
               return (
                 <div className="text-text-muted text-xs text-center p-3">
-                  <Loader2 size={24} className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan" />
+                  <Loader2
+                    size={24}
+                    className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan"
+                  />
                   <div>正在连接游戏…</div>
                   <div className="text-text-muted/60 mt-1 text-[10px]">大漠绑定 + 截图</div>
                 </div>
@@ -290,7 +312,10 @@ export function WindowCard({
           {/* 右上角:状态标签 + 工具按钮 */}
           <div className="absolute top-1.5 right-1.5 flex items-center gap-1.5">
             {appliedTaskName && (
-              <span className="px-1.5 py-0.5 bg-accent-cyan/20 text-accent-cyan rounded text-[10px] font-medium" title="当前任务">
+              <span
+                className="px-1.5 py-0.5 bg-accent-cyan/20 text-accent-cyan rounded text-[10px] font-medium"
+                title="当前任务"
+              >
                 📋 {appliedTaskName}
               </span>
             )}
@@ -311,7 +336,9 @@ export function WindowCard({
                 if (res.ok && res.filePath) {
                   await window.fohelp.showItemInFolder(res.filePath);
                 } else {
-                  alert(`截图失败: ${res.error || '未知错误'}\n(该 hwnd 需要先点"创建任务"启动 worker)`);
+                  alert(
+                    `截图失败: ${res.error || '未知错误'}\n(该 hwnd 需要先点"创建任务"启动 worker)`,
+                  );
                 }
               }}
               className="p-1 bg-black/60 hover:bg-black/80 rounded text-text-muted hover:text-text-primary"
@@ -333,7 +360,10 @@ export function WindowCard({
             <div className="flex items-center justify-between">
               <StatusBadge status={status} animate={status === 'combat'} />
               {worker?.statusDetail && (
-                <span className="text-[10px] text-text-muted truncate max-w-[140px]" title={worker.statusDetail}>
+                <span
+                  className="text-[10px] text-text-muted truncate max-w-[140px]"
+                  title={worker.statusDetail}
+                >
                   {worker.statusDetail}
                 </span>
               )}
@@ -345,7 +375,12 @@ export function WindowCard({
         {error && (
           <div className="px-3 py-1.5 text-[11px] text-accent-red bg-accent-red/10 border-b border-accent-red/20">
             {error}
-            <button onClick={() => setError(null)} className="ml-2 text-text-muted hover:text-text-primary">×</button>
+            <button
+              onClick={() => setError(null)}
+              className="ml-2 text-text-muted hover:text-text-primary"
+            >
+              ×
+            </button>
           </div>
         )}
 
@@ -383,7 +418,10 @@ export function WindowCard({
           )}
 
           {uiState === 'creating' && (
-            <button disabled className="btn btn-primary flex-1 flex items-center justify-center gap-1 opacity-70">
+            <button
+              disabled
+              className="btn btn-primary flex-1 flex items-center justify-center gap-1 opacity-70"
+            >
               <Loader2 size={12} className="animate-spin" />
               连接中…
             </button>
@@ -392,7 +430,10 @@ export function WindowCard({
           {uiState === 'running' && (
             <>
               <button
-                onClick={() => { setDialogMode('view'); setDialogOpen(true); }}
+                onClick={() => {
+                  setDialogMode('view');
+                  setDialogOpen(true);
+                }}
                 className="btn btn-secondary flex items-center justify-center"
                 title="查看任务详情(只读)"
               >
@@ -418,7 +459,10 @@ export function WindowCard({
           {uiState === 'paused' && (
             <>
               <button
-                onClick={() => { setDialogMode('view'); setDialogOpen(true); }}
+                onClick={() => {
+                  setDialogMode('view');
+                  setDialogOpen(true);
+                }}
                 className="btn btn-secondary flex items-center justify-center"
                 title="查看任务详情(只读)"
               >
@@ -437,6 +481,40 @@ export function WindowCard({
               >
                 <Square size={12} />
                 停止
+              </button>
+            </>
+          )}
+
+          {uiState === 'pending' && (
+            <>
+              <button
+                onClick={handleEditConfig}
+                className="btn btn-secondary flex-1 flex items-center justify-center gap-1"
+                title="编辑当前配置"
+              >
+                <Edit3 size={12} />
+                编辑配置
+              </button>
+              <button
+                onClick={async () => {
+                  // pending 状态:worker 已 ready 但还没收到 start-task
+                  //   (上次因 race 暂存过 / 或 worker 还在 waitForConfig 等命令)
+                  //   重新发一次 start-task,worker 那边 _startResolve / _pendingStart 都能接住
+                  const res = await onStartTask(gameWindow.hwnd);
+                  if (!res.ok) alert(`启动失败: ${res.error || '未知'}`);
+                }}
+                className="btn btn-primary flex-1 flex items-center justify-center gap-1"
+                title="向 worker 发送 start-task(bootstrap-race 兜底)"
+              >
+                <Play size={12} />
+                启动
+              </button>
+              <button
+                onClick={handleAbandon}
+                className="btn btn-danger flex items-center justify-center"
+                title="放弃当前任务"
+              >
+                <Square size={12} />
               </button>
             </>
           )}
@@ -474,7 +552,7 @@ export function WindowCard({
 
       {/* 任务配置 dialog — 渲染条件:dialogOpen + (已有 taskConfig 或 创建流程中)
           创建流程时 taskConfig 还是 null(没保存),但要能开 dialog 让用户配置 */}
-      {(dialogOpen && (taskConfig || dialogMode === 'create')) && (
+      {dialogOpen && (taskConfig || dialogMode === 'create') && (
         <TaskConfigDialog
           hwnd={gameWindow.hwnd}
           initialConfig={taskConfig}

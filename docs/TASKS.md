@@ -20,13 +20,13 @@
 
 QQ幻想助手支持 5 种任务类型:
 
-| 任务 | 复杂度 | 涉及模块 | 实现优先级 |
-|---|---|---|---|
-| 挂机打怪 | ★★★★★ | 全模块 | **P2** |
-| 挖矿 | ★★ | 移动 + UI 操作 | **P2** |
-| 捕捉宠物 | ★★★ | 移动 + 战斗 + 拾取 | **P3** |
-| 装备炼化 | ★★★ | 纯 UI 操作 | **P3** |
-| 名誉任务 | ★★★★ | 移动 + 任务检测 + 多种子任务 | **P4** |
+| 任务     | 复杂度 | 涉及模块                     | 实现优先级 |
+| -------- | ------ | ---------------------------- | ---------- |
+| 挂机打怪 | ★★★★★  | 全模块                       | **P2**     |
+| 挖矿     | ★★     | 移动 + UI 操作               | **P2**     |
+| 捕捉宠物 | ★★★    | 移动 + 战斗 + 拾取           | **P3**     |
+| 装备炼化 | ★★★    | 纯 UI 操作                   | **P3**     |
+| 名誉任务 | ★★★★   | 移动 + 任务检测 + 多种子任务 | **P4**     |
 
 **统一抽象:**
 
@@ -91,14 +91,14 @@ type TaskStatus =
 
 ### 状态定义(全局)
 
-| 状态 | 颜色 | 文字 | 含义 |
-|---|---|---|---|
-| 空闲 | 灰 | `○ 空闲` | 启动中 / 等待 Profile |
-| 战斗 | 红 | `● 战斗中` | 找怪 + 打 |
-| 移动 | 蓝 | `→ 移动中` | 走路 / 寻路 |
-| 补给 | 紫 | `🏠 回城中` | 回城补给 |
-| 异常 | 黄 | `⚠ 异常` | 卡死 / 报错 |
-| 暂停 | 暗 | `⏸ 暂停` | 用户暂停 |
+| 状态 | 颜色 | 文字        | 含义                  |
+| ---- | ---- | ----------- | --------------------- |
+| 空闲 | 灰   | `○ 空闲`    | 启动中 / 等待 Profile |
+| 战斗 | 红   | `● 战斗中`  | 找怪 + 打             |
+| 移动 | 蓝   | `→ 移动中`  | 走路 / 寻路           |
+| 补给 | 紫   | `🏠 回城中` | 回城补给              |
+| 异常 | 黄   | `⚠ 异常`   | 卡死 / 报错           |
+| 暂停 | 暗   | `⏸ 暂停`   | 用户暂停              |
 
 ### 任务名(可能为以下值)
 
@@ -117,24 +117,24 @@ type TaskStatus =
 
 ### 内置 5 职业(开箱即用)
 
-| 职业 | 攻击类型 | 战斗风格 | 特点 |
-|---|---|---|---|
-| 战士 | 近战 | 拉扯 | 站前排,嘲讽聚怪,AOE 旋风斩 |
-| 法师 | 远攻 | 后排 | 拉开距离,大范围 AOE,脆皮 |
-| 道士 | 远攻 | 辅助 | 召唤宝宝,加血加 buff,慢但稳 |
-| 弓手 | 远攻 | 风筝 | 单体高伤,边走边射,持续输出 |
-| 刺客 | 近战 | 切入 | 高暴击,切入后排,秒脆皮 |
+| 职业 | 攻击类型 | 战斗风格 | 特点                        |
+| ---- | -------- | -------- | --------------------------- |
+| 战士 | 近战     | 拉扯     | 站前排,嘲讽聚怪,AOE 旋风斩  |
+| 法师 | 远攻     | 后排     | 拉开距离,大范围 AOE,脆皮    |
+| 道士 | 远攻     | 辅助     | 召唤宝宝,加血加 buff,慢但稳 |
+| 弓手 | 远攻     | 风筝     | 单体高伤,边走边射,持续输出  |
+| 刺客 | 近战     | 切入     | 高暴击,切入后排,秒脆皮      |
 
 ### 职业配置 Schema(Profile 内)
 
 ```yaml
 class:
   name: 战士
-  attackType: melee              # melee | ranged
-  combatStyle: pull              # pull | aoe | single | kite
-  idealDistance: 3               # 理想作战距离(像素)
-  movementSpeed: 200             # 战斗内移动间隔 ms
-  
+  attackType: melee # melee | ranged
+  combatStyle: pull # pull | aoe | single | kite
+  idealDistance: 3 # 理想作战距离(像素)
+  movementSpeed: 200 # 战斗内移动间隔 ms
+
   # F1-F9 技能槽
   skills:
     F1:
@@ -173,7 +173,7 @@ class:
         type: selfHp
         op: less_than
         value: 30
-  
+
   # 药水/特殊按键(Q W E R 等)
   potions:
     Q:
@@ -212,13 +212,13 @@ condition:
 
 ### 战斗风格 → 走位逻辑
 
-| 风格 | 走位 |
-|---|---|
-| `single`(单体站桩) | 不移动 |
-| `aoe`(AOE 群攻) | 走位到怪群质心 |
-| `pull`(拉扯) | 怪太近后退,维持理想距离 |
-| `kite`(风筝) | 持续移动,斜向走位 |
-| `backline`(后排) | 永远在队伍后方,远离前线 |
+| 风格               | 走位                    |
+| ------------------ | ----------------------- |
+| `single`(单体站桩) | 不移动                  |
+| `aoe`(AOE 群攻)    | 走位到怪群质心          |
+| `pull`(拉扯)       | 怪太近后退,维持理想距离 |
+| `kite`(风筝)       | 持续移动,斜向走位       |
+| `backline`(后排)   | 永远在队伍后方,远离前线 |
 
 ### 智能选技
 
@@ -293,20 +293,20 @@ class FarmTask implements Task {
         await this.cityRun.run();
         continue;
       }
-      
+
       // 2. 找目标
       const target = await this.targetFinder.find(this.config.filter);
       if (!target) {
         await this.wait(1000);
         continue;
       }
-      
+
       // 3. 接近
       await this.movement.approach(target, this.profile.class.idealDistance);
-      
+
       // 4. 战斗
       await this.combatLoop(target);
-      
+
       // 5. 拾取
       await this.loot.lootNearby(this.config.lootFilter);
     }
@@ -341,13 +341,13 @@ class MineTask implements Task {
     for (const mine of this.config.mines) {
       // 1. 走到矿点
       await this.movement.moveTo(mine.worldPos);
-      
+
       // 2. 挖(连续按键)
       for (let i = 0; i < 5; i++) {
         await this.input.pressKey(this.config.mineKey);
         await this.wait(200);
       }
-      
+
       // 3. 拾取
       await this.loot.lootNearby();
     }
@@ -429,18 +429,18 @@ Profile 中可配置 schedule,按时间段自动切换:
 
 ```yaml
 schedule:
-  - start: "00:00"
-    end: "08:00"
+  - start: '00:00'
+    end: '08:00'
     task: 挂机打怪
     profile: 狐牙山-战士
-    
-  - start: "08:00"
-    end: "09:00"
+
+  - start: '08:00'
+    end: '09:00'
     task: 挖矿
     profile: 矿区-铁矿
-    
-  - start: "09:00"
-    end: "10:00"
+
+  - start: '09:00'
+    end: '10:00'
     task: 装备炼化
     profile: 默认炼化
 ```

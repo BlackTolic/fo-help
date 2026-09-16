@@ -7,10 +7,23 @@ import { createLogger } from '../logger';
 const log = createLogger('skills');
 
 const KEY_TO_VK: Record<string, KeyCode> = {
-  F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4', F5: 'F5',
-  F6: 'F6', F7: 'F7', F8: 'F8', F9: 'F9',
-  Q: 'Q', W: 'W', E: 'E', R: 'R',
-  A: 'A', S: 'S', D: 'D', F: 'F',
+  F1: 'F1',
+  F2: 'F2',
+  F3: 'F3',
+  F4: 'F4',
+  F5: 'F5',
+  F6: 'F6',
+  F7: 'F7',
+  F8: 'F8',
+  F9: 'F9',
+  Q: 'Q',
+  W: 'W',
+  E: 'E',
+  R: 'R',
+  A: 'A',
+  S: 'S',
+  D: 'D',
+  F: 'F',
 };
 
 export interface CombatContext {
@@ -19,13 +32,13 @@ export interface CombatContext {
   targetHp: number;
   nearbyMobs: number;
   inCombat: boolean;
-  distance: number;       // 当前与目标距离
+  distance: number; // 当前与目标距离
   onCombatStart: boolean;
 }
 
 export class SkillManager {
-  private lastCast: Map<string, number> = new Map();  // key -> timestamp
-  private lastPotion: Map<string, number> = new Map();
+  private lastCast = new Map<string, number>(); // key -> timestamp
+  private lastPotion = new Map<string, number>();
 
   constructor(
     private input: IInputProvider,
@@ -42,7 +55,7 @@ export class SkillManager {
 
     const now = Date.now();
     const last = this.lastCast.get(key) || 0;
-    if (now - last < skill.cooldownMs) return false;  // 还在冷却
+    if (now - last < skill.cooldownMs) return false; // 还在冷却
 
     if (!this.evalCondition(skill.condition, ctx)) return false;
 
@@ -99,7 +112,7 @@ export class SkillManager {
 
   /** 璇勪及瑙﹀彂鏉′欢 */
   private evalCondition(cond: any | undefined, ctx: CombatContext): boolean {
-    if (!cond) return true;  // 娌℃潯浠?= 鎬绘槸 true
+    if (!cond) return true; // 娌℃潯浠?= 鎬绘槸 true
     const v = ctxValue(cond.type, ctx);
     if (v === undefined || v === null) return false;
 
@@ -111,23 +124,35 @@ export class SkillManager {
     const numTarget = Number(cond.value);
     if (isNaN(numV) || isNaN(numTarget)) return false;
     switch (cond.op) {
-      case 'less_than':    return numV < numTarget;
-      case 'greater_than': return numV > numTarget;
-      case 'at_least':     return numV >= numTarget;
-      case 'at_most':      return numV <= numTarget;
-      default:             return true;
+      case 'less_than':
+        return numV < numTarget;
+      case 'greater_than':
+        return numV > numTarget;
+      case 'at_least':
+        return numV >= numTarget;
+      case 'at_most':
+        return numV <= numTarget;
+      default:
+        return true;
     }
   }
 }
 
 function ctxValue(type: string, ctx: CombatContext): number | boolean | undefined {
   switch (type) {
-    case 'selfHp':         return ctx.selfHp;
-    case 'selfMp':         return ctx.selfMp;
-    case 'targetHp':       return ctx.targetHp;
-    case 'nearbyMobs':     return ctx.nearbyMobs;
-    case 'distance':       return ctx.distance;
-    case 'inCombat':       return ctx.inCombat;
-    case 'onCombatStart':  return ctx.onCombatStart;
+    case 'selfHp':
+      return ctx.selfHp;
+    case 'selfMp':
+      return ctx.selfMp;
+    case 'targetHp':
+      return ctx.targetHp;
+    case 'nearbyMobs':
+      return ctx.nearbyMobs;
+    case 'distance':
+      return ctx.distance;
+    case 'inCombat':
+      return ctx.inCombat;
+    case 'onCombatStart':
+      return ctx.onCombatStart;
   }
 }

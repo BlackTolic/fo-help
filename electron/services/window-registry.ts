@@ -97,12 +97,11 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
   `;
 
   try {
-    const { stdout } = await execFileAsync('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-Command', script,
-    ], { timeout: 5000, windowsHide: true });
+    const { stdout } = await execFileAsync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { timeout: 5000, windowsHide: true },
+    );
 
     if (!stdout.trim()) return [];
     // base64 传输避免 stdout 编码问题
@@ -138,14 +137,14 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
 
   // 0. 排除自己(electron / chrome 类窗口,避免本应用误报)
   const SELF_CLASSES = [
-    'Chrome_WidgetWin_1',  // Electron 主窗口
+    'Chrome_WidgetWin_1', // Electron 主窗口
     'Chrome_RenderWidgetHostHWND',
     'Intermediate D3D Window',
   ];
   // console.log('title--------', title);
   // 测试
-  if(title.includes('文本文档')){
-     return true
+  if (title.includes('文本文档')) {
+    return true;
   }
   if (SELF_CLASSES.includes(className)) {
     return false;
@@ -162,12 +161,13 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
   }
 
   // 1. 进程名匹配(空名放过,可能是反外挂保护)
-  if (procName && (
-    procName.includes('qq') ||
-    procName.includes('fantasy') ||
-    procName.includes('幻想') ||
-    procName === 'game.exe'
-  )) {
+  if (
+    procName &&
+    (procName.includes('qq') ||
+      procName.includes('fantasy') ||
+      procName.includes('幻想') ||
+      procName === 'game.exe')
+  ) {
     return true;
   }
   // 2. 标题匹配(QQ幻想私服常见标题: "QQ幻想之XX" / "幻想世界")
@@ -177,10 +177,10 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
 
   // 3. 类名匹配(QQ幻想 / 私服)
   const KNOWN_CLASSES = [
-    'TMainForm',         // 老版 Delphi
-    'QQSwordWinClass',   // QQ幻想之龙飞凤舞 实际类名
-    'TApplication',      // 部分老游戏
-    'GameWnd',           // 私服
+    'TMainForm', // 老版 Delphi
+    'QQSwordWinClass', // QQ幻想之龙飞凤舞 实际类名
+    'TApplication', // 部分老游戏
+    'GameWnd', // 私服
   ];
   if (KNOWN_CLASSES.includes(className)) {
     return true;

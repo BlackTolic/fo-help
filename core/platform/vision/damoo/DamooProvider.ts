@@ -15,7 +15,7 @@ import { createLogger } from '../../../logger';
 const log = createLogger('damoo.vision');
 
 export class DamooVisionProvider implements IVisionProvider {
-  private hwnd: number = 0;
+  private hwnd = 0;
 
   bind(hwnd: number): void {
     this.hwnd = hwnd;
@@ -41,7 +41,16 @@ export class DamooVisionProvider implements IVisionProvider {
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dmApi.findPic(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, tplB64, '000000', sim, dir);
+    const ret = dmApi.findPic(
+      roi.x,
+      roi.y,
+      roi.x + roi.w,
+      roi.y + roi.h,
+      tplB64,
+      '000000',
+      sim,
+      dir,
+    );
     if (!ret) return null;
     const parts = ret.split('|');
     if (parts.length !== 2) return null;
@@ -55,9 +64,19 @@ export class DamooVisionProvider implements IVisionProvider {
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dmApi.findPicEx(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, tplB64, '000000', sim, dir);
+    const ret = dmApi.findPicEx(
+      roi.x,
+      roi.y,
+      roi.x + roi.w,
+      roi.y + roi.h,
+      tplB64,
+      '000000',
+      sim,
+      dir,
+    );
     if (!ret) return [];
-    return ret.split(',')
+    return ret
+      .split(',')
       .filter(Boolean)
       .map((p) => {
         const parts = p.split('|');

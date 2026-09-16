@@ -9,7 +9,6 @@
 //
 // 注意:替换时 com 单例管理(getRaw/releaseRaw)也要移植
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const winax = require('winax');
 import { createLogger } from '../../logger';
 
@@ -21,26 +20,38 @@ const DAMOO_ATTACH_CODE = 'mt0plzvti09xyhw7';
 
 // ===== 类型 =====
 export type DisplayMode = 'normal' | 'gdi' | 'gdi2' | 'dx' | 'dx2' | 'dx3' | 'dx.graphic.2d';
-export type MouseMode = 'normal' | 'windows' | 'windows2' | 'dx' | 'dx2' | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message';
-export type KeypadMode = 'normal' | 'windows' | 'windows2' | 'dx' | 'dx2' | 'dx.keypad.state.api|dx.keypad.api';
+export type MouseMode =
+  | 'normal'
+  | 'windows'
+  | 'windows2'
+  | 'dx'
+  | 'dx2'
+  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message';
+export type KeypadMode =
+  | 'normal'
+  | 'windows'
+  | 'windows2'
+  | 'dx'
+  | 'dx2'
+  | 'dx.keypad.state.api|dx.keypad.api';
 export type BindMode = number;
 export interface DamooConfig {
   display: DisplayMode;
   mouse: MouseMode;
   keypad: KeypadMode;
   mode: BindMode;
-  api?:string;
+  api?: string;
 }
 export const DEFAULT_DAMOO_CONFIG: DamooConfig = {
   // display: 'gdi',
   // mouse: 'windows',
   // keypad: 'windows',
   // mode: 0,
-    display: 'dx.graphic.2d',
-    mouse: 'dx.mouse.position.lock.api|dx.mouse.position.lock.message',
-    keypad: 'dx.keypad.state.api|dx.keypad.api',
-    api: '',
-    mode: 0,
+  display: 'dx.graphic.2d',
+  mouse: 'dx.mouse.position.lock.api|dx.mouse.position.lock.message',
+  keypad: 'dx.keypad.state.api|dx.keypad.api',
+  api: '',
+  mode: 0,
 };
 
 // ===== COM 单例(替换插件时移植) =====
@@ -69,8 +80,10 @@ function getRaw(): any {
       }
     } catch (e: any) {
       _dm = null;
-      throw new Error(`大漠 DLL 未注册或加载失败: ${e.message}\n` +
-        `请确认 dm.dll 位于 assets/dll/ 目录,并以管理员身份运行 regsvr32 注册。`);
+      throw new Error(
+        `大漠 DLL 未注册或加载失败: ${e.message}\n` +
+          `请确认 dm.dll 位于 assets/dll/ 目录,并以管理员身份运行 regsvr32 注册。`,
+      );
     }
   }
   return _dm;
@@ -105,8 +118,13 @@ export const dmApi = {
 
   // ---- 窗口绑定 ----
   /** BindWindow 5 参:(hwnd, display, mouse, keypad, mode) */
-  bindWindow: (hwnd: number, display: string, mouse: string, keypad: string, mode: number): number =>
-    getRaw().BindWindow(hwnd, display, mouse, keypad, mode),
+  bindWindow: (
+    hwnd: number,
+    display: string,
+    mouse: string,
+    keypad: string,
+    mode: number,
+  ): number => getRaw().BindWindow(hwnd, display, mouse, keypad, mode),
   /**
    * BindWindowEx 6 参:(hwnd, display, mouse, keypad, api, mode)
    * ⚠️ 注意:第 5 参是 api 字符串(不是 mode!),第 6 参才是 mode 数字
@@ -130,8 +148,8 @@ export const dmApi = {
   getScreenData: (x1: number, y1: number, x2: number, y2: number): string =>
     getRaw().GetScreenData(x1, y1, x2, y2),
   /** 截取全屏数据(返回 base64) */
-  getFullScreenData: (filePath: string): string =>{  
-    const width =  getRaw().GetScreenWidth();
+  getFullScreenData: (filePath: string): string => {
+    const width = getRaw().GetScreenWidth();
     const height = getRaw().GetScreenHeight();
     console.log(`全屏截图,宽度 ${width},高度 ${height}`);
     return getRaw().capturePng(0, 0, width, height, filePath);
@@ -144,32 +162,62 @@ export const dmApi = {
   // ---- 找字 ----
   /** 找字,返回 "x|y" 字符串,失败空 */
   findStr: (
-    x1: number, y1: number, x2: number, y2: number,
-    str: string, color: string, sim: number, dir?: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    str: string,
+    color: string,
+    sim: number,
+    dir?: number,
   ): string => String(getRaw().FindStr(x1, y1, x2, y2, str, color, sim, dir) || ''),
   /** 找字带坐标 ref,找到返回 1,失败 0;xRef/yRef 会被填充坐标 */
   findStrE: (
-    x1: number, y1: number, x2: number, y2: number,
-    str: string, color: string, sim: number,
-    xRef: any, yRef: any, dir?: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    str: string,
+    color: string,
+    sim: number,
+    xRef: any,
+    yRef: any,
+    dir?: number,
   ): number => Number(getRaw().FindStrE(x1, y1, x2, y2, str, color, sim, xRef, yRef, dir) || 0),
 
   // ---- 找图 ----
   /** 找图,返回 "x|y" 字符串(单结果),失败空 */
   findPic: (
-    x1: number, y1: number, x2: number, y2: number,
-    tplBase64: string, color: string, sim: number, dir: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    tplBase64: string,
+    color: string,
+    sim: number,
+    dir: string,
   ): string => String(getRaw().FindPic(x1, y1, x2, y2, tplBase64, color, sim, dir) || ''),
   /** 找图多结果,返回 "x1|y1|x2|y2|..." 字符串 */
   findPicEx: (
-    x1: number, y1: number, x2: number, y2: number,
-    tplBase64: string, color: string, sim: number, dir: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    tplBase64: string,
+    color: string,
+    sim: number,
+    dir: string,
   ): string => String(getRaw().FindPicEx(x1, y1, x2, y2, tplBase64, color, sim, dir) || ''),
 
   // ---- 找色 ----
   findColor: (
-    x1: number, y1: number, x2: number, y2: number,
-    color: string, sim: number, dir: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    color: string,
+    sim: number,
+    dir: string,
   ): string => String(getRaw().FindColor(x1, y1, x2, y2, color, sim, dir) || ''),
 
   // ---- OCR ----
@@ -203,7 +251,9 @@ export function bindWindow(hwnd: number, cfg: DamooConfig = DEFAULT_DAMOO_CONFIG
   try {
     const ret = dmApi.bindWindowEx(hwnd, cfg.display, cfg.mouse, cfg.keypad, '', cfg.mode);
     if (ret === 1) {
-      log.info(`绑定窗口成功 hwnd=${hwnd} display=${cfg.display} mouse=${cfg.mouse} mode=${cfg.mode}`);
+      log.info(
+        `绑定窗口成功 hwnd=${hwnd} display=${cfg.display} mouse=${cfg.mouse} mode=${cfg.mode}`,
+      );
       return true;
     }
     log.error(`BindWindowEx 失败 hwnd=${hwnd} 返回值=${ret},错误码=${dmApi.getLastError()}`);

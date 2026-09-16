@@ -27,9 +27,7 @@ interface Props {
   onApply: (stored: StoredTaskConfig) => void;
 }
 
-export function HistoryTaskDialog({
-  history, currentHwnd, onClose, onApply,
-}: Props) {
+export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Props) {
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
       <div className="bg-bg-card border border-border-base rounded-lg shadow-2xl w-[640px] max-h-[80vh] flex flex-col">
@@ -49,12 +47,17 @@ export function HistoryTaskDialog({
             <div className="text-center py-12 text-text-muted text-xs">
               <div className="text-3xl mb-2 opacity-30">📋</div>
               <div>还没有保存过任何任务</div>
-              <div className="mt-1">先在 WindowCard 上点"创建任务" → 选好 → 点"保存配置" + 输入名字</div>
+              <div className="mt-1">
+                先在 WindowCard 上点"创建任务" → 选好 → 点"保存配置" + 输入名字
+              </div>
             </div>
           ) : (
             <div className="space-y-1.5">
               {history.map((stored) => {
-                const { name, Icon } = TASK_LABEL[stored.config.type] || { name: '未知', Icon: FileText };
+                const { name, Icon } = TASK_LABEL[stored.config.type] || {
+                  name: '未知',
+                  Icon: FileText,
+                };
                 return (
                   <div
                     key={stored.name}
@@ -72,14 +75,20 @@ export function HistoryTaskDialog({
                       </div>
                       <div className="text-[11px] text-text-muted truncate">
                         {stored.config.type === 'farm' && (
-                          <>地图 {(stored.config as any).mapId} · 模式 {(stored.config as any).mode} · </ >
+                          <>
+                            地图 {(stored.config as any).mapId} · 模式 {(stored.config as any).mode}{' '}
+                            ·{' '}
+                          </>
                         )}
                         更新于 {new Date(stored.updatedAt).toLocaleString('zh-CN')}
                       </div>
                     </div>
                     <button
                       className="text-xs px-2 py-1 bg-accent-cyan/20 hover:bg-accent-cyan/30 text-accent-cyan rounded"
-                      onClick={(e) => { e.stopPropagation(); onApply(stored); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onApply(stored);
+                      }}
                     >
                       选用
                     </button>

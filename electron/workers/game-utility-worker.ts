@@ -33,10 +33,16 @@ import type { TaskType, ScriptStatus, TaskName } from '../../shared/types';
 const log = createLogger('utility-worker');
 
 // ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行
-try { process.stderr.write(`[DEBUG] utilityProcess 启动 PID=${process.pid}, argv.length=${process.argv.length}\n`); } catch {}
+try {
+  process.stderr.write(
+    `[DEBUG] utilityProcess 启动 PID=${process.pid}, argv.length=${process.argv.length}\n`,
+  );
+} catch {}
 
 if (!process.parentPort) {
-  try { process.stderr.write(`[FATAL] process.parentPort 不存在,此进程不是 utilityProcess\n`); } catch {}
+  try {
+    process.stderr.write(`[FATAL] process.parentPort 不存在,此进程不是 utilityProcess\n`);
+  } catch {}
   throw new Error('必须在 Electron utilityProcess 中运行');
 }
 
@@ -118,7 +124,7 @@ let currentStatus: ScriptStatus = 'idle';
 void currentStatus;
 let _running = true;
 void _running;
-let _startedAt = Date.now();
+const _startedAt = Date.now();
 void _startedAt;
 let killCount = 0;
 void killCount;
@@ -131,6 +137,13 @@ let _dm: any = null;
 void _dm;
 const _waitForConfig = init.waitForConfig === true;
 let _startResolve: (() => void) | null = null;
+/**
+ * ⚠️ Race-condition fix: 父进程可能在 worker 进 main() / 设 _startResolve 之前
+ * 就把 start-task 命令发过来了。这种情况下原代码只是 warn 然后丢弃,导致 worker
+ * 永远卡在 `await new Promise(...)`。这里把"想启动"这件事暂存,等到 _waitForConfig
+ * 阶段执行 _startResolve 设置时再自检一次,一旦 _pendingStart 为 true 立即 resolve。
+ */
+let _pendingStart = false;
 
 function sendLog(level: string, msg: string) {
   process.parentPort!.postMessage({ type: 'log', level, msg });
@@ -213,7 +226,9 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
 // 通过这些标记可以精确定位卡在哪一步(loadDamoo / bindWindow / capture)
 // 注意:必须用 process.stderr.write 同步写,不能用 log.*(pino 是异步,buffer 满可能丢失)
 function stepStart(name: string) {
-  try { process.stderr.write(`[STEP-START] ${name} [+${Date.now() - _mainStart}ms]\n`); } catch {}
+  try {
+    process.stderr.write(`[STEP-START] ${name} [+${Date.now() - _mainStart}ms]\n`);
+  } catch {}
   _currentStep = name;
 }
 function stepEnd(name: string, ok: boolean, extra?: string) {
@@ -232,8 +247,13 @@ async function main() {
   const t0 = Date.now();
   _mainStart = t0;
   const elapsed = () => `[+${Date.now() - t0}ms]`;
-  sendLog('info', `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
-  try { process.stderr.write(`[STEP-START] main 进入 [+0ms]\n`); } catch {}
+  sendLog(
+    'info',
+    `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`,
+  );
+  try {
+    process.stderr.write(`[STEP-START] main 进入 [+0ms]\n`);
+  } catch {}
 
   const profile = init.profile || DEFAULT_PROFILE;
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
@@ -275,13 +295,16 @@ async function main() {
   //   - 反作弊拦截 user32 hook 安装
   //   stepStart/stepEnd 是同步 stderr 写入,即使后续 hang 也能在 stderr 看到「卡在 bindWindow」
   stepStart(`bindWindow(hwnd=${init.hwnd}, mode=${cfg.mode}, display=${cfg.display})`);
-  const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
+  const bindOk = (_bindSuccess = bindWindow(init.hwnd, cfg));
   stepEnd('bindWindow', bindOk, `耗时=${Date.now() - tBind}ms`);
   sendLog('info', `bindWindow 完成: ${bindOk ? '成功' : '失败'} (耗时 ${Date.now() - tBind}ms)`);
   if (!bindOk) {
     const code = dmApi.getLastError();
     const { message, advice } = dmErrorFull(code);
-    sendLog('error', `窗口绑定失败 hwnd=${init.hwnd} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`);
+    sendLog(
+      'error',
+      `窗口绑定失败 hwnd=${init.hwnd} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`,
+    );
     setStatus('alert', `绑定失败: ${message}`);
     await takeAndSendThumbnail(init.hwnd);
     return;
@@ -291,7 +314,9 @@ async function main() {
     try {
       const path = require('path');
       const { app } = require('electron');
-      const fontPath = path.isAbsolute(profile.fontLib) ? profile.fontLib : path.join(app.getAppPath(), profile.fontLib);
+      const fontPath = path.isAbsolute(profile.fontLib)
+        ? profile.fontLib
+        : path.join(app.getAppPath(), profile.fontLib);
       dmApi.setDict(0, fontPath);
       dmApi.useDict(0);
       sendLog('info', `字库已加载: ${fontPath}`);
@@ -348,11 +373,18 @@ async function main() {
 
   if (_waitForConfig) {
     sendLog('info', 'bootstrap 模式:等待 start-task 命令...');
-    setStatus('idle', '等待启动');
+    setStatus('pending', '等待启动');
     await new Promise<void>((resolve) => {
       _startResolve = resolve;
+      // Race-condition 自检:start-task 可能在 _startResolve 注册前就到了
+      if (_pendingStart) {
+        _pendingStart = false;
+        sendLog('info', '从 _pendingStart 取出暂存的 start-task,立即放行');
+        resolve();
+      }
     });
     _startResolve = null;
+    _pendingStart = false;
     sendLog('info', '收到 start-task,开始执行任务');
   }
 
@@ -372,7 +404,14 @@ process.parentPort.on('message', (msg: any) => {
       case 'start-task':
         sendLog('info', '收到 start-task');
         if (_startResolve) {
+          // 正常路径:_startResolve 已注册,直接 resolve 让 main() 走完
           _startResolve();
+        } else if (_waitForConfig) {
+          // Race-condition:_waitForConfig 为真但 main() 还没走到 await Promise
+          //   (即还在 loadDamoo / bindWindow / takeAndSendThumbnail / OCR 等阶段)
+          //   暂存意图,等 main() 创建 Promise 时自检
+          _pendingStart = true;
+          sendLog('warn', 'start-task 在 _waitForConfig 早期到达,暂存到 _pendingStart');
         } else {
           sendLog('warn', '收到 start-task,但 worker 未在等待状态(可能已启动)');
         }
@@ -416,7 +455,9 @@ process.parentPort.on('message', (msg: any) => {
         handleScreenshot().catch((e) => sendLog('error', `截图失败: ${e.message}`));
         break;
       case 'screenshot-test':
-        takeAndSendThumbnailTest(init.hwnd).catch((e) => sendLog('error', `测试截图失败: ${e.message}`));
+        takeAndSendThumbnailTest(init.hwnd).catch((e) =>
+          sendLog('error', `测试截图失败: ${e.message}`),
+        );
         break;
     }
   }
@@ -434,7 +475,11 @@ async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
     dmApi.getFullScreenData(`testscreen-${hwnd}-${ts}.png`);
     if (ret !== 1) {
       sendLog('warn', `测试截图 Capture 返回 ${ret}`);
-      process.parentPort!.postMessage({ type: 'thumbnail-test', hwnd, error: `Capture 返回 ${ret}` });
+      process.parentPort!.postMessage({
+        type: 'thumbnail-test',
+        hwnd,
+        error: `Capture 返回 ${ret}`,
+      });
       return;
     }
     if (!fs.existsSync(filePath)) {
@@ -452,7 +497,11 @@ async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
 
 async function handleScreenshot(): Promise<void> {
   if (!_dm) {
-    try { _dm = getDamoo(); } catch { /* noop */ }
+    try {
+      _dm = getDamoo();
+    } catch {
+      /* noop */
+    }
   }
   if (_dm) {
     await takeAndSendThumbnail(init.hwnd);
@@ -471,10 +520,18 @@ main().catch((e) => {
 //   之前用 main().then(() => postMessage 'ready') 是 bug:
 //   main() 是 async 且永不 resolve(战斗循环常驻),ready 信号永远不发 → startTask 一直超时
 //   修复:在顶层代码末尾,所有 listener 注册后,立即 postMessage 'ready'
-try { process.stderr.write(`[READY-DEBUG] 即将发 ready 信号, init.hwnd=${init?.hwnd}, process.argv.length=${process.argv.length}, process.argv[last]=${process.argv[process.argv.length - 1]?.slice(0, 100)}\n`); } catch {}
+try {
+  process.stderr.write(
+    `[READY-DEBUG] 即将发 ready 信号, init.hwnd=${init?.hwnd}, process.argv.length=${process.argv.length}, process.argv[last]=${process.argv[process.argv.length - 1]?.slice(0, 100)}\n`,
+  );
+} catch {}
 try {
   process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
-  try { process.stderr.write(`[READY-DEBUG] ✓ ready 信号 postMessage 成功\n`); } catch {}
+  try {
+    process.stderr.write(`[READY-DEBUG] ✓ ready 信号 postMessage 成功\n`);
+  } catch {}
 } catch (e: any) {
-  try { process.stderr.write(`[READY-DEBUG] ✗ ready 信号 postMessage 失败: ${e.message}\n`); } catch {}
+  try {
+    process.stderr.write(`[READY-DEBUG] ✗ ready 信号 postMessage 失败: ${e.message}\n`);
+  } catch {}
 }

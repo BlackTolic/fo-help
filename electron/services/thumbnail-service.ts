@@ -2,7 +2,7 @@
 // 主进程不主动截图,所有截图都走 worker 的 dm.Capture
 
 export class ThumbnailService {
-  private cache = new Map<number, string>();  // hwnd -> base64
+  private cache = new Map<number, string>(); // hwnd -> base64
 
   /** worker 推过来的截图(直接缓存 + 准备广播) */
   set(hwnd: number, dataUrl: string | null): void {

@@ -48,9 +48,15 @@ export class TargetFinder {
         const x = { value: 0, byref: true } as any;
         const y = { value: 0, byref: true } as any;
         const result = dmApi.findStrE(
-          roi.x, roi.y, roi.x + roi.w, roi.y + roi.h,
-          keyword, 'FFFFFF-FFFFFF', 0.85,
-          x, y,
+          roi.x,
+          roi.y,
+          roi.x + roi.w,
+          roi.y + roi.h,
+          keyword,
+          'FFFFFF-FFFFFF',
+          0.85,
+          x,
+          y,
         );
         if (result === 1) {
           return {
@@ -60,7 +66,7 @@ export class TargetFinder {
             confidence: 0.85,
           };
         }
-      } catch (e) {
+      } catch {
         continue;
       }
     }

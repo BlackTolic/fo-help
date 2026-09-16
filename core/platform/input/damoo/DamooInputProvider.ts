@@ -8,20 +8,52 @@ import { createLogger } from '../../../logger';
 
 const log = createLogger('damoo.input');
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const winax = require('winax');
 
 // 大漠键码:虚拟键码 VK_* 的字符串形式
 const KEY_MAP: Record<KeyCode, number> = {
-  F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117, F7: 118, F8: 119, F9: 120,
-  Q: 81, W: 87, E: 69, R: 82, A: 65, S: 83, D: 68, F: 70, G: 71, H: 72,
-  Z: 90, X: 88, C: 67, V: 86, B: 66,
-  Tab: 9, Space: 32, Enter: 13, Esc: 27,
-  '0': 48, '1': 49, '2': 50, '3': 51, '4': 52, '5': 53, '6': 54, '7': 55, '8': 56, '9': 57,
+  F1: 112,
+  F2: 113,
+  F3: 114,
+  F4: 115,
+  F5: 116,
+  F6: 117,
+  F7: 118,
+  F8: 119,
+  F9: 120,
+  Q: 81,
+  W: 87,
+  E: 69,
+  R: 82,
+  A: 65,
+  S: 83,
+  D: 68,
+  F: 70,
+  G: 71,
+  H: 72,
+  Z: 90,
+  X: 88,
+  C: 67,
+  V: 86,
+  B: 66,
+  Tab: 9,
+  Space: 32,
+  Enter: 13,
+  Esc: 27,
+  '0': 48,
+  '1': 49,
+  '2': 50,
+  '3': 51,
+  '4': 52,
+  '5': 53,
+  '6': 54,
+  '7': 55,
+  '8': 56,
+  '9': 57,
 };
 
 export class DamooInputProvider implements IInputProvider {
-  private hwnd: number = 0;
+  private hwnd = 0;
 
   bind(hwnd: number): void {
     this.hwnd = hwnd;
@@ -67,8 +99,13 @@ export class DamooInputProvider implements IInputProvider {
     return { x: Number(x) || 0, y: Number(y) || 0 };
   }
 
-  async click(button: MouseButton, count: number = 1): Promise<void> {
-    const fn = button === 'left' ? dmApi.leftClick : button === 'right' ? dmApi.rightClick : dmApi.middleClick;
+  async click(button: MouseButton, count = 1): Promise<void> {
+    const fn =
+      button === 'left'
+        ? dmApi.leftClick
+        : button === 'right'
+          ? dmApi.rightClick
+          : dmApi.middleClick;
     for (let i = 0; i < count; i++) {
       fn();
       if (i < count - 1) await new Promise((r) => setTimeout(r, 80));

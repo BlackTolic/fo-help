@@ -1,13 +1,23 @@
 // 全局声明:window.fohelp (preload 暴露的 API)
 
-import type { GameWindow, TaskType, TaskConfig, WorkerState, StoredTaskConfig } from '../shared/types';
+import type {
+  GameWindow,
+  TaskType,
+  TaskConfig,
+  WorkerState,
+  StoredTaskConfig,
+} from '../shared/types';
 
 interface FohelpAPI {
   listGameWindows: () => Promise<GameWindow[]>;
   refreshGameWindows: () => Promise<GameWindow[]>;
   captureWindow: (hwnd: number) => Promise<string | null>;
   recaptureThumbnail: (hwnd: number) => Promise<string | null>;
-  startWorker: (hwnd: number, characterName: string, taskType: TaskType) => Promise<{ ok: boolean; workerId?: string; error?: string }>;
+  startWorker: (
+    hwnd: number,
+    characterName: string,
+    taskType: TaskType,
+  ) => Promise<{ ok: boolean; workerId?: string; error?: string }>;
   /** Bootstrap 模式:启动 worker 停在 idle 等命令,返回 thumbnail + characterName */
   bootstrapWorker: (
     hwnd: number,
@@ -25,6 +35,21 @@ interface FohelpAPI {
   pauseWorker: (workerId: string) => Promise<boolean>;
   resumeWorker: (workerId: string) => Promise<boolean>;
   listWorkers: () => Promise<WorkerState[]>;
+  /** 检查大漠 dll 是否已注册到当前项目自带的 dm.dll */
+  checkDamoo: () => Promise<{
+    ok: boolean;
+    status?: {
+      kind: 'ok' | 'wrong' | 'missing' | 'no-dll';
+      path?: string;
+      registeredPath?: string;
+      expectedPath?: string;
+      reason?: string;
+    };
+    message?: string;
+    error?: string;
+  }>;
+  /** 触发 UAC → regsvr32 /s 注册项目自带的 dm.dll(用户需在桌面 UAC 弹窗点"是") */
+  registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
   /** 保存任务配置(按 name 唯一,重名拒绝) */
   saveTaskConfig: (
     hwnd: number,
@@ -38,8 +63,12 @@ interface FohelpAPI {
   /** 旧 API 保留(返回 null) */
   getTaskConfig: (hwnd: number) => Promise<TaskConfig | null>;
   onWorkerStateChanged: (cb: (state: WorkerState) => void) => () => void;
-  onWorkerLog: (cb: (log: { workerId: string; level: string; msg: string; timestamp: number }) => void) => () => void;
-  onWorkerError: (cb: (err: { workerId: string; error: any; timestamp: number }) => void) => () => void;
+  onWorkerLog: (
+    cb: (log: { workerId: string; level: string; msg: string; timestamp: number }) => void,
+  ) => () => void;
+  onWorkerError: (
+    cb: (err: { workerId: string; error: any; timestamp: number }) => void,
+  ) => () => void;
   onThumbnailUpdate: (cb: (data: { hwnd: number; dataUrl: string | null }) => void) => () => void;
 }
 
