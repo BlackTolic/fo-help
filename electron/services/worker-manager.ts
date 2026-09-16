@@ -24,6 +24,8 @@ const log = createLogger('worker-manager');
 interface ManagedWorker {
   worker: UtilityProcess;
   state: WorkerState;
+  // 最近 stderr 行(环形缓冲),bootstrap 超时 kill 时 dump 出来定位卡哪一步
+  recentStderr: string[];
 }
 
 export class WorkerManager {
@@ -88,6 +90,13 @@ export class WorkerManager {
     // 把子进程的 stdout/stderr 转发到主进程的 pino 日志 + 终端
     // (stdio: 'pipe' 必须主动消费,否则 buffer 满了子进程会阻塞)
     const tag = `[w-${hwnd}]`;
+    // 闭环:最近 80 行 stderr,bootstrap 超时 kill 时 dump 出来定位卡哪一步
+    const recentStderr: string[] = [];
+    const STDERR_RING_MAX = 80;
+    const pushStderr = (line: string) => {
+      recentStderr.push(line);
+      if (recentStderr.length > STDERR_RING_MAX) recentStderr.shift();
+    };
     worker.stdout?.on('data', (chunk: Buffer) => {
       const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean);
       for (const line of lines) {
@@ -97,6 +106,7 @@ export class WorkerManager {
     worker.stderr?.on('data', (chunk: Buffer) => {
       const lines = chunk.toString('utf8').split(/\r?\n/).filter(Boolean);
       for (const line of lines) {
+        pushStderr(line);
         log.warn(`${tag} ${line}`);
       }
     });
@@ -116,7 +126,7 @@ export class WorkerManager {
       stats: { killCount: 0, deathCount: 0, uptimeMs: 0 },
     };
 
-    this.workers.set(workerId, { worker, state: initialState });
+    this.workers.set(workerId, { worker, state: initialState, recentStderr });
     this.byHwnd.set(hwnd, workerId);
 
     worker.on('message', (msg) => this.onWorkerMessage(workerId, msg));
@@ -249,14 +259,56 @@ export class WorkerManager {
       };
       m.worker.on('message', onMsg);
       // 延长到 30s:首次启动 fork + dm.dll 加载 + bindWindow + Capture 累计可能要 15-25s
-      const BOOTSTRAP_TIMEOUT_MS = 30000;
+      const BOOTSTRAP_TIMEOUT_MS = 20000;
       const timer = setTimeout(() => {
         const elapsed = Date.now() - t0;
+        // 根据 stderr 环形缓冲匹配当前卡在哪一步,给出可操作的诊断
+        const lastLines = m.recentStderr;
+        const lastStepStart = [...lastLines].reverse().find((l) => l.includes('[STEP-START]'));
+        const phase = lastStepStart ? lastStepStart.replace(/.*\[STEP-START\]\s*/, '').trim() : '(未匹配到 STEP-START)';
+        const diagnosis = (() => {
+          // 没有任何 stderr → 子进程根本没启动 / require 阶段就挂了
+          if (m.recentStderr.length === 0) {
+            return '子进程未输出任何 stderr → 极可能 dm.dll 未注册/位数不对/fork 启动即崩溃。检查 dist-electron/electron/workers/game-utility-worker.js 是否存在,32/64 位是否匹配。';
+          }
+          if (/\[STEP-START\] loadDamoo\(.*\)/.test(lastLines.join('\n')) && !/\[STEP-END\] loadDamoo/.test(lastLines.join('\n'))) {
+            return '卡在 loadDamoo(同步 COM 初始化) → 大概率是大漠注册码无效、dm.dll 未注册,或被 360/火绒隔离。请单独运行 regsvr32 dm.dll 验证。';
+          }
+          if (/\[STEP-START\] bindWindow/.test(lastLines.join('\n')) && !/\[STEP-END\] bindWindow/.test(lastLines.join('\n'))) {
+            return `卡在 bindWindow(hwnd=${hwnd}) → 检查:1) 游戏窗口是否最小化/被遮挡/未进入游戏主界面 2) mode=${'?'} 在窗口后台时可能 hang 3) 反作弊拦截 user32 hook。试试前台+最大化+切到 mode=normal。`;
+          }
+          if (/\[STEP-START\] capture/.test(lastLines.join('\n')) && !/\[STEP-END\] capture/.test(lastLines.join('\n'))) {
+            return `卡在 dmApi.capture(hwnd=${hwnd}) → 大概率 hwnd 已失效/窗口被关闭,或绑定关系异常。刷新一次窗口列表重试。`;
+          }
+          return `未匹配到已知步骤(stderr 已收到 ${m.recentStderr.length} 行)。请看上面 [w-${hwnd}] stderr 日志。`;
+        })();
         log.error(
-          `[WorkerManager] bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s): hwnd=${hwnd}, 累计 ${elapsed}ms — ` +
-          `可能卡在 fork/loadDamoo/bindWindow/Capture,请看上面 [w-${hwnd}] 日志定位`
+          `[WorkerManager] bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s): hwnd=${hwnd}, 累计 ${elapsed}ms\n` +
+          `  当前阶段: ${phase}\n` +
+          `  诊断: ${diagnosis}`,
         );
-        finish(() => reject(new Error(`bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s) — 检查大漠注册码/游戏窗口`)));
+        // 把最近 stderr dump 出来,方便一眼定位
+        if (m.recentStderr.length > 0) {
+          log.error(`[WorkerManager] 子进程 ${wid} 最近 ${m.recentStderr.length} 行 stderr:\n` +
+            m.recentStderr.map((l) => `  | ${l}`).join('\n'));
+        }
+        // 主动 kill utilityProcess 子进程,释放 hang 的主线程(否则 fork 进程会永远卡)
+        try {
+          m.worker.kill();
+          log.warn(`[WorkerManager] bootstrap 超时 → 已 kill 子进程 ${wid},下次创建任务会重新 fork`);
+        } catch (e: any) {
+          log.warn(`[WorkerManager] kill 失败: ${e.message}`);
+        }
+        finish(() =>
+          reject(
+            new Error(
+              `bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s)\n` +
+              `当前阶段: ${phase}\n` +
+              `诊断: ${diagnosis}\n` +
+              `请查看终端 [w-${hwnd}] 标记的 stderr 日志`,
+            ),
+          ),
+        );
       }, BOOTSTRAP_TIMEOUT_MS);
     });
   }
@@ -356,8 +408,8 @@ export class WorkerManager {
       m.worker.postMessage({ type: 'command', command: 'screenshot-test' });
       const timer = setTimeout(() => {
         m.worker.off('message', onMessage);
-        resolve({ error: '截图超时(8s)' });
-      }, 8000);
+        resolve({ error: '截图超时(20s)' });
+      }, 20000);
     });
   }
 

@@ -389,6 +389,22 @@ export function TaskConfigDialog({
                 <div className="text-[11px] text-text-muted">
                   💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口
                 </div>
+                {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-accent-cyan/20">
+                  <button
+                    onClick={() => { setStep('config'); setNameError(null); }}
+                    className="btn btn-secondary flex items-center gap-1"
+                  >
+                    返回配置
+                  </button>
+                  <button
+                    onClick={() => void handleConfirmName()}
+                    className="btn btn-primary flex items-center gap-1"
+                  >
+                    <Check size={14} />
+                    确认保存
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -418,13 +434,16 @@ export function TaskConfigDialog({
                   if (step === 'config') {
                     setStep('select');
                     setTaskType(null);
+                  } else if (step === 'name') {
+                    setStep('config');
+                    setNameError(null);
                   } else {
                     onClose();
                   }
                 }}
                 className="btn btn-secondary"
               >
-                {step === 'config' ? '上一步' : '取消'}
+                {step === 'config' ? '上一步' : step === 'name' ? '上一步' : '取消'}
               </button>
               {step === 'config' && (
                 <div className="flex items-center gap-2">
@@ -445,6 +464,11 @@ export function TaskConfigDialog({
                     保存配置
                   </button>
                 </div>
+              )}
+              {step === 'name' && (
+                <span className="text-[11px] text-text-muted">
+                  按 Enter 或点 panel 内"确认保存"
+                </span>
               )}
             </>
           )}

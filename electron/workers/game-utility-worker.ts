@@ -32,7 +32,11 @@ import type { TaskType, ScriptStatus, TaskName } from '../../shared/types';
 
 const log = createLogger('utility-worker');
 
+// ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行
+try { process.stderr.write(`[DEBUG] utilityProcess 启动 PID=${process.pid}, argv.length=${process.argv.length}\n`); } catch {}
+
 if (!process.parentPort) {
+  try { process.stderr.write(`[FATAL] process.parentPort 不存在,此进程不是 utilityProcess\n`); } catch {}
   throw new Error('必须在 Electron utilityProcess 中运行');
 }
 
@@ -150,23 +154,32 @@ async function readCharacterNameMock(fallback: string): Promise<string> {
   return `${fallback || '角色'}-${r.toString().padStart(2, '0')}`;
 }
 
-async function takeAndSendThumbnail(hwnd: number): Promise<void> {
+async function takeAndSendThumbnail(hwnd: number): Promise<boolean> {
   try {
     const fs = require('fs');
     const path = require('path');
     const thumbsDir = init.thumbsDir || path.join(require('os').tmpdir(), 'fo-help-thumbnails');
     if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
     const filePath = path.join(thumbsDir, `${hwnd}.png`);
+    // dmApi.capture 也是同步原生调用,加了步骤标记方便 hang 定位
+    stepStart(`capture(hwnd=${hwnd})`);
     const ret = dmApi.capture(0, 0, 192, 108, filePath);
+    stepEnd('capture', ret === 1, `ret=${ret}`);
     if (ret !== 1) {
       const code = dmApi.getLastError();
       const { message, advice } = dmErrorFull(code);
-      sendLog('warn', `大漠 Capture 返回 ${ret} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`);
-      return;
+      const detail = `截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`;
+      sendLog('error', detail);
+      // ★ 关键:失败必须主动 setStatus('alert') 让父进程 bootstrap 立即 reject,
+      //   否则父进程会傻等 20s 超时(之前就是这个 bug:子进程静默失败,bootstrap 一直挂起)
+      setStatus('alert', detail);
+      return false;
     }
     if (!fs.existsSync(filePath)) {
-      sendLog('warn', `大漠 Capture 文件不存在: ${filePath}`);
-      return;
+      const detail = `截图失败: dmApi.capture 返回 1 但文件未生成 (${filePath})`;
+      sendLog('error', detail);
+      setStatus('alert', detail);
+      return false;
     }
     const stat = fs.statSync(filePath);
     process.parentPort!.postMessage({
@@ -177,8 +190,12 @@ async function takeAndSendThumbnail(hwnd: number): Promise<void> {
       size: stat.size,
     });
     sendLog('info', `缩略图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
+    return true;
   } catch (e: any) {
-    sendLog('warn', `截图失败: ${e.message}`);
+    const detail = `截图异常: ${e.message}`;
+    sendLog('error', detail);
+    setStatus('alert', detail);
+    return false;
   }
 }
 
@@ -192,10 +209,31 @@ const STATUS_MAP: Record<CombatState['kind'], ScriptStatus> = {
   paused: 'paused',
 } as const;
 
+// 在每个同步/原生阻塞调用前后写 stderr 标记,父进程 bootstrap 超时 kill 时
+// 通过这些标记可以精确定位卡在哪一步(loadDamoo / bindWindow / capture)
+// 注意:必须用 process.stderr.write 同步写,不能用 log.*(pino 是异步,buffer 满可能丢失)
+function stepStart(name: string) {
+  try { process.stderr.write(`[STEP-START] ${name} [+${Date.now() - _mainStart}ms]\n`); } catch {}
+  _currentStep = name;
+}
+function stepEnd(name: string, ok: boolean, extra?: string) {
+  try {
+    process.stderr.write(
+      `[STEP-END] ${name} ${ok ? 'OK' : 'FAIL'} [+${Date.now() - _mainStart}ms]${extra ? ' ' + extra : ''}\n`,
+    );
+  } catch {}
+}
+let _currentStep = '(none)';
+let _mainStart = Date.now();
+void _currentStep;
+void _mainStart;
+
 async function main() {
   const t0 = Date.now();
+  _mainStart = t0;
   const elapsed = () => `[+${Date.now() - t0}ms]`;
   sendLog('info', `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`);
+  try { process.stderr.write(`[STEP-START] main 进入 [+0ms]\n`); } catch {}
 
   const profile = init.profile || DEFAULT_PROFILE;
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
@@ -211,9 +249,13 @@ async function main() {
 
   try {
     const tLoad = Date.now();
+    stepStart('loadDamoo(同步 COM 初始化 + 注册码校验)');
     _dm = getDamoo();
-    sendLog('info', `大漠加载成功,版本 ${dmApi.version()} (耗时 ${Date.now() - tLoad}ms)`);
+    const ver = dmApi.version();
+    stepEnd('loadDamoo', true, `version=${ver} 耗时=${Date.now() - tLoad}ms`);
+    sendLog('info', `大漠加载成功,版本 ${ver} (耗时 ${Date.now() - tLoad}ms)`);
   } catch (e: any) {
+    stepEnd('loadDamoo', false, e.message);
     log.error(`大漠加载失败: ${e.message}`);
     setStatus('alert', '大漠未加载');
     return;
@@ -227,7 +269,14 @@ async function main() {
     mode: profileEngine?.mode ?? init.damooConfig?.mode ?? DEFAULT_DAMOO_CONFIG.mode,
   };
   const tBind = Date.now();
+  // ⚠️ bindWindow 在以下场景会同步 hang(无法 unblock):
+  //   - hwnd 无效/已销毁(此时 dm.dll 等不到窗口消息,无限挂起)
+  //   - 窗口最小化/被遮挡且 mode 选了 dx.public.inject(等 D3D 表面)
+  //   - 反作弊拦截 user32 hook 安装
+  //   stepStart/stepEnd 是同步 stderr 写入,即使后续 hang 也能在 stderr 看到「卡在 bindWindow」
+  stepStart(`bindWindow(hwnd=${init.hwnd}, mode=${cfg.mode}, display=${cfg.display})`);
   const bindOk = _bindSuccess = bindWindow(init.hwnd, cfg);
+  stepEnd('bindWindow', bindOk, `耗时=${Date.now() - tBind}ms`);
   sendLog('info', `bindWindow 完成: ${bindOk ? '成功' : '失败'} (耗时 ${Date.now() - tBind}ms)`);
   if (!bindOk) {
     const code = dmApi.getLastError();
@@ -262,7 +311,13 @@ async function main() {
   });
 
   const tCap = Date.now();
-  await takeAndSendThumbnail(init.hwnd);
+  // capture 失败时 takeAndSendThumbnail 内部已 setStatus('alert'),
+  // 这里再次检查避免进入战斗循环(否则一边 alert 一边还在打怪,语义矛盾)
+  const captureOk = await takeAndSendThumbnail(init.hwnd);
+  if (!captureOk) {
+    sendLog('error', `缩略图失败,终止 bootstrap(不再进入战斗循环)。耗时 ${Date.now() - tCap}ms`);
+    return;
+  }
   sendLog('info', `thumbnail 发送完成 (耗时 ${Date.now() - tCap}ms)`);
 
   const vision = new DamooVisionProvider();
@@ -406,14 +461,20 @@ async function handleScreenshot(): Promise<void> {
   }
 }
 
-main().then(() => {
-process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
-}).catch((e) => {
+main().catch((e) => {
   sendLog('error', `UtilityWorker 异常: ${e.message}`);
   setStatus('alert', e.message);
 });
 
 // 子进程初始化完成,发 'ready' 信号给父进程,告诉它 message listener 已注册
-// ⚠️ 必须在顶层代码末尾发,保证 listener 注册后才发,父进程收到 'ready' 后
-//   再 postMessage start-task/stop 等命令,绝对不会再丢消息
-// process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
+// ⚠️ 必须在顶层代码末尾立即发(不等 main() 完成!)
+//   之前用 main().then(() => postMessage 'ready') 是 bug:
+//   main() 是 async 且永不 resolve(战斗循环常驻),ready 信号永远不发 → startTask 一直超时
+//   修复:在顶层代码末尾,所有 listener 注册后,立即 postMessage 'ready'
+try { process.stderr.write(`[READY-DEBUG] 即将发 ready 信号, init.hwnd=${init?.hwnd}, process.argv.length=${process.argv.length}, process.argv[last]=${process.argv[process.argv.length - 1]?.slice(0, 100)}\n`); } catch {}
+try {
+  process.parentPort!.postMessage({ type: 'ready', hwnd: init.hwnd });
+  try { process.stderr.write(`[READY-DEBUG] ✓ ready 信号 postMessage 成功\n`); } catch {}
+} catch (e: any) {
+  try { process.stderr.write(`[READY-DEBUG] ✗ ready 信号 postMessage 失败: ${e.message}\n`); } catch {}
+}

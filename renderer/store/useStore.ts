@@ -188,6 +188,7 @@ export const useStore = create<AppState>((set) => ({
   },
   startTask: async (hwnd) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
+    console.log('startTask - 任务启动', hwnd);
     return await window.fohelp.startTask(hwnd);
   },
   cancelBootstrap: async (hwnd) => {
