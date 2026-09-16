@@ -137,13 +137,6 @@ let _dm: any = null;
 void _dm;
 const _waitForConfig = init.waitForConfig === true;
 let _startResolve: (() => void) | null = null;
-/**
- * ⚠️ Race-condition fix: 父进程可能在 worker 进 main() / 设 _startResolve 之前
- * 就把 start-task 命令发过来了。这种情况下原代码只是 warn 然后丢弃,导致 worker
- * 永远卡在 `await new Promise(...)`。这里把"想启动"这件事暂存,等到 _waitForConfig
- * 阶段执行 _startResolve 设置时再自检一次,一旦 _pendingStart 为 true 立即 resolve。
- */
-let _pendingStart = false;
 
 function sendLog(level: string, msg: string) {
   process.parentPort!.postMessage({ type: 'log', level, msg });
@@ -376,15 +369,8 @@ async function main() {
     setStatus('pending', '等待启动');
     await new Promise<void>((resolve) => {
       _startResolve = resolve;
-      // Race-condition 自检:start-task 可能在 _startResolve 注册前就到了
-      if (_pendingStart) {
-        _pendingStart = false;
-        sendLog('info', '从 _pendingStart 取出暂存的 start-task,立即放行');
-        resolve();
-      }
     });
     _startResolve = null;
-    _pendingStart = false;
     sendLog('info', '收到 start-task,开始执行任务');
   }
 
@@ -398,20 +384,22 @@ async function main() {
   sendLog('info', 'UtilityWorker 主循环结束');
 }
 
-process.parentPort.on('message', (msg: any) => {
-  if (msg.type === 'command') {
+process.parentPort.on('message', (event: any) => {
+  // Electron 32.x UtilityProcess 把父进程发来的消息包成 MessageEvent 形状
+  //   { data: <payload>, ports: [] }
+  // 这跟 Node 标准 worker_threads.parentPort API 不一致(Node 应当 unwrap),
+  // 解包一下保持正常使用
+  const msg =
+    event && typeof event === 'object' && 'data' in event && 'ports' in event ? event.data : event;
+  console.log('收到消息:', msg?.type);
+  if (msg?.type === 'command') {
     switch (msg.command) {
       case 'start-task':
         sendLog('info', '收到 start-task');
         if (_startResolve) {
-          // 正常路径:_startResolve 已注册,直接 resolve 让 main() 走完
           _startResolve();
         } else if (_waitForConfig) {
-          // Race-condition:_waitForConfig 为真但 main() 还没走到 await Promise
-          //   (即还在 loadDamoo / bindWindow / takeAndSendThumbnail / OCR 等阶段)
-          //   暂存意图,等 main() 创建 Promise 时自检
-          _pendingStart = true;
-          sendLog('warn', 'start-task 在 _waitForConfig 早期到达,暂存到 _pendingStart');
+          sendLog('warn', '收到 start-task,但 _startResolve 还没注册(bootstrap 未到位)');
         } else {
           sendLog('warn', '收到 start-task,但 worker 未在等待状态(可能已启动)');
         }
