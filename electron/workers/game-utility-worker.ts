@@ -137,6 +137,13 @@ let _dm: any = null;
 void _dm;
 const _waitForConfig = init.waitForConfig === true;
 let _startResolve: (() => void) | null = null;
+/**
+ * ⚠️ Race-condition 兜底: spawn 后几百毫秒 主进程可能立刻 postMessage start-task,
+ *   此时 worker 还在 loadDamoo 同步阶段(_startResolve 还是 null)。实测 dm.dll 加载
+ *   要 2~3s,触发窗口很大。
+ *   暂存这次 start-task,等 Promise executor 设 _startResolve 时自检补回。
+ */
+let _pendingStart = false;
 
 function sendLog(level: string, msg: string) {
   process.parentPort!.postMessage({ type: 'log', level, msg });
@@ -369,8 +376,15 @@ async function main() {
     setStatus('pending', '等待启动');
     await new Promise<void>((resolve) => {
       _startResolve = resolve;
+      // Race-condition 自检: start-task 可能在 _startResolve 注册前就到了
+      if (_pendingStart) {
+        _pendingStart = false;
+        sendLog('info', '从 _pendingStart 取出暂存的 start-task,立即放行');
+        resolve();
+      }
     });
     _startResolve = null;
+    _pendingStart = false;
     sendLog('info', '收到 start-task,开始执行任务');
   }
 
@@ -397,9 +411,12 @@ process.parentPort.on('message', (event: any) => {
       case 'start-task':
         sendLog('info', '收到 start-task');
         if (_startResolve) {
+          // 正常路径: _startResolve 已注册, 直接 resolve 让 main() 走完
           _startResolve();
         } else if (_waitForConfig) {
-          sendLog('warn', '收到 start-task,但 _startResolve 还没注册(bootstrap 未到位)');
+          // Race-condition: _startResolve 还没注册, 暂存让 main() 创建 Promise 时自检
+          _pendingStart = true;
+          sendLog('warn', 'start-task 在 _waitForConfig 早期到达, 暂存到 _pendingStart');
         } else {
           sendLog('warn', '收到 start-task,但 worker 未在等待状态(可能已启动)');
         }
