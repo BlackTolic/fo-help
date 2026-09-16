@@ -20,14 +20,30 @@ interface Logger {
 let _pino: any = null;
 function getPino() {
   if (_pino) return _pino;
+
+  // 仅 dev + 主进程 + 真 TTY 才开 pino-pretty transport
+  // utilityProcess 把 stdio 设成 pipe 时,worker thread transport 拿不到 destination
+  //   → 报 "unable to determine transport target"
+  // 用 sync: true 跑在主线程里,顺手 destination: 1 (stdout) 显式指定
+  const useTransport =
+    isDev && process.stdout?.isTTY === true && typeof process.send !== 'function';
+
   _pino = pino({
     level: process.env.LOG_LEVEL || (isDev ? 'debug' : 'info'),
-    transport: isDev
+    ...(useTransport
       ? {
-          target: 'pino-pretty',
-          options: { colorize: true, translateTime: 'HH:MM:ss.l', ignore: 'pid,hostname' },
+          transport: {
+            target: 'pino-pretty',
+            options: {
+              colorize: true,
+              translateTime: 'HH:MM:ss.l',
+              ignore: 'pid,hostname',
+              destination: 1,
+              sync: true,
+            },
+          },
         }
-      : undefined,
+      : {}),
   });
   return _pino;
 }
