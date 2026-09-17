@@ -120,6 +120,10 @@ export function TaskConfigDialog({
   );
   const [taskName, setTaskName] = useState(initialTaskName ?? '');
   const [nameError, setNameError] = useState<string | null>(null);
+  // config 步骤直接保存(编辑模式)的错误显示 — name 步骤走的是 nameError,这里独立
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // 编辑模式直接保存时的 loading,防用户连点
+  const [saving, setSaving] = useState(false);
   const [taskType, setTaskType] = useState<TaskType | null>(initialConfig?.type ?? null);
   // 内嵌"历史任务"弹窗(只读模式下不显示入口)
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -200,16 +204,32 @@ export function TaskConfigDialog({
   };
 
   /**
-   * 跳转到命名步骤 — Electron 禁用了 window.prompt(),改成 inline UI
-   * 自动生成默认名字:任务-<hwnd>-<日期>,用户可改
-   *
-   * 编辑模式(initialTaskName) → 预填锁定的名字,跳到 name 步骤,
-   *   用户看着 input (disabled) 直接按确认。
+   * "保存配置"按钮(footer):
+   * - 新建模式 → 跳到 name 步骤让用户起名字(Electron 不支持 window.prompt)
+   * - 编辑模式(initialTaskName) → 名字已锁定,跳过 name,**直接调 onSaved 持久化**
+   *   失败时 setSaveError 在 config 步骤顶部展示红色 banner
+   *   成功由父组件(HistoryTaskDialog)关 dialog + 刷新 history 列表
    */
-  const handleSave = () => {
-    if (readOnly) return;
+  const handleSave = async () => {
+    if (readOnly || saving) return;
+    setSaveError(null);
+    if (initialTaskName) {
+      // 编辑历史任务:跳过命名步骤,直接持久化(不启动 worker)
+      setSaving(true);
+      try {
+        const config = buildConfig();
+        const res = await onSaved(config, initialTaskName);
+        if (res && res.ok === false) {
+          setSaveError(res.error || '保存失败');
+        }
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    // 新建:跳到 name 步骤输入名字
     setNameError(null);
-    setTaskName(initialTaskName ?? `任务-${hwnd}-${new Date().toLocaleDateString()}`);
+    setTaskName(`任务-${hwnd}-${new Date().toLocaleDateString()}`);
     setStep('name');
   };
 
@@ -378,6 +398,13 @@ export function TaskConfigDialog({
             </>
           )}
 
+          {/* 编辑模式下直接保存失败时的错误展示(不进 name 步骤) */}
+          {step === 'config' && saveError && (
+            <div className="mb-3 text-[12px] text-accent-red bg-accent-red/10 border border-accent-red/30 rounded px-3 py-2">
+              {saveError}
+            </div>
+          )}
+
           {step === 'config' && taskType === 'farm' && (
             <FarmConfig
               readOnly={readOnly}
@@ -511,6 +538,21 @@ export function TaskConfigDialog({
               </button>
               {step === 'config' && (
                 <div className="flex items-center gap-2">
+                  {/* "保存配置" / "确定"按钮:持久化到磁盘
+                      - 新建模式:文案"保存配置",会跳到 name 步骤让用户起名字
+                      - 编辑模式(initialTaskName):文案"确定",直接保存 + 关闭 */}
+                  <button
+                    onClick={() => void handleSave()}
+                    disabled={saving}
+                    className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={
+                      initialTaskName
+                        ? '保存修改后的历史任务(不启动 worker)'
+                        : '执行并保存当前任务，以便下次直接在“历史任务”中使用'
+                    }
+                  >
+                    {initialTaskName ? (saving ? '保存中...' : '确定') : '存为记忆'}
+                  </button>
                   {/* "确认"按钮:仅写内存,不持久化(关闭 app 丢,新流程会启动 worker) */}
                   {onConfirm && (
                     <button
@@ -518,18 +560,9 @@ export function TaskConfigDialog({
                       className="btn btn-secondary flex items-center gap-1.5"
                       title="不保存到磁盘,只在当前会话记住这个配置(关 app 后丢)"
                     >
-                      <Check size={14} />
                       确认
                     </button>
                   )}
-                  {/* "保存配置"按钮:持久化到磁盘(新流程会弹窗输入名字) */}
-                  <button
-                    onClick={handleSave}
-                    className="btn btn-primary flex items-center gap-1.5"
-                  >
-                    <Check size={14} />
-                    保存配置
-                  </button>
                 </div>
               )}
               {step === 'name' && (

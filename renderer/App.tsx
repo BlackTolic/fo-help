@@ -1,7 +1,14 @@
 // 主面板
 
 import { useEffect } from 'react';
-import { RefreshCw, Activity, AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
+import {
+  RefreshCw,
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  ShieldCheck,
+} from 'lucide-react';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
 

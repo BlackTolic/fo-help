@@ -14,3 +14,10 @@ pnpm-lock.yaml
 .vscode/
 .idea/
 *.d.ts
+# pino-pretty 运行时的临时调试文件
+__logger_*_*.cjs
+_diag.js
+# electron-builder 产物
+release/
+*.exe
+*.blockmap

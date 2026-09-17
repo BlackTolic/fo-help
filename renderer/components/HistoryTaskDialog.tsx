@@ -79,7 +79,6 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                   <div
                     key={stored.name}
                     className="flex items-center gap-3 p-3 rounded border bg-bg-input border-border-base hover:border-accent-cyan/50"
-                    onClick={() => onApply(stored)}
                     title={`点击将此任务应用到 hwnd ${currentHwnd}`}
                   >
                     <Icon size={18} className="text-text-secondary flex-shrink-0" />

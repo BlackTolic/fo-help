@@ -21,6 +21,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md,css,html}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,css,html}\"",
+    "verify": "npm run typecheck && npm run lint && npm run format:check",
     "package": "npm run build && electron-builder"
   },
   "dependencies": {

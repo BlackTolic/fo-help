@@ -20,6 +20,10 @@ export default [
       'assets/dll/**', // 二进制,根本不解析
       '*.min.js',
       'coverage/**',
+      // pino-pretty 运行时会动态生成 __logger_*_*.cjs / _diag.js 临时文件(用于 inspect/format 调试)
+      // 不参与源码 lint,统一忽略
+      '__logger_*_*.cjs',
+      '_diag.js',
     ],
   },
 
