@@ -224,22 +224,30 @@ function setupIpc() {
     RequestChannel.BootstrapWorker,
     async (
       _e,
-      payload: { hwnd: number; characterName: string },
+      payload: {
+        hwnd: number;
+        characterName: string;
+        taskType?: import('../shared/types').TaskType;
+        taskConfig?: any;
+      },
     ): Promise<{
       ok: boolean;
       dataUrl?: string | null;
       characterName?: string;
       error?: string;
     }> => {
-      console.log(`[IPC] BootstrapWorker hwnd=${payload.hwnd}`);
+      console.log(
+        `[IPC] BootstrapWorker hwnd=${payload.hwnd} taskType=${payload.taskType ?? 'farm'}`,
+      );
       try {
         if (!thumbnailService) thumbnailService = new ThumbnailService();
         if (!workerManager) workerManager = new WorkerManager(thumbnailService);
-        // 不再读 profile,worker 用默认 profile + taskConfig 覆盖
         const { dataUrl, characterName } = await workerManager.bootstrap(
           payload.hwnd,
           payload.characterName,
           null,
+          payload.taskType ?? 'farm',
+          payload.taskConfig ?? null,
         );
         console.log(
           `[IPC] BootstrapWorker OK hwnd=${payload.hwnd} thumb=${dataUrl ? 'yes' : 'no'}`,

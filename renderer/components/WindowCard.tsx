@@ -15,7 +15,13 @@ import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from
 import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
-import type { GameWindow, TaskConfig, WorkerState, StoredTaskConfig } from '../../shared/types';
+import type {
+  GameWindow,
+  TaskConfig,
+  TaskType,
+  WorkerState,
+  StoredTaskConfig,
+} from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -25,7 +31,18 @@ interface Props {
   taskConfig?: TaskConfig | null;
   /** 当前已应用的任务名(用户自定义,显示在卡片上) */
   appliedTaskName?: string | null;
-  onBootstrap: (hwnd: number, characterName: string) => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Bootstrap 模式启动 worker(返回 thumbnail + characterName)
+   * 透传 taskType + taskConfig(默认 'farm' + null),
+   * 让 worker 进入 idle 时 init.taskType 是用户真正的任务类型,
+   * 后续点启动才会跑对应的引擎(farm = combat.start, default-skill = runDefaultSkill ...)
+   */
+  onBootstrap: (
+    hwnd: number,
+    characterName: string,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig,
+  ) => Promise<{ ok: boolean; error?: string }>;
   onCancelBootstrap: (hwnd: number) => void;
   onStartTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
   onStop: (workerId: string) => void;
@@ -131,22 +148,39 @@ export function WindowCard({
 
   /**
    * 选中历史任务后:加载配置 + 应用到当前 hwnd + 启动 worker
-   * 如果已有 worker(可复用),只发 startTask;否则先 bootstrap
+   * 关键:bootstrap 时必须传 stored.config.type + stored.config,worker 的
+   * init.taskType 才会匹配上,start-task 时才会跑对应引擎
+   * (不传的话主进程默认 'farm',即使 config 是 default-skill 也会被 farm 抢跑)
    */
   const handleHistorySelect = async (stored: StoredTaskConfig) => {
     setHistoryOpen(false);
     setError(null);
     onApplyConfig(gameWindow.hwnd, stored.config, stored.name);
 
-    if (worker) {
-      // 已有 worker,直接发 start-task(等 worker ready,最多 30s)
+    // 如果已有 worker 但 taskType 不匹配(比如之前用了 'farm' 预览,现在想跑 default-skill),
+    // 任务类型不一致的 worker 不能复用,先停掉重新 bootstrap
+    let liveWorker = worker;
+    if (liveWorker && liveWorker.taskType !== stored.config.type) {
+      await onCancelBootstrap(gameWindow.hwnd);
+      // 给 worker 一点时间真正退出(byHwnd 清理)
+      await new Promise((r) => setTimeout(r, 200));
+      liveWorker = undefined;
+    }
+
+    if (liveWorker) {
+      // 已有同类型 worker,直接发 start-task
       const startRes = await onStartTask(gameWindow.hwnd);
       if (!startRes.ok) {
         alert(`启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
       }
     } else {
-      // 还没有 worker:bootstrap + 自动 startTask
-      const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
+      // 还没有(或刚被 kill)正确 taskType 的 worker:bootstrap + 自动 startTask
+      const res = await onBootstrap(
+        gameWindow.hwnd,
+        characterName || '角色',
+        stored.config.type,
+        stored.config,
+      );
       if (!res.ok) {
         setError(res.error || '启动 worker 失败');
         return;
@@ -179,6 +213,11 @@ export function WindowCard({
   /**
    * "保存配置":接收 dialog 传来的 name(替代 Electron 不支持的 window.prompt)
    * 持久化到磁盘 + 自动 startTask;重名拒绝,返回 error 让 dialog 留在 name 步骤
+   *
+   * 关键修复:如果现有 worker 是不同 taskType(例:用户先点了"创建任务" → bootstrap 了一个
+   * 'farm' worker 拿 thumbnail,现在保存的是 'default-skill'),
+   * 直接 startTask 会跑老 taskType。
+   * 所以这里检测不匹配 → 停掉旧 worker → 用新 taskType 重新 bootstrap → startTask。
    */
   const handleTaskSaved = async (
     config: TaskConfig,
@@ -193,14 +232,38 @@ export function WindowCard({
       // 重名或其他错误 — 返回 error,dialog 停留在 name 步骤让用户改名重试
       return { ok: false, error: res.error };
     }
-    // 保存成功:应用到当前 hwnd + 关 dialog + 自动 startTask(等 worker ready)
+    // 保存成功:应用到当前 hwnd + 关 dialog
     onApplyConfig(gameWindow.hwnd, config, trimmed);
     setDialogOpen(false);
     setAutoStartAfterClose(false);
-    const startRes = await onStartTask(gameWindow.hwnd);
-    if (!startRes.ok) {
-      // startTask 失败(worker 未 ready 超时等)— 提示用户
-      alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
+
+    // 如果现有 worker 的 taskType 与新 config 不一致,先停掉再重新 bootstrap
+    let liveWorker = worker;
+    if (liveWorker && liveWorker.taskType !== config.type) {
+      await onCancelBootstrap(gameWindow.hwnd);
+      await new Promise((r) => setTimeout(r, 200));
+      liveWorker = undefined;
+    }
+
+    if (liveWorker) {
+      // 已有同类型 worker,直接 start-task
+      const startRes = await onStartTask(gameWindow.hwnd);
+      if (!startRes.ok) {
+        alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
+      }
+    } else {
+      // 没有 worker(或刚被 kill 错类型)→ bootstrap with correct type
+      const bRes = await onBootstrap(gameWindow.hwnd, characterName || '角色', config.type, config);
+      if (!bRes.ok) {
+        alert(
+          `已保存任务,但 bootstrap 失败: ${bRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`,
+        );
+        return { ok: true };
+      }
+      const startRes = await onStartTask(gameWindow.hwnd);
+      if (!startRes.ok) {
+        alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
+      }
     }
     return { ok: true };
   };

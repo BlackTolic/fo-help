@@ -344,6 +344,7 @@ async function main() {
   } catch {}
 
   const profile = init.profile || DEFAULT_PROFILE;
+  // 合并任务配置中的 findMob 关键字到 profile 中
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
     profile.combat = profile.combat || {};
     profile.combat.mobFilter = {

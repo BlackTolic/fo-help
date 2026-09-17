@@ -71,12 +71,24 @@ const api = {
   ): Promise<{ ok: boolean; workerId?: string; error?: string }> =>
     ipcRenderer.invoke(RequestChannel.StartWorker, { hwnd, characterName, taskType }),
 
-  /** Bootstrap 模式:启动 worker 但停在 idle,等 thumbnail + start-task */
+  /**
+   * Bootstrap 模式:启动 worker 但停在 idle,等 thumbnail + start-task
+   * taskType + taskConfig 由上层传过来(默认 'farm' + null):
+   *   - 加载历史任务时:taskType=stored.config.type, taskConfig=stored.config
+   *   - 创建新任务时:可不传,worker 仅作 thumbnail 预览用途
+   */
   bootstrapWorker: (
     hwnd: number,
     characterName: string,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig,
   ): Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }> =>
-    ipcRenderer.invoke(RequestChannel.BootstrapWorker, { hwnd, characterName }),
+    ipcRenderer.invoke(RequestChannel.BootstrapWorker, {
+      hwnd,
+      characterName,
+      taskType,
+      taskConfig,
+    }),
 
   /** 给已 bootstrap 的 worker 发送开始命令，进入战斗流程。 */
   startTask: (hwnd: number): Promise<{ ok: boolean; error?: string }> =>

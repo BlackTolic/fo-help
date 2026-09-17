@@ -18,10 +18,16 @@ interface FohelpAPI {
     characterName: string,
     taskType: TaskType,
   ) => Promise<{ ok: boolean; workerId?: string; error?: string }>;
-  /** Bootstrap 模式:启动 worker 停在 idle 等命令,返回 thumbnail + characterName */
+  /**
+   * Bootstrap 模式:启动 worker 停在 idle 等命令,返回 thumbnail + characterName
+   * taskType + taskConfig 不传时默认 'farm' + null(只是要 thumbnail,不强求正确);
+   * 上层要精确启动默认技能/历史任务等,必须传。
+   */
   bootstrapWorker: (
     hwnd: number,
     characterName: string,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
   /** 给已 bootstrap 的 worker 发 start-task,进入战斗 */
   startTask: (hwnd: number) => Promise<{ ok: boolean }>;

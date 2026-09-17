@@ -184,8 +184,8 @@ function App() {
                   characterName={characterNames.get(win.hwnd)}
                   taskConfig={taskConfigs.get(win.hwnd) || null}
                   appliedTaskName={appliedTaskNames.get(win.hwnd) || null}
-                  onBootstrap={async (hwnd, name) => {
-                    const res = await bootstrapWorker(hwnd, name);
+                  onBootstrap={async (hwnd, name, taskType, taskConfig) => {
+                    const res = await bootstrapWorker(hwnd, name, taskType, taskConfig);
                     return { ok: res.ok, error: res.error };
                   }}
                   onCancelBootstrap={cancelBootstrap}

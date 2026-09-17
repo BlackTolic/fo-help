@@ -1,6 +1,12 @@
 // 全局应用状态
 import { create } from 'zustand';
-import type { GameWindow, WorkerState, TaskConfig, StoredTaskConfig } from '../../shared/types';
+import type {
+  GameWindow,
+  TaskType,
+  WorkerState,
+  TaskConfig,
+  StoredTaskConfig,
+} from '../../shared/types';
 
 interface LogEntry {
   id: number;
@@ -63,10 +69,16 @@ interface AppState {
   // Workers
   workers: Map<string, WorkerState>;
   startWorker: (hwnd: number, characterName: string, taskType: string) => Promise<void>;
-  /** Bootstrap 模式启动 worker:返回 ok + thumbnail + characterName(失败带 error) */
+  /**
+   * Bootstrap 模式启动 worker:返回 ok + thumbnail + characterName(失败带 error)
+   * taskType/taskConfig 不传时主进程默认 'farm' + null (只是预览 thumbnail);要精确
+   * 启动默认技能等历史任务时,必须从 stored.config 取了再传。
+   */
   bootstrapWorker: (
     hwnd: number,
     characterName: string,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
   /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s) */
   startTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
@@ -213,9 +225,9 @@ export const useStore = create<AppState>((set) => ({
       set({ workers: map });
     }
   },
-  bootstrapWorker: async (hwnd, characterName) => {
+  bootstrapWorker: async (hwnd, characterName, taskType, taskConfig) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.bootstrapWorker(hwnd, characterName);
+    const res = await window.fohelp.bootstrapWorker(hwnd, characterName, taskType, taskConfig);
     if (res.ok) {
       if (res.dataUrl) {
         useStore.getState().setThumbnail(hwnd, res.dataUrl);

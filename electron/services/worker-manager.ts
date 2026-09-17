@@ -13,7 +13,7 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
 import path from 'path';
 import { app } from 'electron';
-import type { WorkerState, TaskName, TaskType } from '../../shared/types';
+import type { WorkerState, TaskName, TaskType, TaskConfig } from '../../shared/types';
 import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
 import { ThumbnailService } from './thumbnail-service';
@@ -199,11 +199,17 @@ export class WorkerManager {
    *   2. 否则以 waitForConfig=true 启动新 worker,等 thumbnail 推送 / alert 状态
    *   3. 任何路径都返回 Promise<{dataUrl, characterName}>
    *   4. alert(大漠/绑定失败)/ 15s 超时 -> reject
+   *
+   * taskType 默认 'farm'(只是要预览 thumbnail,实际不会进入战斗循环)
+   * 真正 start-task 时,worker 用的是 init.taskType,所以上层(WindowCard.handleTaskSaved
+   * / handleHistorySelect)必须保证拿到正确 taskType 重新 bootstrap,不要信任默认。
    */
   bootstrap(
     hwnd: number,
     characterName: string,
     profile: any | null,
+    taskType: TaskType = 'farm',
+    taskConfig: TaskConfig | null = null,
   ): Promise<{ dataUrl: string | null; characterName: string }> {
     return new Promise((resolve, reject) => {
       const existingWid = this.byHwnd.get(hwnd);
@@ -235,7 +241,7 @@ export class WorkerManager {
 
       // 新启动(bootstrap 模式)
       const t0 = Date.now();
-      const wid = this.start(hwnd, characterName, 'farm', profile, null, true);
+      const wid = this.start(hwnd, characterName, taskType, profile, taskConfig, true);
       const m = this.workers.get(wid)!;
       log.info(`[WorkerManager] bootstrap start: hwnd=${hwnd}, fork 耗时 ${Date.now() - t0}ms`);
 
