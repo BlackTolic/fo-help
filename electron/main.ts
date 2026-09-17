@@ -336,6 +336,33 @@ function cleanupThumbs(): void {
   }
 }
 
+/**
+ * 清理 dm.dll 加载时留下的辅助文件
+ *
+ * dm.dll v7.2543 在完整初始化后会提取辅助 dll/exe 到同目录(assets/dll/),
+ * 名称随机(如 `454c1.dll` / `efe2b.exe`),utilityProcess 子进程退出时不会清理。
+ * 每次启动都会重新生成,留在 git 里就是 untracked。
+ *
+ * 这里保留 dm.dll 本体,删除其它文件。
+ */
+function cleanupDmDllSideFiles(): void {
+  const dllDir = path.join(app.getAppPath(), 'assets', 'dll');
+  if (!fs.existsSync(dllDir)) return;
+  let removed = 0;
+  for (const f of fs.readdirSync(dllDir)) {
+    if (f.toLowerCase() === 'dm.dll') continue;  // 保留主 dll
+    try {
+      fs.unlinkSync(path.join(dllDir, f));
+      removed++;
+    } catch {
+      /* 文件可能被占用,下次再试 */
+    }
+  }
+  if (removed > 0) {
+    console.log(`[dm-dll] 清理 ${removed} 个 dm.dll 辅助文件`);
+  }
+}
+
 // 启动 app
 app.whenReady().then(() => {
   // 缩略图目录 + 自定义协议
@@ -385,10 +412,12 @@ app.on('window-all-closed', () => {
   workerManager?.shutdownAll();
   thumbnailService?.clearAll();
   cleanupThumbs();
+  cleanupDmDllSideFiles();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
   workerManager?.shutdownAll();
   thumbnailService?.clearAll();
+  cleanupDmDllSideFiles();
 });

@@ -1,10 +1,25 @@
 // 统一日志抽象
-// Node 端用 pino,浏览器端用 console 包装(API 兼容)
+// Node 端用 pino + 自定义 transport(在 worker_thread 跑,格式化 + 写文件不阻塞主线程)
+// 浏览器端用 console 包装(API 兼容)
+//
+// 输出格式: HH:MM:ss.SSS [LEVEL] [component] msg [key=value ...]
+//   - 时间:ISO 字符串切片 11-23 位,毫秒精度
+//   - LEVEL:5 字符宽度,加粗,按级别颜色
+//     trace=gray, debug=cyan, info=green, warn=yellow, error=red, fatal=magenta
+//   - component:暗色,方括号包裹
+//   - msg:正常颜色
+//   - 结构化字段(extra):key=value 拼在 msg 后
+//
+// 非 TTY 时(管道/重定向/子进程 stdout)自动剥除 ANSI 颜色码,方便日志聚合
 
 import pino from 'pino';
+import path from 'path';
+
+// 自定义 transport(单独文件):pino transport 在 worker_thread 跑,函数不能
+// postMessage 序列化。target 必须是模块路径。
+const TRANSPORT_PATH = path.join(__dirname, 'logger-format.js');
 
 const isDev = process.env.NODE_ENV !== 'production';
-// 用 typeof 检查环境,避免 SSR/Worker 出错
 const isRenderer =
   typeof (globalThis as any).window !== 'undefined' &&
   typeof (globalThis as any).document !== 'undefined';
@@ -21,26 +36,17 @@ let _pino: any = null;
 function getPino() {
   if (_pino) return _pino;
 
-  // 仅 dev + 主进程 + 真 TTY 才开 pino-pretty transport
-  // utilityProcess 把 stdio 设成 pipe 时,worker thread transport 拿不到 destination
-  //   → 报 "unable to determine transport target"
-  // 用 sync: true 跑在主线程里,顺手 destination: 1 (stdout) 显式指定
-  const useTransport =
-    isDev && process.stdout?.isTTY === true && typeof process.send !== 'function';
+  // dev 用自定义 transport(logger-format.js 提供 ANSI 颜色 + 自定义格式)
+  // production 用默认 JSON(便于日志聚合)
+  const useTransport = isDev;
 
   _pino = pino({
     level: process.env.LOG_LEVEL || (isDev ? 'debug' : 'info'),
     ...(useTransport
       ? {
           transport: {
-            target: 'pino-pretty',
-            options: {
-              colorize: true,
-              translateTime: 'HH:MM:ss.l',
-              ignore: 'pid,hostname',
-              destination: 1,
-              sync: true,
-            },
+            target: TRANSPORT_PATH,
+            options: {},
           },
         }
       : {}),
@@ -51,17 +57,17 @@ function getPino() {
 type ConsoleLevel = 'debug' | 'info' | 'warn' | 'error';
 
 function browserLogger(prefix: string): Logger {
+  // 浏览器端:用 console + 内置级别颜色(浏览器 DevTools 自动着色)
   const fn = (level: ConsoleLevel, args: any[]) => {
-    const allArgs = args.length > 0 ? [args[0], ...args.slice(1)] : args;
     const tag = `[${prefix}]`;
-    if (level === 'debug') console.log(tag, ...allArgs);
-    else if (level === 'info') console.info(tag, ...allArgs);
-    else if (level === 'warn') console.warn(tag, ...allArgs);
+    if (level === 'debug') console.log(tag, ...args);
+    else if (level === 'info') console.info(tag, ...args);
+    else if (level === 'warn') console.warn(tag, ...args);
     else {
-      if (allArgs[0] instanceof Error) {
-        console.error(tag, allArgs[0].message, allArgs[0].stack);
+      if (args[0] instanceof Error) {
+        console.error(tag, args[0].message, args[0].stack);
       } else {
-        console.error(tag, ...allArgs);
+        console.error(tag, ...args);
       }
     }
   };
@@ -89,6 +95,7 @@ function callPino(level: ConsoleLevel, p: any, msg: string | Error, args: any[])
 
 export function createLogger(component: string): Logger {
   if (isRenderer) return browserLogger(component);
+  // pino .child({ component }) 把 component 绑定到日志输出,transport 用 {component} 引用
   const p = getPino().child({ component });
   return {
     debug: (msg, ...args) => callPino('debug', p, msg, args),

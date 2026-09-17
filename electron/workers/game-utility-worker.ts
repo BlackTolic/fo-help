@@ -325,6 +325,7 @@ async function main() {
     }
   }
 
+  // OCR读取角色名称
   characterName = await readCharacterNameMock(init.characterName);
   sendLog('info', `OCR 角色名: ${characterName}`);
 
@@ -340,8 +341,7 @@ async function main() {
   // 这里再次检查避免进入战斗循环(否则一边 alert 一边还在打怪,语义矛盾)
   const captureOk = await takeAndSendThumbnail(init.hwnd);
   if (!captureOk) {
-    sendLog('error', `缩略图失败,终止 bootstrap(不再进入战斗循环)。耗时 ${Date.now() - tCap}ms`);
-    return;
+    sendLog('error', `缩略图失败。耗时 ${Date.now() - tCap}ms`);
   }
   sendLog('info', `thumbnail 发送完成 (耗时 ${Date.now() - tCap}ms)`);
 
