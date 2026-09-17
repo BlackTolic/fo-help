@@ -28,7 +28,8 @@ import { SkillManager } from '../../core/state/SkillManager';
 import { TargetFinder } from '../../core/combat/TargetFinder';
 import { CombatEngine, type CombatState } from '../../core/combat/CombatEngine';
 import { createLogger } from '../../core/logger';
-import type { TaskType, ScriptStatus, TaskName } from '../../shared/types';
+import type { TaskType, ScriptStatus, TaskName, DefaultSkillTaskConfig } from '../../shared/types';
+import { parseKeyCombo } from '../../shared/key-combo';
 
 const log = createLogger('utility-worker');
 
@@ -44,6 +45,84 @@ if (!process.parentPort) {
     process.stderr.write(`[FATAL] process.parentPort 不存在,此进程不是 utilityProcess\n`);
   } catch {}
   throw new Error('必须在 Electron utilityProcess 中运行');
+}
+
+async function runDefaultSkill(cfg: DefaultSkillTaskConfig): Promise<void> {
+  const steps = (cfg.steps || []).filter((s) => s.enabled !== false);
+  if (steps.length === 0) {
+    sendLog('warn', '缺省技能任务:steps 为空或全部禁用,直接结束');
+    setStatus('idle', '无可执行步骤');
+    return;
+  }
+  const loopCount = cfg.loopCount ?? 0; // 0 = 无限
+  const infinite = loopCount === 0;
+  sendLog(
+    'info',
+    `缺省技能循环开始: ${steps.length} 个步骤, 循环=${infinite ? '无限' : loopCount + ' 轮'}`,
+  );
+  setStatus('combat', `缺省技能: 第 1 轮 / ${infinite ? '∞' : loopCount}`);
+
+  let loop = 0;
+  while (_skillRunning && (infinite || loop < loopCount)) {
+    for (let i = 0; i < steps.length; i++) {
+      if (!_skillRunning) break;
+
+      // 暂停检查:在每一步之间等 resume
+      if (_skillPaused) {
+        setStatus('paused', `缺省技能: 第 ${loop + 1} 轮 第 ${i + 1} 步前暂停`);
+        await new Promise<void>((resolve) => {
+          _skillResumeResolve = resolve;
+        });
+      }
+      if (!_skillRunning) break;
+
+      const step = steps[i];
+      const parsed = parseKeyCombo(step.key);
+      if (!parsed) {
+        sendLog('warn', `缺省技能:不支持的按键 "${step.key}",跳过`);
+        continue;
+      }
+
+      // 执行按键:修饰键按下 → 主键 keyDown → 等 holdMs → 主键 keyUp → 修饰键抬起(反序)
+      try {
+        for (const m of parsed.modifiers) dmApi.keyDown(m);
+        dmApi.keyDown(parsed.mainVk);
+        await new Promise((r) => setTimeout(r, step.holdMs ?? 50));
+        dmApi.keyUp(parsed.mainVk);
+        for (let k = parsed.modifiers.length - 1; k >= 0; k--) {
+          dmApi.keyUp(parsed.modifiers[k]);
+        }
+      } catch (e: any) {
+        sendLog('error', `缺省技能按键失败 step=${i + 1} key=${step.key}: ${e.message}`);
+      }
+
+      // 步骤间间隔
+      if (step.intervalMs > 0 && i < steps.length - 1) {
+        await new Promise((r) => setTimeout(r, step.intervalMs));
+      } else if (step.intervalMs > 0 && i === steps.length - 1) {
+        // 最后一步也等 intervalMs,后面再统一等 loopIntervalMs(避免双倍等待)
+        await new Promise((r) => setTimeout(r, step.intervalMs));
+      }
+    }
+    if (!_skillRunning) break;
+
+    loop++;
+    _skillLoopCount = loop;
+    setStatus(
+      'combat',
+      `缺省技能: 第 ${infinite ? loop + 1 : Math.min(loop + 1, loopCount)} 轮 / ${infinite ? '∞' : loopCount}`,
+    );
+
+    // 轮间间隔
+    if (cfg.loopIntervalMs > 0 && (infinite || loop < loopCount)) {
+      await new Promise((r) => setTimeout(r, cfg.loopIntervalMs));
+    }
+  }
+
+  sendLog('info', `缺省技能循环结束,共执行 ${loop} 轮`);
+  _skillPaused = false;
+  _skillResumeResolve = null;
+  setStatus('idle', `缺省技能已结束(${loop} 轮)`);
 }
 
 /**
@@ -101,6 +180,7 @@ const taskNameMap: Record<TaskType, TaskName> = {
   'catch-pet': '捕捉宠物',
   refine: '装备炼化',
   reputation: '名誉任务',
+  'default-skill': '缺省技能',
 };
 
 const DEFAULT_PROFILE: any = {
@@ -137,6 +217,14 @@ let _dm: any = null;
 void _dm;
 const _waitForConfig = init.waitForConfig === true;
 let _startResolve: (() => void) | null = null;
+
+// ===== 缺省技能任务(default-skill)的运行控制 =====
+// 与 combat 解耦:缺省技能不依赖战斗引擎,自己管一个 while 循环
+let _skillRunning = true;
+let _skillPaused = false;
+let _skillResumeResolve: (() => void) | null = null;
+let _skillLoopCount = 0; // 已跑完多少轮(用于日志 + UI 状态)
+void _skillLoopCount;
 /**
  * ⚠️ Race-condition 兜底: spawn 后几百毫秒 主进程可能立刻 postMessage start-task,
  *   此时 worker 还在 loadDamoo 同步阶段(_startResolve 还是 null)。实测 dm.dll 加载
@@ -390,6 +478,15 @@ async function main() {
 
   if (init.taskType === 'farm') {
     await combat.start();
+  } else if (init.taskType === 'default-skill') {
+    // 缺省技能:走自己的按键循环(不依赖 combat)
+    const skillCfg = init.taskConfig as DefaultSkillTaskConfig | undefined;
+    if (!skillCfg || !Array.isArray(skillCfg.steps)) {
+      sendLog('error', '缺省技能任务缺少 taskConfig.steps,直接结束');
+      setStatus('alert', '缺省技能 config 缺失');
+    } else {
+      await runDefaultSkill(skillCfg);
+    }
   } else {
     sendLog('warn', `任务 ${init.taskType} 暂未实现,只跑挂机打怪`);
     await combat.start();
@@ -429,6 +526,13 @@ process.parentPort.on('message', (event: any) => {
           _startResolve = null;
         }
         combat?.stop();
+        // 缺省技能:让按键循环跳出(顺便解除暂停,避免卡在 await Promise)
+        _skillRunning = false;
+        _skillPaused = false;
+        if (_skillResumeResolve) {
+          _skillResumeResolve();
+          _skillResumeResolve = null;
+        }
         // utilityProcess 子进程:dm.dll 进程级副作用不影响其他子进程
         //   每个子进程独立加载 dm.dll,UnBindWindow 只影响自己
         try {
@@ -448,12 +552,24 @@ process.parentPort.on('message', (event: any) => {
           _startResolve = null;
         }
         combat?.stop();
+        // 缺省技能:仅置位 paused,runDefaultSkill 内部 await Promise 阻塞
+        if (init.taskType === 'default-skill') {
+          _skillPaused = true;
+        }
         setStatus('paused', '用户暂停');
         break;
       case 'resume':
         sendLog('info', '收到 resume');
         if (combat) {
           combat.start().catch((e) => sendLog('error', `resume 失败: ${e.message}`));
+        }
+        // 缺省技能:清 paused + resolve 暂停 Promise
+        if (init.taskType === 'default-skill') {
+          _skillPaused = false;
+          if (_skillResumeResolve) {
+            _skillResumeResolve();
+            _skillResumeResolve = null;
+          }
         }
         break;
       case 'screenshot':

@@ -30,6 +30,7 @@ const TASK_LABEL: Record<TaskType, { name: string; Icon: any }> = {
   'catch-pet': { name: '捕捉宠物', Icon: PawPrint },
   refine: { name: '装备炼化', Icon: Hammer },
   reputation: { name: '名誉任务', Icon: Trophy },
+  'default-skill': { name: '缺省技能', Icon: FileText },
 };
 
 interface Props {

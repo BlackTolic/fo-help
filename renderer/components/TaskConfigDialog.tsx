@@ -2,20 +2,23 @@
 // 两步:1.选任务类型(可从历史任务加载) 2.配置参数(挂机打怪详细,其他留白)
 
 import { useState } from 'react';
-import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History } from 'lucide-react';
+import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from 'lucide-react';
 import type {
   TaskType,
   TaskConfig,
   FarmTaskConfig,
   Waypoint,
   StoredTaskConfig,
+  DefaultSkillStep,
 } from '../../shared/types';
+import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
 import { useStore } from '../store/useStore';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
 
 const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] =
   [
     { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
+    { type: 'default-skill', name: '缺省技能', icon: '🎹', desc: '按键编排(F1-F12/Alt/Shift),纯按键循环', ready: true },
     { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
     { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
     { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
@@ -138,6 +141,12 @@ export function TaskConfigDialog({
   const [nameKeywords, setNameKeywords] = useState('野,狼,鸡,鹿,狐,猫');
   const [note, setNote] = useState('');
 
+  // 缺省技能配置
+  const [skillSteps, setSkillSteps] = useState<DefaultSkillStep[]>([]);
+  const [skillLoopCount, setSkillLoopCount] = useState(0); // 0 = 无限
+  const [skillLoopIntervalMs, setSkillLoopIntervalMs] = useState(1000);
+  const [skillNote, setSkillNote] = useState('');
+
   // 初始化(initialConfig 是 FarmTaskConfig 时回填)
   useState(() => {
     if (initialConfig?.type === 'farm') {
@@ -147,6 +156,12 @@ export function TaskConfigDialog({
       setWaypoints(initialConfig.waypoints || []);
       setNameKeywords(initialConfig.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
       setNote(initialConfig.note || '');
+    } else if (initialConfig?.type === 'default-skill') {
+      const c = initialConfig;
+      setSkillSteps(c.steps || []);
+      setSkillLoopCount(c.loopCount ?? 0);
+      setSkillLoopIntervalMs(c.loopIntervalMs ?? 1000);
+      setSkillNote(c.note || '');
     }
   });
 
@@ -198,6 +213,26 @@ export function TaskConfigDialog({
             .filter(Boolean),
         },
         note: note || undefined,
+      };
+    }
+    if (taskType === 'default-skill') {
+      // 过滤掉未启用的步骤 + 清掉空 id,保存前规范化
+      const cleaned: DefaultSkillStep[] = skillSteps
+        .filter((s) => s.enabled !== false)
+        .map((s) => ({
+          id: s.id,
+          key: s.key,
+          intervalMs: Math.max(0, s.intervalMs | 0),
+          holdMs: s.holdMs !== undefined ? Math.max(10, s.holdMs | 0) : undefined,
+          enabled: s.enabled !== false,
+          note: s.note,
+        }));
+      return {
+        type: 'default-skill',
+        steps: cleaned,
+        loopCount: Math.max(0, skillLoopCount | 0),
+        loopIntervalMs: Math.max(0, skillLoopIntervalMs | 0),
+        note: skillNote || undefined,
       };
     }
     return { type: taskType } as any;
@@ -426,17 +461,34 @@ export function TaskConfigDialog({
             />
           )}
 
-          {step === 'config' && taskType && taskType !== 'farm' && (
-            <div className="text-center py-12 text-text-secondary">
-              <div className="text-4xl mb-3 opacity-30">
-                {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
-              </div>
-              <div className="text-base mb-1">
-                {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
-              </div>
-              <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
-            </div>
+          {step === 'config' && taskType === 'default-skill' && (
+            <DefaultSkillConfig
+              readOnly={readOnly}
+              steps={skillSteps}
+              setSteps={setSkillSteps}
+              loopCount={skillLoopCount}
+              setLoopCount={setSkillLoopCount}
+              loopIntervalMs={skillLoopIntervalMs}
+              setLoopIntervalMs={setSkillLoopIntervalMs}
+              note={skillNote}
+              setNote={setSkillNote}
+            />
           )}
+
+          {step === 'config' &&
+            taskType &&
+            taskType !== 'farm' &&
+            taskType !== 'default-skill' && (
+              <div className="text-center py-12 text-text-secondary">
+                <div className="text-4xl mb-3 opacity-30">
+                  {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
+                </div>
+                <div className="text-base mb-1">
+                  {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
+                </div>
+                <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
+              </div>
+            )}
 
           {/* 命名步骤(替代 Electron 不支持的 window.prompt) — 创建流程专属 */}
           {step === 'name' && (
@@ -785,6 +837,286 @@ function FarmConfig(props: FarmConfigProps) {
           className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
         />
       </div>
+
+      {/* 备注 */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">备注(可选)</label>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          disabled={readOnly}
+          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan resize-none ${disabledCls}`}
+          placeholder="备注这个任务的特殊事项..."
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---- 缺省技能配置子组件 ----
+
+interface DefaultSkillConfigProps {
+  readOnly?: boolean;
+  steps: DefaultSkillStep[];
+  setSteps: (v: DefaultSkillStep[] | ((prev: DefaultSkillStep[]) => DefaultSkillStep[])) => void;
+  loopCount: number;
+  setLoopCount: (v: number) => void;
+  loopIntervalMs: number;
+  setLoopIntervalMs: (v: number) => void;
+  note: string;
+  setNote: (v: string) => void;
+}
+
+function DefaultSkillConfig(props: DefaultSkillConfigProps) {
+  const {
+    readOnly = false,
+    steps,
+    setSteps,
+    loopCount,
+    setLoopCount,
+    loopIntervalMs,
+    setLoopIntervalMs,
+    note,
+    setNote,
+  } = props;
+
+  const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
+
+  const addStep = () => {
+    if (readOnly) return;
+    const newStep: DefaultSkillStep = {
+      id: `step-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      key: 'F1',
+      intervalMs: 1000,
+      holdMs: 50,
+      enabled: true,
+    };
+    setSteps((ss) => [...ss, newStep]);
+  };
+
+  const removeStep = (id: string) => {
+    if (readOnly) return;
+    setSteps((ss) => ss.filter((s) => s.id !== id));
+  };
+
+  const moveStep = (id: string, dir: -1 | 1) => {
+    setSteps((ss) => {
+      const idx = ss.findIndex((s) => s.id === id);
+      if (idx < 0) return ss;
+      const newIdx = idx + dir;
+      if (newIdx < 0 || newIdx >= ss.length) return ss;
+      const next = [...ss];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  };
+
+  const updateStep = (id: string, patch: Partial<DefaultSkillStep>) => {
+    if (readOnly) return;
+    setSteps((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
+
+  // 单轮估算:每个 step 的 (holdMs + intervalMs)
+  const totalMsPerLoop = steps.reduce(
+    (sum, s) => sum + (s.holdMs ?? 50) + (s.enabled === false ? 0 : s.intervalMs),
+    0,
+  );
+
+  return (
+    <div className="space-y-5">
+      {/* 顶部说明 */}
+      <div className="rounded border border-accent-cyan/30 bg-accent-cyan/5 p-3 text-[12px] text-text-secondary space-y-1">
+        <div className="flex items-center gap-2">
+          <Keyboard size={14} className="text-accent-cyan" />
+          <span className="font-medium text-text-primary">按键编排</span>
+        </div>
+        <div>按数组顺序执行,跑完一轮后等待轮间间隔再开始下一轮。可临时禁用某步骤而不删除。</div>
+        <div className="text-text-muted">
+          支持 <span className="font-mono text-accent-cyan">F1-F12</span>、
+          <span className="font-mono text-accent-cyan"> Alt+F1-F12</span>、
+          <span className="font-mono text-accent-cyan"> Shift+F1-F10</span>
+        </div>
+      </div>
+
+      {/* 步骤列表 */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-sm text-text-secondary">
+            步骤列表 <span className="text-text-muted text-[11px]">(按顺序执行)</span>
+          </label>
+          {!readOnly && (
+            <button
+              onClick={addStep}
+              className="text-xs btn btn-secondary flex items-center gap-1"
+            >
+              <Plus size={12} />
+              添加步骤
+            </button>
+          )}
+        </div>
+
+        {steps.length === 0 ? (
+          <div className="text-center py-6 text-text-muted text-xs border border-dashed border-border-base rounded">
+            暂无步骤,点"添加步骤"开始编排
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {steps.map((step, i) => {
+              const valid = isValidKeyCombo(step.key);
+              return (
+                <div
+                  key={step.id}
+                  className={`flex items-center gap-1.5 bg-bg-input p-1.5 rounded ${
+                    step.enabled === false ? 'opacity-50' : ''
+                  }`}
+                >
+                  <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
+                  {!readOnly && (
+                    <input
+                      type="checkbox"
+                      checked={step.enabled !== false}
+                      onChange={(e) => updateStep(step.id, { enabled: e.target.checked })}
+                      title="启用 / 临时禁用"
+                      className="accent-accent-cyan"
+                    />
+                  )}
+                  <select
+                    value={valid ? step.key : '__invalid__'}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === '__invalid__') return;
+                      updateStep(step.id, { key: v });
+                    }}
+                    disabled={readOnly}
+                    className={`bg-bg-card border rounded px-1.5 py-0.5 text-xs outline-none ${
+                      valid ? 'border-border-base' : 'border-accent-red'
+                    } ${disabledCls}`}
+                    title={valid ? `已选: ${step.key}` : `不支持的按键: ${step.key}`}
+                  >
+                    {!valid && <option value="__invalid__">{step.key} (不支持)</option>}
+                    {ALL_KEY_COMBOS.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-text-muted text-[10px]">间隔</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={50}
+                    value={step.intervalMs}
+                    onChange={(e) =>
+                      updateStep(step.id, { intervalMs: parseInt(e.target.value) || 0 })
+                    }
+                    disabled={readOnly}
+                    className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                    title="抬起主键后到下一次按键的间隔(毫秒)"
+                  />
+                  <span className="text-text-muted text-[10px]">ms</span>
+                  <span className="text-text-muted text-[10px]">按住</span>
+                  <input
+                    type="number"
+                    min={10}
+                    step={10}
+                    value={step.holdMs ?? 50}
+                    onChange={(e) =>
+                      updateStep(step.id, { holdMs: parseInt(e.target.value) || 50 })
+                    }
+                    disabled={readOnly}
+                    className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                    title="按键按住的时长(毫秒,默认 50ms)"
+                  />
+                  <span className="text-text-muted text-[10px]">ms</span>
+                  <input
+                    type="text"
+                    placeholder="备注"
+                    value={step.note || ''}
+                    onChange={(e) => updateStep(step.id, { note: e.target.value })}
+                    disabled={readOnly}
+                    className={`flex-1 min-w-0 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                  />
+                  {!readOnly && (
+                    <>
+                      <button
+                        onClick={() => moveStep(step.id, -1)}
+                        disabled={i === 0}
+                        className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                        title="上移"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        onClick={() => moveStep(step.id, 1)}
+                        disabled={i === steps.length - 1}
+                        className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                        title="下移"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
+                      <button
+                        onClick={() => removeStep(step.id)}
+                        className="text-accent-red/70 hover:text-accent-red"
+                        title="删除该步骤"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 循环参数 */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-sm text-text-secondary mb-1.5 block">循环次数</label>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={loopCount}
+            onChange={(e) => setLoopCount(parseInt(e.target.value) || 0)}
+            disabled={readOnly}
+            className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+            placeholder="0 = 无限"
+          />
+          <div className="text-[10px] text-text-muted mt-1">0 = 无限循环(直到点停止)</div>
+        </div>
+        <div>
+          <label className="text-sm text-text-secondary mb-1.5 block">轮间间隔(毫秒)</label>
+          <input
+            type="number"
+            min={0}
+            step={100}
+            value={loopIntervalMs}
+            onChange={(e) => setLoopIntervalMs(parseInt(e.target.value) || 0)}
+            disabled={readOnly}
+            className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+          />
+          <div className="text-[10px] text-text-muted mt-1">
+            一轮跑完到下一轮的等待时间
+          </div>
+        </div>
+      </div>
+
+      {/* 单轮时长估算 */}
+      {steps.length > 0 && (
+        <div className="text-[11px] text-text-muted bg-bg-input/50 rounded px-3 py-1.5">
+          估算单轮时长:
+          <span className="font-mono text-accent-cyan ml-1">
+            {(totalMsPerLoop / 1000).toFixed(2)}s
+          </span>
+          <span className="ml-2">
+            ({steps.length} 步 × 平均{' '}
+            {steps.length > 0 ? Math.round(totalMsPerLoop / steps.length) : 0}ms)
+          </span>
+        </div>
+      )}
 
       {/* 备注 */}
       <div>

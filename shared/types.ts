@@ -20,7 +20,7 @@ export interface CharacterInfo {
 }
 
 /** 任务类型 */
-export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation';
+export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation' | 'default-skill';
 
 /** 脚本状态(主面板卡片显示) */
 export type ScriptStatus =
@@ -33,7 +33,13 @@ export type ScriptStatus =
   | 'paused'; // 暂停
 
 /** 任务名称(显示用) */
-export type TaskName = '挂机打怪' | '挖矿' | '捕捉宠物' | '装备炼化' | '名誉任务';
+export type TaskName =
+  | '挂机打怪'
+  | '挖矿'
+  | '捕捉宠物'
+  | '装备炼化'
+  | '名誉任务'
+  | '缺省技能';
 
 /** 路径点 */
 export interface Waypoint {
@@ -66,6 +72,52 @@ export interface FarmTaskConfig {
   note?: string;
 }
 
+/**
+ * 缺省技能任务步骤 — 一个"按键动作" + 它的执行参数
+ *
+ * 设计要点(数据驱动):
+ * - key 用字符串描述(F1/Alt+F2/Shift+F3),shared/key-combo.ts 提供解析
+ * - 按键后立刻 keyUp,不在 worker 里阻塞 — 防按住期间被检测
+ * - intervalMs = 按键抬起后到下一次按键的间隔(毫秒),用来调频率
+ * - holdMs = 按键按住时长(毫秒,可选),默认 50ms;有长按需求时调大
+ *
+ * 例:连击 F1 每 200ms 一次 = { key:'F1', intervalMs:200, holdMs:50 }
+ * 例:Alt+F1 慢放 = { key:'Alt+F1', intervalMs:1500, holdMs:80 }
+ */
+export interface DefaultSkillStep {
+  /** 唯一 id(数组 reorder / delete 用,不要给业务用) */
+  id: string;
+  /** 按键描述:F1~F12 / Alt+F1~F12 / Shift+F1~F10 */
+  key: string;
+  /** 按键之间的间隔(毫秒) — 抬起主键后等多久再按下一个 */
+  intervalMs: number;
+  /** 按键按住时长(毫秒,可选,默认 50ms) */
+  holdMs?: number;
+  /** 该步骤是否启用(临时禁用某个步骤不删它) */
+  enabled?: boolean;
+  /** 备注 */
+  note?: string;
+}
+
+/**
+ * 缺省技能任务配置
+ * - 按 steps 数组顺序执行,执行完一遍后等待 loopIntervalMs 再来一遍
+ * - loopCount = 0 表示无限循环(默认)
+ * - 没有 OCR / 战斗状态判定:纯按键编排,玩家自己承担"何时该按"的责任
+ *   (这是"缺省技能"名字的由来:把一组固定按键循环跑下去)
+ */
+export interface DefaultSkillTaskConfig {
+  type: 'default-skill';
+  /** 按键步骤(按数组顺序执行) */
+  steps: DefaultSkillStep[];
+  /** 循环次数,0 = 无限循环 */
+  loopCount: number;
+  /** 一轮 steps 跑完到下一轮之间的间隔(毫秒) */
+  loopIntervalMs: number;
+  /** 备注 */
+  note?: string;
+}
+
 /** 留白任务配置(后续实现) */
 export interface PlaceholderTaskConfig {
   type: 'mine' | 'catch-pet' | 'refine' | 'reputation';
@@ -73,7 +125,7 @@ export interface PlaceholderTaskConfig {
 }
 
 /** 任务配置联合类型 */
-export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig;
+export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTaskConfig;
 
 /** 任务配置存储(按"任务名"维度存储,跨窗口复用) */
 export interface StoredTaskConfig {

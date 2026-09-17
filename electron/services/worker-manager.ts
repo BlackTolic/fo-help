@@ -460,6 +460,7 @@ export class WorkerManager {
       'catch-pet': '捕捉宠物',
       refine: '装备炼化',
       reputation: '名誉任务',
+      'default-skill': '缺省技能',
     };
     return map[t];
   }
