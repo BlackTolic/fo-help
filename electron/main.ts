@@ -171,6 +171,17 @@ function setupIpc() {
     return taskConfigService.loadByName(name);
   });
 
+  /**
+   * 按 name 删除任务(从磁盘移除 JSON 文件)
+   * 返回: { ok: boolean, error?: string }
+   */
+  ipcMain.handle(RequestChannel.DeleteTaskConfig, (_e, name: string) => {
+    if (!taskConfigService) taskConfigService = new TaskConfigService();
+    if (!name) return { ok: false, error: '任务名不能为空' };
+    const ok = taskConfigService.deleteByName(name);
+    return ok ? { ok: true } : { ok: false, error: '任务不存在或删除失败' };
+  });
+
   // ---- Worker 相关 ----
   ipcMain.handle(
     RequestChannel.StartWorker,

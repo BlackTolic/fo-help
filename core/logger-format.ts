@@ -46,13 +46,38 @@ const LEVEL_LABELS: Record<number, string> = {
 
 const SKIP_KEYS = new Set(['time', 'level', 'component', 'msg', 'pid', 'hostname', 'v']);
 
+// 时区相关:进程启动时算一次,后续直接用,避免每行日志都算
+// pino 默认 ISO 字符串是 UTC(末尾 Z),但中国用户期望看到本地时间(如北京时间 UTC+8)
+// getTimezoneOffset() 返回本地时区与 UTC 的差值(分钟):
+//   - 北京 UTC+8 → 返回 -480(本地比 UTC 早 8 小时,差为负)
+//   - 纽约 UTC-5 → 返回 300
+// 所以 -getTimezoneOffset() 才是"本地相对 UTC 的偏移分钟数"
+const TZ_OFFSET_MIN = -new Date().getTimezoneOffset();
+const TZ_OFFSET_HHMM = (() => {
+  const sign = TZ_OFFSET_MIN >= 0 ? '+' : '-';
+  const abs = Math.abs(TZ_OFFSET_MIN);
+  const h = String(Math.floor(abs / 60)).padStart(2, '0');
+  const m = String(abs % 60).padStart(2, '0');
+  return `${sign}${h}:${m}`;
+})();
+
 function formatLog(log: any): string {
   // log.level 是数字(pino 标准),转成字符串 label
   const numLevel = log.level as number;
   const label = LEVEL_LABELS[numLevel] || (typeof log.level === 'string' ? log.level : 'info');
-  const ts = log.time
-    ? new Date(log.time).toISOString().slice(11, 23) // HH:MM:ss.SSS
-    : '--:--:--.---';
+  // 用本地时区格式化,末尾带时区标记(符合 ISO 8601 习惯)
+  //   toLocaleTimeString('zh-CN', { hour12: false }) 自动应用系统时区 → 北京 UTC+8
+  //   输出示例:"17:13:26" → 拼上 "+08:00" → "17:13:26 +08:00"
+  // 注意:toLocaleTimeString 不带毫秒,毫秒精度由 pino 在 ISO 里给(下面手动追加)
+  let ts: string;
+  if (log.time) {
+    const d = new Date(log.time);
+    const base = d.toLocaleTimeString('zh-CN', { hour12: false }); // HH:MM:ss
+    const ms = String(d.getMilliseconds()).padStart(3, '0');
+    ts = `${base}.${ms} ${TZ_OFFSET_HHMM}`;
+  } else {
+    ts = '--:--:--.--- +00:00';
+  }
   const paddedLabel = label.toUpperCase().padEnd(5);
   const lvlColor = LEVEL_COLORS[label] || '';
   const component = log.component || '';

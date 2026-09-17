@@ -20,6 +20,7 @@ export enum RequestChannel {
   // 任务配置
   SaveTaskConfig = 'task:save', // 新建(按 name 唯一存储,重名拒绝)
   UpdateTaskConfig = 'task:update', // 原地更新已有任务(保留 id/createdAt),用于历史任务编辑
+  DeleteTaskConfig = 'task:delete', // 按 name 删除任务(从磁盘移除 JSON 文件)
   GetTaskConfig = 'task:get', // 读任务配置(旧 API,新流程用 loadTaskByName)
   ListTaskConfigs = 'task:list', // 列出所有任务(旧 API,新流程用 listAllTaskConfigs)
   ListAllTaskConfigs = 'task:list-all', // 列出所有保存的任务(全局,按 name 去重)

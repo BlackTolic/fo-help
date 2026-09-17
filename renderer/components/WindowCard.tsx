@@ -254,7 +254,10 @@ export function WindowCard({
 
   const handleStop = () => {
     if (worker) onStop(worker.workerId);
-    // stop 后 worker exit,UI 自动回到 editable(worker 不再在 workers Map)
+    // stop 后直接清掉当前 hwnd 的应用配置,回到 unconfigured 页面状态
+    // (跟首次见到这个窗口一样,只有"创建任务"按钮)
+    // —— 不再走中间 editable(编辑配置 / 重新选择 / 放弃)
+    onClearConfig(gameWindow.hwnd);
   };
 
   return (

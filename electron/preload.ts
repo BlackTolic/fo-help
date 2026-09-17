@@ -146,6 +146,13 @@ const api = {
     ipcRenderer.invoke(RequestChannel.LoadTaskByName, name),
 
   /**
+   * 按 name 删除任务(从磁盘移除 JSON 文件)
+   * 用于历史任务列表的"删除"按钮
+   */
+  deleteTaskConfig: (name: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.DeleteTaskConfig, name),
+
+  /**
    * 原地更新已有任务的 config(保留 id/createdAt)
    * 用于历史任务编辑:保存到磁盘、不启动 worker
    */

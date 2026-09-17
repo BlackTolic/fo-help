@@ -49,6 +49,8 @@ interface AppState {
   ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
   /** 按 name 加载配置(从历史任务 dialog 选中时用) */
   loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
+  /** 按 name 删除任务,成功后刷新 history 列表 */
+  deleteTaskByName: (name: string) => Promise<{ ok: boolean; error?: string }>;
 
   // OCR 出来的角色名(按 hwnd 存)
   characterNames: Map<number, string>;
@@ -164,6 +166,21 @@ export const useStore = create<AppState>((set) => ({
   loadTaskByName: async (name) => {
     if (!window.fohelp) return null;
     return await window.fohelp.loadTaskByName(name);
+  },
+
+  deleteTaskByName: async (name) => {
+    if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
+    const res = await window.fohelp.deleteTaskConfig(name);
+    if (res.ok) {
+      // 刷新历史任务列表(被删的那条会消失)
+      try {
+        const list = await window.fohelp.listAllTaskConfigs();
+        set({ taskHistory: list });
+      } catch {
+        /* noop */
+      }
+    }
+    return res;
   },
 
   characterNames: new Map(),

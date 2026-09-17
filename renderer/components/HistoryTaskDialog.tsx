@@ -1,11 +1,25 @@
 // 历史任务 dialog:列出全局所有已保存的任务(按名字),
-// 选用 → 应用到当前 hwnd + 立即启动 任务
+// 启动 → 应用到当前 hwnd + 立即启动 任务(实心 cyan,最右,最醒目)
 // 编辑 → 弹 TaskConfigDialog 锁名字,保存后**不启动**,只更新磁盘
+// 删除 → 从磁盘移除该任务的 JSON 文件(二次确认)
+//
+// 按钮顺序(从左到右):[删除] [编辑] [启动]
 //
 // 数据来源:store.taskHistory(全局,跨窗口复用)
 
 import { useState } from 'react';
-import { X, FileText, Swords, Pickaxe, PawPrint, Hammer, Trophy, Pencil } from 'lucide-react';
+import {
+  X,
+  FileText,
+  Swords,
+  Pickaxe,
+  PawPrint,
+  Hammer,
+  Trophy,
+  Pencil,
+  Trash2,
+  Play,
+} from 'lucide-react';
 import type { TaskType, StoredTaskConfig, TaskConfig } from '../../shared/types';
 import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';
@@ -42,7 +56,12 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
    * 保存成功后切回 null,关闭编辑对话框,刷新 history 让 user 看到改动。
    */
   const [editing, setEditing] = useState<StoredTaskConfig | null>(null);
+  // 删除二次确认:点"删除"按钮后,该行展开为"确定 / 取消",再点确定才真删
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // 删除进行中(防重复点)
+  const [deleting, setDeleting] = useState(false);
   const updateTaskByName = useStore((s) => s.updateTaskByName);
+  const deleteTaskByName = useStore((s) => s.deleteTaskByName);
   const loadTaskHistory = useStore((s) => s.loadTaskHistory);
 
   return (
@@ -99,6 +118,56 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                         更新于 {new Date(stored.updatedAt).toLocaleString('zh-CN')}
                       </div>
                     </div>
+                    {/* 按钮顺序:[删除] [编辑] [启动](醒目) */}
+                    {confirmDelete === stored.name ? (
+                      // 二次确认:确定 / 取消(占位用,顺序保持在最左)
+                      <>
+                        <button
+                          disabled={deleting}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setDeleting(true);
+                            const res = await deleteTaskByName(stored.name);
+                            setDeleting(false);
+                            if (res.ok) {
+                              // 删完自动收起(列表已通过 store 刷新)
+                              setConfirmDelete(null);
+                            } else {
+                              // 错误留在行内,让用户看清楚是哪条删不掉
+                              alert(`删除失败: ${res.error || '未知错误'}`);
+                              setConfirmDelete(null);
+                            }
+                          }}
+                          className="text-xs px-2 py-1 bg-accent-red hover:bg-accent-red/90 text-white rounded flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                          title="确认删除(不可撤销)"
+                        >
+                          {deleting ? '删除中...' : '确定删除'}
+                        </button>
+                        <button
+                          disabled={deleting}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDelete(null);
+                          }}
+                          className="text-xs px-2 py-1 bg-bg-hover hover:bg-bg-input text-text-secondary rounded disabled:opacity-60"
+                          title="取消删除"
+                        >
+                          取消
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="text-xs px-2 py-1 bg-bg-hover hover:bg-accent-red/15 text-text-muted hover:text-accent-red rounded flex items-center gap-1"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmDelete(stored.name);
+                        }}
+                        title="删除这个任务(从磁盘移除)"
+                      >
+                        <Trash2 size={11} />
+                        删除
+                      </button>
+                    )}
                     <button
                       className="text-xs px-2 py-1 bg-bg-hover hover:bg-bg-input text-text-secondary hover:text-text-primary rounded border border-border-base flex items-center gap-1"
                       onClick={(e) => {
@@ -110,14 +179,17 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                       <Pencil size={11} />
                       编辑
                     </button>
+                    {/* "启动"按钮:实心 cyan,醒目强调 — 这是用户最常点的动作 */}
                     <button
-                      className="text-xs px-2 py-1 bg-accent-cyan/20 hover:bg-accent-cyan/30 text-accent-cyan rounded"
+                      className="text-xs px-2.5 py-1 bg-accent-cyan text-bg-base hover:bg-accent-cyan/90 rounded flex items-center gap-1 font-semibold"
                       onClick={(e) => {
                         e.stopPropagation();
                         onApply(stored);
                       }}
+                      title="把这个任务应用到当前 hwnd 并启动"
                     >
-                      选用
+                      <Play size={11} />
+                      启动
                     </button>
                   </div>
                 );

@@ -35,12 +35,8 @@ app.whenReady().then(() => {
   const receivedStates = [];
   const receivedLogs = [];
 
-  worker.stdout?.on('data', (b) =>
-    process.stdout.write('[WORKER-OUT] ' + b.toString()),
-  );
-  worker.stderr?.on('data', (b) =>
-    process.stdout.write('[WORKER-ERR] ' + b.toString()),
-  );
+  worker.stdout?.on('data', (b) => process.stdout.write('[WORKER-OUT] ' + b.toString()));
+  worker.stderr?.on('data', (b) => process.stdout.write('[WORKER-ERR] ' + b.toString()));
 
   worker.on('message', (event) => {
     const msg =
@@ -87,14 +83,20 @@ function printVerdict(states, logs, forced) {
   const lastLog = logs[logs.length - 1];
   console.log('---');
   console.log('[VERDICT] forced=' + forced);
-  console.log('[VERDICT] total state msgs:', states.length, '— sequence:',
-    states.map(s => s.state?.status || s.status).join(' → '));
+  console.log(
+    '[VERDICT] total state msgs:',
+    states.length,
+    '— sequence:',
+    states.map((s) => s.state?.status || s.status).join(' → '),
+  );
   console.log('[VERDICT] last state:', JSON.stringify(lastState?.state || lastState));
   console.log('[VERDICT] last log:', lastLog?.msg);
-  const isPending = (lastState?.state?.status === 'pending')
-    || (lastState?.status === 'pending');
-  const isMoving = (lastState?.state?.status === 'moving' || lastState?.state?.status === 'combat'
-    || lastState?.status === 'moving' || lastState?.status === 'combat');
+  const isPending = lastState?.state?.status === 'pending' || lastState?.status === 'pending';
+  const isMoving =
+    lastState?.state?.status === 'moving' ||
+    lastState?.state?.status === 'combat' ||
+    lastState?.status === 'moving' ||
+    lastState?.status === 'combat';
   if (isMoving) {
     console.log('[VERDICT] ✅ 进了战斗循环 — race 不可达 OR unwrap 后 _startResolve 已注册');
   } else if (isPending) {

@@ -60,6 +60,8 @@ interface FohelpAPI {
   listAllTaskConfigs: () => Promise<StoredTaskConfig[]>;
   /** 按任务名加载配置 */
   loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
+  /** 按 name 删除任务(从磁盘移除) */
+  deleteTaskConfig: (name: string) => Promise<{ ok: boolean; error?: string }>;
   /** 原地更新已有任务(保留 id/createdAt),用于历史任务编辑 */
   updateTaskConfig: (
     name: string,
