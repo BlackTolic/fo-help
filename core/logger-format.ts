@@ -44,17 +44,14 @@ const LEVEL_LABELS: Record<number, string> = {
   60: 'fatal',
 };
 
-const SKIP_KEYS = new Set([
-  'time', 'level', 'component', 'msg', 'pid', 'hostname', 'v',
-]);
+const SKIP_KEYS = new Set(['time', 'level', 'component', 'msg', 'pid', 'hostname', 'v']);
 
 function formatLog(log: any): string {
   // log.level 是数字(pino 标准),转成字符串 label
   const numLevel = log.level as number;
-  const label = LEVEL_LABELS[numLevel] ||
-    (typeof log.level === 'string' ? log.level : 'info');
+  const label = LEVEL_LABELS[numLevel] || (typeof log.level === 'string' ? log.level : 'info');
   const ts = log.time
-    ? new Date(log.time).toISOString().slice(11, 23)  // HH:MM:ss.SSS
+    ? new Date(log.time).toISOString().slice(11, 23) // HH:MM:ss.SSS
     : '--:--:--.---';
   const paddedLabel = label.toUpperCase().padEnd(5);
   const lvlColor = LEVEL_COLORS[label] || '';
@@ -98,6 +95,7 @@ function formatLog(log: any): string {
 }
 
 function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex -- ANSI 转义序列安全场景
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 

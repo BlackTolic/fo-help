@@ -78,6 +78,13 @@ function formatUptime(ms: number): string {
 interface Props {
   hwnd: number;
   initialConfig?: TaskConfig | null;
+  /**
+   * 编辑历史任务时锁定任务名。设了之后:
+   * - taskName 默认填这个值,且 name 步骤里 input disabled
+   * - onSaved 收到的是该值,用户改不动
+   * (新建设置空,允许改名)
+   */
+  initialTaskName?: string;
   /** 当前窗口的实时截图(bootstrap 阶段推送) */
   thumbnail?: string | null;
   /** 当前 worker 状态(可空:从未启动过) */
@@ -100,6 +107,7 @@ interface Props {
 export function TaskConfigDialog({
   hwnd,
   initialConfig,
+  initialTaskName,
   thumbnail,
   workerState,
   readOnly = false,
@@ -110,7 +118,7 @@ export function TaskConfigDialog({
   const [step, setStep] = useState<'select' | 'config' | 'name'>(
     initialConfig ? 'config' : 'select',
   );
-  const [taskName, setTaskName] = useState('');
+  const [taskName, setTaskName] = useState(initialTaskName ?? '');
   const [nameError, setNameError] = useState<string | null>(null);
   const [taskType, setTaskType] = useState<TaskType | null>(initialConfig?.type ?? null);
   // 内嵌"历史任务"弹窗(只读模式下不显示入口)
@@ -194,11 +202,14 @@ export function TaskConfigDialog({
   /**
    * 跳转到命名步骤 — Electron 禁用了 window.prompt(),改成 inline UI
    * 自动生成默认名字:任务-<hwnd>-<日期>,用户可改
+   *
+   * 编辑模式(initialTaskName) → 预填锁定的名字,跳到 name 步骤,
+   *   用户看着 input (disabled) 直接按确认。
    */
   const handleSave = () => {
     if (readOnly) return;
     setNameError(null);
-    setTaskName(`任务-${hwnd}-${new Date().toLocaleDateString()}`);
+    setTaskName(initialTaskName ?? `任务-${hwnd}-${new Date().toLocaleDateString()}`);
     setStep('name');
   };
 
@@ -424,7 +435,10 @@ export function TaskConfigDialog({
                   }}
                   autoFocus
                   placeholder="任务名(全局唯一)"
-                  className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan"
+                  readOnly={!!initialTaskName}
+                  disabled={!!initialTaskName}
+                  title={initialTaskName ? '编辑模式下任务名锁定' : ''}
+                  className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
                 />
                 {nameError && (
                   <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">

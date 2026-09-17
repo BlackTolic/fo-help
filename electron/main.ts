@@ -129,6 +129,21 @@ function setupIpc() {
     },
   );
 
+  /**
+   * 原地更新已有任务(保留 id/createdAt,只改 config + updatedAt)
+   * 用于历史任务编辑流程,新建请走 SaveTaskConfig
+   */
+  ipcMain.handle(
+    RequestChannel.UpdateTaskConfig,
+    (_e, payload: { name: string; config: TaskConfig }) => {
+      if (!taskConfigService) taskConfigService = new TaskConfigService();
+      if (!payload?.name || !payload?.config) {
+        return { ok: false, error: '缺少 name 或 config' };
+      }
+      return taskConfigService.updateByName(payload.name, payload.config);
+    },
+  );
+
   ipcMain.handle(RequestChannel.GetTaskConfig, (_e, hwnd: number) => {
     // 旧 API:按 hwnd 加载(新流程不再使用,保留返回 null 兼容)
     void hwnd;
@@ -350,7 +365,7 @@ function cleanupDmDllSideFiles(): void {
   if (!fs.existsSync(dllDir)) return;
   let removed = 0;
   for (const f of fs.readdirSync(dllDir)) {
-    if (f.toLowerCase() === 'dm.dll') continue;  // 保留主 dll
+    if (f.toLowerCase() === 'dm.dll') continue; // 保留主 dll
     try {
       fs.unlinkSync(path.join(dllDir, f));
       removed++;

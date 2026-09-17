@@ -65,6 +65,31 @@ export class TaskConfigService {
     return { ok: true, stored };
   }
 
+  /**
+   * 原地更新已有任务(历史任务编辑流程)
+   * - 必须已存在,否则 reject
+   * - 保留 id / createdAt,只更新 config + updatedAt
+   * - 不改文件名
+   */
+  updateByName(name: string, config: TaskConfig): SaveResult {
+    if (!name || !name.trim()) {
+      return { ok: false, error: '任务名不能为空' };
+    }
+    const trimmedName = name.trim();
+    const existing = this.loadByName(trimmedName);
+    if (!existing) {
+      return { ok: false, error: `任务"${trimmedName}"不存在,无法更新` };
+    }
+    const stored: StoredTaskConfig = {
+      ...existing,
+      taskType: config.type,
+      config,
+      updatedAt: Date.now(),
+    };
+    fs.writeFileSync(fileFor(trimmedName), JSON.stringify(stored, null, 2), 'utf-8');
+    return { ok: true, stored };
+  }
+
   /** 按 name 读 */
   loadByName(name: string): StoredTaskConfig | null {
     const f = fileFor(name);

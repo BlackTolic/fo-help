@@ -60,6 +60,11 @@ interface FohelpAPI {
   listAllTaskConfigs: () => Promise<StoredTaskConfig[]>;
   /** 按任务名加载配置 */
   loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
+  /** 原地更新已有任务(保留 id/createdAt),用于历史任务编辑 */
+  updateTaskConfig: (
+    name: string,
+    config: TaskConfig,
+  ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
   /** 旧 API 保留(返回 null) */
   getTaskConfig: (hwnd: number) => Promise<TaskConfig | null>;
   onWorkerStateChanged: (cb: (state: WorkerState) => void) => () => void;

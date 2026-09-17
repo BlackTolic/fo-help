@@ -145,6 +145,16 @@ const api = {
   loadTaskByName: (name: string): Promise<StoredTaskConfig | null> =>
     ipcRenderer.invoke(RequestChannel.LoadTaskByName, name),
 
+  /**
+   * 原地更新已有任务的 config(保留 id/createdAt)
+   * 用于历史任务编辑:保存到磁盘、不启动 worker
+   */
+  updateTaskConfig: (
+    name: string,
+    config: TaskConfig,
+  ): Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.UpdateTaskConfig, { name, config }),
+
   /** 旧 API 保留(返回 null,新流程不再按 hwnd 加载) */
   getTaskConfig: (hwnd: number): Promise<TaskConfig | null> =>
     ipcRenderer.invoke(RequestChannel.GetTaskConfig, hwnd),

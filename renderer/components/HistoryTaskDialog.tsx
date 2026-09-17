@@ -1,8 +1,14 @@
-// 历史任务 dialog:列出全局所有已保存的任务(按名字),选一条应用到当前 hwnd
+// 历史任务 dialog:列出全局所有已保存的任务(按名字),
+// 选用 → 应用到当前 hwnd + 立即启动 任务
+// 编辑 → 弹 TaskConfigDialog 锁名字,保存后**不启动**,只更新磁盘
+//
 // 数据来源:store.taskHistory(全局,跨窗口复用)
 
-import { X, FileText, Swords, Pickaxe, PawPrint, Hammer, Trophy } from 'lucide-react';
-import type { TaskType, StoredTaskConfig } from '../../shared/types';
+import { useState } from 'react';
+import { X, FileText, Swords, Pickaxe, PawPrint, Hammer, Trophy, Pencil } from 'lucide-react';
+import type { TaskType, StoredTaskConfig, TaskConfig } from '../../shared/types';
+import { useStore } from '../store/useStore';
+import { TaskConfigDialog } from './TaskConfigDialog';
 
 const TASK_LABEL: Record<TaskType, { name: string; Icon: any }> = {
   farm: { name: '挂机打怪', Icon: Swords },
@@ -28,6 +34,17 @@ interface Props {
 }
 
 export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Props) {
+  /**
+   * 编辑模式:点某行的「编辑」进入。这时整个 dialog 上叠一层 TaskConfigDialog。
+   * - initialConfig = 该任务的 config
+   * - initialTaskName = 锁定的任务名
+   * - 走 updateTaskByName 后**不启动 worker**,只持久化
+   * 保存成功后切回 null,关闭编辑对话框,刷新 history 让 user 看到改动。
+   */
+  const [editing, setEditing] = useState<StoredTaskConfig | null>(null);
+  const updateTaskByName = useStore((s) => s.updateTaskByName);
+  const loadTaskHistory = useStore((s) => s.loadTaskHistory);
+
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
       <div className="bg-bg-card border border-border-base rounded-lg shadow-2xl w-[640px] max-h-[80vh] flex flex-col">
@@ -61,7 +78,7 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                 return (
                   <div
                     key={stored.name}
-                    className="flex items-center gap-3 p-3 rounded border bg-bg-input border-border-base hover:border-accent-cyan/50 cursor-pointer"
+                    className="flex items-center gap-3 p-3 rounded border bg-bg-input border-border-base hover:border-accent-cyan/50"
                     onClick={() => onApply(stored)}
                     title={`点击将此任务应用到 hwnd ${currentHwnd}`}
                   >
@@ -84,6 +101,17 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                       </div>
                     </div>
                     <button
+                      className="text-xs px-2 py-1 bg-bg-hover hover:bg-bg-input text-text-secondary hover:text-text-primary rounded border border-border-base flex items-center gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(stored);
+                      }}
+                      title="编辑这个任务(只更新磁盘,不启动)"
+                    >
+                      <Pencil size={11} />
+                      编辑
+                    </button>
+                    <button
                       className="text-xs px-2 py-1 bg-accent-cyan/20 hover:bg-accent-cyan/30 text-accent-cyan rounded"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -103,6 +131,28 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
           点击某条任务将其加载到 hwnd {currentHwnd} 并立即启动任务流程
         </footer>
       </div>
+
+      {/* 编辑任务的子 dialog:叠在历史 dialog 之上 */}
+      {editing && (
+        <TaskConfigDialog
+          hwnd={currentHwnd}
+          initialConfig={editing.config}
+          initialTaskName={editing.name}
+          onClose={() => setEditing(null)}
+          onSaved={async (newConfig: TaskConfig, name: string) => {
+            const res = await updateTaskByName(name, newConfig);
+            if (res.ok) {
+              // 刷新 history 列表,关掉编辑 dialog
+              await loadTaskHistory();
+              setEditing(null);
+            } else {
+              // 错误留在 dialog 内,因为 input 锁了,弹 alert 最直观
+              alert(`保存失败: ${res.error || '未知错误'}`);
+            }
+            return res;
+          }}
+        />
+      )}
     </div>
   );
 }

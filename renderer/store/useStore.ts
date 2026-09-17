@@ -42,6 +42,11 @@ interface AppState {
     name: string,
     config: TaskConfig,
   ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
+  /** 原地更新已有任务(保留 id/createdAt),用于历史任务编辑 */
+  updateTaskByName: (
+    name: string,
+    config: TaskConfig,
+  ) => Promise<{ ok: boolean; stored?: StoredTaskConfig; error?: string }>;
   /** 按 name 加载配置(从历史任务 dialog 选中时用) */
   loadTaskByName: (name: string) => Promise<StoredTaskConfig | null>;
 
@@ -131,6 +136,21 @@ export const useStore = create<AppState>((set) => ({
     const res = await window.fohelp.saveTaskConfig(0, config, name);
     if (res.ok) {
       // 刷新历史任务列表
+      try {
+        const list = await window.fohelp.listAllTaskConfigs();
+        set({ taskHistory: list });
+      } catch {
+        /* noop */
+      }
+    }
+    return res;
+  },
+
+  updateTaskByName: async (name, config) => {
+    if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
+    const res = await window.fohelp.updateTaskConfig(name, config);
+    if (res.ok) {
+      // 刷新历史任务列表(更新 updatedAt)
       try {
         const list = await window.fohelp.listAllTaskConfigs();
         set({ taskHistory: list });
