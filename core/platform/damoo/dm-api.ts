@@ -69,6 +69,15 @@ function getRaw(): any {
       log.info(`COM 加载成功,版本 ${_dm.Ver()}`);
       // 注册大漠(必须,否则 BindWindowEx 等高级 API 不能用)
       try {
+        // 如果当前时间超过2026年11月1日,则不进行大漠注册
+        // 2026-11-01 00:00:00（本地时区）
+        const DEADLINE_LOCAL = new Date(2026, 10, 1, 0, 0, 0, 0).getTime();
+        const now = Date.now();
+        if (now >= DEADLINE_LOCAL) {
+          log.error('大漠注册已过期,不进行注册');
+          return;
+        }
+
         const regResult = _dm.Reg(DAMOO_REGISTER_CODE, DAMOO_ATTACH_CODE);
         if (regResult === 1) {
           log.info('大漠注册成功');
