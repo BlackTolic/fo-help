@@ -146,7 +146,14 @@ export const useStore = create<AppState>((set) => ({
 
   saveTaskByName: async (name, config) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.saveTaskConfig(0, config, name);
+    // IPC invoke 本身可能 reject(如主进程写盘抛错),兜住并把错误显示给用户,
+    // 否则异常穿透到 dialog 表现为"确认保存点了没反应"
+    let res: { ok: boolean; stored?: StoredTaskConfig; error?: string };
+    try {
+      res = await window.fohelp.saveTaskConfig(0, config, name);
+    } catch (e: any) {
+      return { ok: false, error: `保存失败: ${e?.message || e}` };
+    }
     if (res.ok) {
       // 刷新历史任务列表
       try {
@@ -161,7 +168,12 @@ export const useStore = create<AppState>((set) => ({
 
   updateTaskByName: async (name, config) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.updateTaskConfig(name, config);
+    let res: { ok: boolean; stored?: StoredTaskConfig; error?: string };
+    try {
+      res = await window.fohelp.updateTaskConfig(name, config);
+    } catch (e: any) {
+      return { ok: false, error: `保存失败: ${e?.message || e}` };
+    }
     if (res.ok) {
       // 刷新历史任务列表(更新 updatedAt)
       try {
