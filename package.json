@@ -70,10 +70,15 @@
     "files": [
       "dist-electron/**/*",
       "dist/**/*",
-      "assets/**/*",
       "build/icon.*",
       "profiles/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/dll",
+        "to": "dll"
+      }
     ],
     "win": {
       "target": {
@@ -85,7 +90,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     }
   }
 }

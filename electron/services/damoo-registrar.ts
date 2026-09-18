@@ -177,13 +177,18 @@ export class DamooRegistrar {
 
   /**
    * 项目自带的 dm.dll 物理路径
-   * - dev:  app.getAppPath() = 项目根 → assets/dll/dm.dll
-   * - packaged(电子包): assets 在 build.files 中,跟随 asar
-   *   (regsvr32 读取需要真实磁盘路径;这里先按 dev 路径定位,
-   *    后期支持 packaged 需要把 dm.dll 配置到 extraResources 走 process.resourcesPath)
+   * - dev:        app.getAppPath() = 项目根 → assets/dll/dm.dll
+   * - packaged:   extraResources 抽到 resources/dll/dm.dll(真实磁盘,asar 外)
+   *   regsvr32 必须读真实磁盘路径,asar 内的 dll 注册不了
+   * 顺序:先看 packaged 路径(如果存在,大概率是对的),fallback 到 dev 路径
    */
   private getDmPath(): string | null {
-    const candidates = [path.join(app.getAppPath(), 'assets', 'dll', 'dm.dll')];
+    const candidates = [
+      // packaged: extraResources 把 assets/dll/ 抽到 resources/dll/
+      path.join(process.resourcesPath, 'dll', 'dm.dll'),
+      // dev: 项目根下
+      path.join(app.getAppPath(), 'assets', 'dll', 'dm.dll'),
+    ];
     for (const c of candidates) {
       try {
         if (fs.existsSync(c)) return c;
