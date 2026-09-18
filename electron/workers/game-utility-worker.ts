@@ -264,6 +264,12 @@ async function readCharacterNameMock(fallback: string): Promise<string> {
 }
 
 async function takeAndSendThumbnail(hwnd: number): Promise<boolean> {
+  // 截图失败不阻断流程:回传 dataUrl=null 的 thumbnail 消息,
+  // 让父进程 bootstrap/requestThumbnail 正常 resolve,而不是 setStatus('alert') 导致 reject
+  const notifyFailure = (detail: string): void => {
+    sendLog('error', detail);
+    process.parentPort!.postMessage({ type: 'thumbnail', hwnd, dataUrl: null, error: detail });
+  };
   try {
     const fs = require('fs');
     const path = require('path');
@@ -277,17 +283,19 @@ async function takeAndSendThumbnail(hwnd: number): Promise<boolean> {
     if (ret !== 1) {
       const code = dmApi.getLastError();
       const { message, advice } = dmErrorFull(code);
-      const detail = `截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`;
-      sendLog('error', detail);
-      // ★ 关键:失败必须主动 setStatus('alert') 让父进程 bootstrap 立即 reject,
-      //   否则父进程会傻等 20s 超时(之前就是这个 bug:子进程静默失败,bootstrap 一直挂起)
-      setStatus('alert', detail);
+      // code=0 时大漠自身无错误码,最常见原因是窗口大部分位于屏幕外/被遮挡:
+      // dx.graphic.2d 靠 hook D3D 渲染取图,屏幕外区域不渲染,Capture 返回 0
+      const extra =
+        code === 0
+          ? ' | 建议:检查游戏窗口是否大部分在屏幕外或被遮挡(dx 模式无法截取屏幕外区域),把窗口移回屏幕内后重试;仍失败可改用 gdi/normal 显示模式'
+          : '';
+      notifyFailure(
+        `截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}${extra}`,
+      );
       return false;
     }
     if (!fs.existsSync(filePath)) {
-      const detail = `截图失败: dmApi.capture 返回 1 但文件未生成 (${filePath})`;
-      sendLog('error', detail);
-      setStatus('alert', detail);
+      notifyFailure(`截图失败: dmApi.capture 返回 1 但文件未生成 (${filePath})`);
       return false;
     }
     const stat = fs.statSync(filePath);
@@ -301,9 +309,7 @@ async function takeAndSendThumbnail(hwnd: number): Promise<boolean> {
     sendLog('info', `缩略图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
     return true;
   } catch (e: any) {
-    const detail = `截图异常: ${e.message}`;
-    sendLog('error', detail);
-    setStatus('alert', detail);
+    notifyFailure(`截图异常: ${e.message}`);
     return false;
   }
 }
@@ -401,8 +407,9 @@ async function main() {
       'error',
       `窗口绑定失败 hwnd=${init.hwnd} code=${code} ${message}${advice ? ' | 建议:' + advice : ''}`,
     );
+    // 绑定失败后不再截图:未绑定状态下 Capture 必然失败,
+    // 会掩盖真正的「绑定失败」根因,误导排查方向
     setStatus('alert', `绑定失败: ${message}`);
-    await takeAndSendThumbnail(init.hwnd);
     return;
   }
 
@@ -433,11 +440,11 @@ async function main() {
   });
 
   const tCap = Date.now();
-  // capture 失败时 takeAndSendThumbnail 内部已 setStatus('alert'),
-  // 这里再次检查避免进入战斗循环(否则一边 alert 一边还在打怪,语义矛盾)
+  // 截图只影响缩略图显示,失败(返回 false)不阻断后续战斗循环,
+  // takeAndSendThumbnail 内部已回传 dataUrl=null 让 bootstrap 正常 resolve
   const captureOk = await takeAndSendThumbnail(init.hwnd);
   if (!captureOk) {
-    sendLog('error', `缩略图失败。耗时 ${Date.now() - tCap}ms`);
+    sendLog('warn', `缩略图截图失败(不影响后续任务)。耗时 ${Date.now() - tCap}ms`);
   }
   sendLog('info', `thumbnail 发送完成 (耗时 ${Date.now() - tCap}ms)`);
 
@@ -612,7 +619,7 @@ async function takeAndSendThumbnailTest(hwnd: number): Promise<void> {
     const ts = Date.now();
     const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
     const ret = dmApi.capture(0, 0, 100, 100, filePath);
-    dmApi.getFullScreenData(`testscreen-${hwnd}-${ts}.png`);
+    dmApi.getFullScreenData(path.join(thumbsDir, `testscreen-${hwnd}-${ts}.png`));
     if (ret !== 1) {
       sendLog('warn', `测试截图 Capture 返回 ${ret}`);
       process.parentPort!.postMessage({

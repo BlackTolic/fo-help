@@ -147,8 +147,8 @@ export const dmApi = {
   /** 截取屏幕数据(返回 base64) */
   getScreenData: (x1: number, y1: number, x2: number, y2: number): string =>
     getRaw().GetScreenData(x1, y1, x2, y2),
-  /** 截取全屏数据(返回 base64) */
-  getFullScreenData: (filePath: string): string => {
+  /** 截取全屏数据到文件(返回 CapturePng 的结果码,1 成功) */
+  getFullScreenData: (filePath: string): number => {
     const width = getRaw().GetScreenWidth();
     const height = getRaw().GetScreenHeight();
     console.log(`全屏截图,宽度 ${width},高度 ${height}`);

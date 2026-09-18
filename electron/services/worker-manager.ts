@@ -270,7 +270,7 @@ export class WorkerManager {
       };
       m.worker.on('message', onMsg);
       // 延长到 30s:首次启动 fork + dm.dll 加载 + bindWindow + Capture 累计可能要 15-25s
-      const BOOTSTRAP_TIMEOUT_MS = 20000;
+      const BOOTSTRAP_TIMEOUT_MS = 30000;
       const timer = setTimeout(() => {
         const elapsed = Date.now() - t0;
         // 根据 stderr 环形缓冲匹配当前卡在哪一步,给出可操作的诊断
