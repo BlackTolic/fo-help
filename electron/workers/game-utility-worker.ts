@@ -285,10 +285,7 @@ async function takeAndSendThumbnail(hwnd: number): Promise<boolean> {
       const { message, advice } = dmErrorFull(code);
       // code=0 时大漠自身无错误码,最常见原因是窗口大部分位于屏幕外/被遮挡:
       // dx.graphic.2d 靠 hook D3D 渲染取图,屏幕外区域不渲染,Capture 返回 0
-      const extra =
-        code === 0
-          ? ' | 建议:检查游戏窗口是否大部分在屏幕外或被遮挡(dx 模式无法截取屏幕外区域),把窗口移回屏幕内后重试;仍失败可改用 gdi/normal 显示模式'
-          : '';
+      const extra = code === 0 ? ' | 建议:将当前游戏模式设置为软件模式' : '';
       notifyFailure(
         `截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}${extra}`,
       );
