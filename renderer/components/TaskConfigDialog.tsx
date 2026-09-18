@@ -1,7 +1,7 @@
 // 任务配置对话框
 // 两步:1.选任务类型(可从历史任务加载) 2.配置参数(挂机打怪详细,其他留白)
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from 'lucide-react';
 import type {
   TaskType,
@@ -9,6 +9,7 @@ import type {
   FarmTaskConfig,
   Waypoint,
   StoredTaskConfig,
+  DefaultSkillTaskConfig,
   DefaultSkillStep,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
@@ -147,23 +148,39 @@ export function TaskConfigDialog({
   const [skillLoopIntervalMs, setSkillLoopIntervalMs] = useState(1000);
   const [skillNote, setSkillNote] = useState('');
 
-  // 初始化(initialConfig 是 FarmTaskConfig 时回填)
-  useState(() => {
-    if (initialConfig?.type === 'farm') {
-      setMapId(initialConfig.mapId);
-      setCustomMapName(initialConfig.customMapName || '');
-      setMode(initialConfig.mode);
-      setWaypoints(initialConfig.waypoints || []);
-      setNameKeywords(initialConfig.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
-      setNote(initialConfig.note || '');
-    } else if (initialConfig?.type === 'default-skill') {
-      const c = initialConfig;
-      setSkillSteps(c.steps || []);
-      setSkillLoopCount(c.loopCount ?? 0);
-      setSkillLoopIntervalMs(c.loopIntervalMs ?? 1000);
-      setSkillNote(c.note || '');
+  /**
+   * 统一的"把 cfg 灌进 dialog state"函数,用于:
+   * - 1) 编辑历史任务(initialConfig 回填,组件 mount 后立即跑一次)
+   * - 2) 选历史任务(handleHistoryApply,用户在 step 1 选了某条历史任务)
+   *
+   * 修复:
+   * - 之前在 useState init 里写 setState 副作用是反 React 模式(Strict Mode 双调用会重复执行)
+   * - 现在 useState 用纯默认值,这个函数在合适时机显式调一次
+   */
+  const applyConfig = (cfg: TaskConfig) => {
+    if (cfg.type === 'farm') {
+      const farm = cfg as FarmTaskConfig;
+      setMapId(farm.mapId);
+      setCustomMapName(farm.customMapName || '');
+      setMode(farm.mode);
+      setWaypoints(farm.waypoints || []);
+      setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
+      setNote(farm.note || '');
+    } else if (cfg.type === 'default-skill') {
+      const skill = cfg as DefaultSkillTaskConfig;
+      setSkillSteps(skill.steps || []);
+      setSkillLoopCount(skill.loopCount ?? 0);
+      setSkillLoopIntervalMs(skill.loopIntervalMs ?? 1000);
+      setSkillNote(skill.note || '');
     }
-  });
+  };
+
+  // 初始化:initialConfig 回填(只跑一次,组件 mount 后)
+  // 用 useEffect 而非 useState init 副作用 — 避免 React Strict Mode 双调用导致的重复 setState
+  useEffect(() => {
+    if (initialConfig) applyConfig(initialConfig);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 仅 mount 时跑一次 — dialog 不会在生命周期内换 initialConfig
 
   const addWaypoint = () => {
     setWaypoints((ws) => [
@@ -281,6 +298,19 @@ export function TaskConfigDialog({
       setNameError('任务名不能为空');
       return;
     }
+    // 校验:缺省技能必须至少 1 个启用的步骤(空配置启动会被 worker 直接结束,UI 提前拦截)
+    if (taskType === 'default-skill') {
+      const cfg = buildConfig();
+      const enabledSteps = (cfg.type === 'default-skill' ? cfg.steps : []).filter(
+        (s) => s.enabled !== false,
+      );
+      if (enabledSteps.length === 0) {
+        // 自动跳回 config 步骤 + 顶部红色 banner
+        setStep('config');
+        setSaveError('缺省技能任务至少需要 1 个启用的步骤');
+        return;
+      }
+    }
     const config = buildConfig();
     const res = await onSaved(config, trimmed);
     if (res && res.ok === false) {
@@ -297,22 +327,14 @@ export function TaskConfigDialog({
   };
 
   /**
-   * 从历史任务加载:把 cfg 灌到 dialog state
-   * - farm:全字段回显(mapId/mode/waypoints/mobFilter/note) + 跳 step 2
+   * 从历史任务加载:把 cfg 灌进 dialog state
+   * - farm / default-skill:全字段回显 + 跳 step 2
    * - 其他:只设置 type,跳 step 2
    */
   const handleHistoryApply = (stored: StoredTaskConfig) => {
     setHistoryOpen(false);
     const cfg = stored.config;
-    if (cfg.type === 'farm') {
-      const farm = cfg as FarmTaskConfig;
-      setMapId(farm.mapId);
-      setCustomMapName(farm.customMapName || '');
-      setMode(farm.mode);
-      setWaypoints(farm.waypoints || []);
-      setNameKeywords((farm.mobFilter?.nameKeywords || []).join(','));
-      setNote(farm.note || '');
-    }
+    applyConfig(cfg);
     setTaskType(cfg.type);
     setStep('config');
   };

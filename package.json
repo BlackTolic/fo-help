@@ -63,6 +63,7 @@
   "build": {
     "appId": "com.fohelp.assistant",
     "productName": "QQ幻想助手",
+    "icon": "build/icon-512.png",
     "directories": {
       "output": "release"
     },
@@ -70,14 +71,17 @@
       "dist-electron/**/*",
       "dist/**/*",
       "assets/**/*",
+      "build/icon.*",
       "profiles/**/*",
       "package.json"
     ],
     "win": {
-      "target": "nsis",
-      "arch": [
-        "ia32"
-      ]
+      "target": {
+        "target": "nsis",
+        "arch": [
+          "ia32"
+        ]
+      }
     },
     "nsis": {
       "oneClick": false,

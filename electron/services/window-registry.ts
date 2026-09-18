@@ -141,11 +141,7 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
     'Chrome_RenderWidgetHostHWND',
     'Intermediate D3D Window',
   ];
-  // console.log('title--------', title);
-  // 测试
-  if (title.includes('文本文档')) {
-    return true;
-  }
+
   if (SELF_CLASSES.includes(className)) {
     return false;
   }

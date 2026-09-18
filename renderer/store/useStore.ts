@@ -1,6 +1,12 @@
 // 全局应用状态
 import { create } from 'zustand';
-import type { GameWindow, WorkerState, TaskConfig, StoredTaskConfig } from '../../shared/types';
+import type {
+  GameWindow,
+  WorkerState,
+  TaskConfig,
+  TaskType,
+  StoredTaskConfig,
+} from '../../shared/types';
 
 interface LogEntry {
   id: number;
@@ -68,8 +74,13 @@ interface AppState {
     hwnd: number,
     characterName: string,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
-  /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s) */
-  startTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
+  /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s)
+   * taskType + taskConfig 由调用方在 dialog 保存后传入,worker 收到后覆盖 init 字段分派 */
+  startTask: (
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig | null,
+  ) => Promise<{ ok: boolean; error?: string }>;
   /** 取消 bootstrap:通过 hwnd 停掉 worker(用于 dialog 关闭但没保存) */
   cancelBootstrap: (hwnd: number) => Promise<void>;
   stopWorker: (workerId: string) => Promise<void>;
@@ -234,10 +245,10 @@ export const useStore = create<AppState>((set) => ({
     }
     return res;
   },
-  startTask: async (hwnd) => {
+  startTask: async (hwnd, taskType, taskConfig) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    console.log('startTask - 任务启动', hwnd);
-    return await window.fohelp.startTask(hwnd);
+    console.log('startTask - 任务启动', hwnd, taskType);
+    return await window.fohelp.startTask(hwnd, taskType, taskConfig);
   },
   cancelBootstrap: async (hwnd) => {
     if (!window.fohelp) return;

@@ -48,6 +48,14 @@ if (!process.parentPort) {
 }
 
 async function runDefaultSkill(cfg: DefaultSkillTaskConfig): Promise<void> {
+  // ★ 诊断:把 cfg 摘要打出来,定位 steps 为空的原因(undefined / [] / 全 disabled)
+  sendLog(
+    'info',
+    `缺省技能 config 摘要: cfg=${cfg ? 'present' : 'undefined'}, type=${cfg?.type}, ` +
+      `steps.length=${cfg?.steps?.length ?? 'n/a'}, ` +
+      `loopCount=${cfg?.loopCount}, loopIntervalMs=${cfg?.loopIntervalMs}, ` +
+      `steps=${cfg?.steps ? JSON.stringify(cfg.steps.map((s) => ({ key: s.key, enabled: s.enabled, intervalMs: s.intervalMs }))) : 'n/a'}`,
+  );
   const steps = (cfg.steps || []).filter((s) => s.enabled !== false);
   if (steps.length === 0) {
     sendLog('warn', '缺省技能任务:steps 为空或全部禁用,直接结束');
@@ -481,6 +489,7 @@ async function main() {
   } else if (init.taskType === 'default-skill') {
     // 缺省技能:走自己的按键循环(不依赖 combat)
     const skillCfg = init.taskConfig as DefaultSkillTaskConfig | undefined;
+    console.log('skillCfg:', skillCfg);
     if (!skillCfg || !Array.isArray(skillCfg.steps)) {
       sendLog('error', '缺省技能任务缺少 taskConfig.steps,直接结束');
       setStatus('alert', '缺省技能 config 缺失');
@@ -506,7 +515,17 @@ process.parentPort.on('message', (event: any) => {
   if (msg?.type === 'command') {
     switch (msg.command) {
       case 'start-task':
-        sendLog('info', '收到 start-task');
+        sendLog('info', `收到 start-task (taskType=${msg.taskType || '(未指定)'})`);
+        // 覆盖 init 的 taskType + taskConfig — bootstrap 阶段 init.taskType 是 'farm' 兜底默认,
+        //   真正任务类型由 dialog 保存后才确定,通过 start-task 命令告诉 worker
+        if (msg.taskType) {
+          init.taskType = msg.taskType;
+          sendLog('info', `覆盖 init.taskType = ${init.taskType}`);
+        }
+        if (msg.taskConfig) {
+          init.taskConfig = msg.taskConfig;
+          sendLog('info', `覆盖 init.taskConfig = type=${init.taskConfig?.type}`);
+        }
         if (_startResolve) {
           // 正常路径: _startResolve 已注册, 直接 resolve 让 main() 走完
           _startResolve();

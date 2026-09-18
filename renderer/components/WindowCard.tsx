@@ -15,7 +15,13 @@ import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from
 import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
-import type { GameWindow, TaskConfig, WorkerState, StoredTaskConfig } from '../../shared/types';
+import type {
+  GameWindow,
+  TaskConfig,
+  TaskType,
+  WorkerState,
+  StoredTaskConfig,
+} from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -27,7 +33,11 @@ interface Props {
   appliedTaskName?: string | null;
   onBootstrap: (hwnd: number, characterName: string) => Promise<{ ok: boolean; error?: string }>;
   onCancelBootstrap: (hwnd: number) => void;
-  onStartTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
+  onStartTask: (
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig | null,
+  ) => Promise<{ ok: boolean; error?: string }>;
   onStop: (workerId: string) => void;
   onPause: (workerId: string) => void;
   onResume: (workerId: string) => void;
@@ -131,30 +141,47 @@ export function WindowCard({
 
   /**
    * 选中历史任务后:加载配置 + 应用到当前 hwnd + 启动 worker
-   * 如果已有 worker(可复用),只发 startTask;否则先 bootstrap
+   *
+   * ⚠️ 切历史任务 = 换任务类型/配置,worker 当前可能正在跑别的任务(比如 farm)
+   *   直接发 start-task 不能让它重新分派:
+   *     worker 的 start-task handler 只在 _startResolve 还在时才有效(bootstrap 等待期间)
+   *     一旦任务在跑,start-task handler 只能打 warn,不会 resolve 等任何东西
+   *   所以总是先 stop 现有 worker,等它 graceful exit + byHwnd 清理,再走 bootstrap + startTask
    */
   const handleHistorySelect = async (stored: StoredTaskConfig) => {
     setHistoryOpen(false);
     setError(null);
     onApplyConfig(gameWindow.hwnd, stored.config, stored.name);
 
-    if (worker) {
-      // 已有 worker,直接发 start-task(等 worker ready,最多 30s)
-      const startRes = await onStartTask(gameWindow.hwnd);
-      if (!startRes.ok) {
-        alert(`启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
-      }
-    } else {
-      // 还没有 worker:bootstrap + 自动 startTask
-      const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
-      if (!res.ok) {
-        setError(res.error || '启动 worker 失败');
+    // 校验:缺省技能必须至少 1 个启用的步骤(防止历史任务里的空配置被启动)
+    if (stored.config.type === 'default-skill') {
+      const enabledSteps = (stored.config.steps || []).filter((s) => s.enabled !== false);
+      if (enabledSteps.length === 0) {
+        setError(`任务"${stored.name}"是缺省技能但没有启用的步骤,请先编辑添加步骤`);
         return;
       }
-      const startRes = await onStartTask(gameWindow.hwnd);
-      if (!startRes.ok) {
-        alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
-      }
+    }
+
+    if (worker) {
+      // 切任务前先停掉旧 worker(stop handler 跑 dmApi.unbindWindow() + setTimeout(exit, 300))
+      onStop(worker.workerId);
+      // 等 worker exit 事件 + byHwnd.delete 回调跑完(~500ms)
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+
+    // 走"无 worker"路径:bootstrap + 自动 startTask
+    const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
+    if (!res.ok) {
+      setError(res.error || '启动 worker 失败');
+      return;
+    }
+    const startRes = await onStartTask(
+      gameWindow.hwnd,
+      stored.config.type,
+      stored.config,
+    );
+    if (!startRes.ok) {
+      alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
     }
   };
 
@@ -197,7 +224,8 @@ export function WindowCard({
     onApplyConfig(gameWindow.hwnd, config, trimmed);
     setDialogOpen(false);
     setAutoStartAfterClose(false);
-    const startRes = await onStartTask(gameWindow.hwnd);
+    // 把 taskType + taskConfig 一起发给 worker,worker 收到后覆盖 init 字段分派
+    const startRes = await onStartTask(gameWindow.hwnd, config.type, config);
     if (!startRes.ok) {
       // startTask 失败(worker 未 ready 超时等)— 提示用户
       alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
@@ -212,7 +240,7 @@ export function WindowCard({
     onApplyConfig(gameWindow.hwnd, config);
     setDialogOpen(false);
     setAutoStartAfterClose(false);
-    const startRes = await onStartTask(gameWindow.hwnd);
+    const startRes = await onStartTask(gameWindow.hwnd, config.type, config);
     if (!startRes.ok) {
       alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
     }
@@ -490,7 +518,11 @@ export function WindowCard({
                   // pending 状态:worker 已 ready 但还没收到 start-task
                   //   (上次因 race 暂存过 / 或 worker 还在 waitForConfig 等命令)
                   //   重新发一次 start-task,worker 那边 _startResolve / _pendingStart 都能接住
-                  const res = await onStartTask(gameWindow.hwnd);
+                  const res = await onStartTask(
+                    gameWindow.hwnd,
+                    taskConfig?.type,
+                    taskConfig,
+                  );
                   if (!res.ok) alert(`启动失败: ${res.error || '未知'}`);
                 }}
                 className="btn btn-primary flex-1 flex items-center justify-center gap-1"

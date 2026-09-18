@@ -316,25 +316,57 @@ export class WorkerManager {
               m.recentStderr.map((l) => `  | ${l}`).join('\n'),
           );
         }
-        // 主动 kill utilityProcess 子进程,释放 hang 的主线程(否则 fork 进程会永远卡)
+        // 两阶段清理子进程(减少带挂游戏窗口的概率)
+        // 阶段 1:先发 stop 命令 — 子进程消息循环还活着时(只在 capture/OCR 阶段卡住时有效),
+        //   stop handler 会跑 dmApi.unbindWindow() + setTimeout(exit) 主动释放对游戏窗口的 hook
+        //   bindWindow 同步 hang 时无效(主线程卡在 native 调用,Node 事件循环跑不到 message)
+        // 阶段 2:等 1.5s — 子进程自己 cleanup + exit
+        // 阶段 3:还活着才走 SIGKILL
         try {
-          m.worker.kill();
-          log.warn(
-            `[WorkerManager] bootstrap 超时 → 已 kill 子进程 ${wid},下次创建任务会重新 fork`,
-          );
+          try {
+            m.worker.postMessage({ type: 'command', command: 'stop' });
+            log.warn(
+              `[WorkerManager] bootstrap 超时 → 先发 stop 命令,等 1.5s 让子进程 graceful cleanup (hwnd=${hwnd}, 阶段=${phase})`,
+            );
+          } catch (e: any) {
+            log.warn(`[WorkerManager] 发 stop 命令失败: ${e.message}`);
+          }
+          setTimeout(() => {
+            if (m.worker.pid) {
+              try {
+                m.worker.kill();
+                log.warn(
+                  `[WorkerManager] 子进程 ${wid} 1.5s 内未 graceful 退出 → 强制 kill,下次创建任务会重新 fork`,
+                );
+              } catch (e: any) {
+                log.warn(`[WorkerManager] 强制 kill 失败: ${e.message}`);
+              }
+            } else {
+              log.info(`[WorkerManager] 子进程 ${wid} 已在 1.5s 内 graceful 退出(dm hook 已释放)`);
+            }
+            finish(() =>
+              reject(
+                new Error(
+                  `bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s)\n` +
+                    `当前阶段: ${phase}\n` +
+                    `诊断: ${diagnosis}\n` +
+                    `请查看终端 [w-${hwnd}] 标记的 stderr 日志`,
+                ),
+              ),
+            );
+          }, 1500);
         } catch (e: any) {
-          log.warn(`[WorkerManager] kill 失败: ${e.message}`);
-        }
-        finish(() =>
-          reject(
-            new Error(
-              `bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s)\n` +
-                `当前阶段: ${phase}\n` +
-                `诊断: ${diagnosis}\n` +
-                `请查看终端 [w-${hwnd}] 标记的 stderr 日志`,
+          log.warn(`[WorkerManager] 两阶段清理异常: ${e.message}`);
+          finish(() =>
+            reject(
+              new Error(
+                `bootstrap 超时(${BOOTSTRAP_TIMEOUT_MS / 1000}s)\n` +
+                  `当前阶段: ${phase}\n` +
+                  `诊断: ${diagnosis}`,
+              ),
             ),
-          ),
-        );
+          );
+        }
       }, BOOTSTRAP_TIMEOUT_MS);
     });
   }
@@ -343,7 +375,11 @@ export class WorkerManager {
    * 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环
    * 异步:如果 worker 未 ready,等 ready(最多 30s)再发,避免消息丢失
    */
-  async startTask(hwnd: number): Promise<{ ok: boolean; error?: string }> {
+  async startTask(
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig: any = null,
+  ): Promise<{ ok: boolean; error?: string }> {
     const wid = this.byHwnd.get(hwnd);
     if (!wid) {
       log.warn(`[WorkerManager] startTask: hwnd=${hwnd} 没找到 worker`);
@@ -369,9 +405,17 @@ export class WorkerManager {
     }
 
     log.info(
-      `[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, 等 ready 耗时 ${Date.now() - t0}ms)`,
+      `[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, taskType=${taskType || m.state.taskType || 'farm'}, 等 ready 耗时 ${Date.now() - t0}ms)`,
     );
-    m.worker.postMessage({ type: 'command', command: 'start-task' });
+    // 把 taskType + taskConfig 一起带给 worker,worker 收到后覆盖 init 字段再分派任务
+    //   bootstrap 阶段 worker fork 时 init.taskType 硬编码为 'farm'(worker-manager.bootstrap 兜底默认),
+    //   但真正的任务类型由 dialog 保存后才确定,只能通过 start-task 命令告诉 worker
+    m.worker.postMessage({
+      type: 'command',
+      command: 'start-task',
+      taskType,
+      taskConfig,
+    });
     return { ok: true };
   }
 
