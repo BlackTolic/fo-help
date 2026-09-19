@@ -79,6 +79,8 @@ export class WorkerManager {
       taskConfig,
       waitForConfig,
       thumbsDir,
+      // app.getAppPath() 只能在主进程调,utilityProcess 里 require('electron') 拿不到 app
+      appPath: app.getAppPath(),
     });
 
     // 32-bit Electron 启动的 utilityProcess 默认也是 32-bit,能加载 32-bit dm.dll

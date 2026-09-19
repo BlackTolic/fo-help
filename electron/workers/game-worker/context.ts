@@ -18,6 +18,8 @@ export interface InitData {
   taskConfig?: any;
   waitForConfig?: boolean;
   thumbsDir?: string;
+  // 主进程算好传进来:utilityProcess 里 require('electron') 拿不到 app
+  appPath?: string;
 }
 
 // 从 process.argv 取最后一个参数(JSON 序列化的 initData)

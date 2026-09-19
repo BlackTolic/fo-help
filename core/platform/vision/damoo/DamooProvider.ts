@@ -41,16 +41,7 @@ export class DamooVisionProvider implements IVisionProvider {
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dmApi.findPic(
-      roi.x,
-      roi.y,
-      roi.x + roi.w,
-      roi.y + roi.h,
-      tplB64,
-      '000000',
-      sim,
-      dir,
-    );
+    const ret = dmApi.findPic(roi.x, roi.y, roi.w, roi.h, tplB64, '000000', sim, dir);
     if (!ret) return null;
     const parts = ret.split('|');
     if (parts.length !== 2) return null;
@@ -64,16 +55,7 @@ export class DamooVisionProvider implements IVisionProvider {
     const sim = opts?.similarity ?? 0.8;
     const dir = opts?.direction ?? 'leftTop';
     const tplB64 = template.toString('base64');
-    const ret = dmApi.findPicEx(
-      roi.x,
-      roi.y,
-      roi.x + roi.w,
-      roi.y + roi.h,
-      tplB64,
-      '000000',
-      sim,
-      dir,
-    );
+    const ret = dmApi.findPicEx(roi.x, roi.y, roi.w, roi.h, tplB64, '000000', sim, dir);
     if (!ret) return [];
     return ret
       .split(',')
@@ -89,7 +71,7 @@ export class DamooVisionProvider implements IVisionProvider {
   async findColor(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null> {
     const sim = opts?.similarity ?? 0.9;
     const dir = opts?.direction ?? 'leftTop';
-    const ret = dmApi.findColor(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, color, sim, dir);
+    const ret = dmApi.findColor(roi.x, roi.y, roi.w, roi.h, color, sim, dir);
     if (!ret) return null;
     const parts = ret.split('|');
     if (parts.length !== 2) return null;

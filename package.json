@@ -78,6 +78,10 @@
       {
         "from": "assets/dll",
         "to": "dll"
+      },
+      {
+        "from": "assets/font",
+        "to": "font"
       }
     ],
     "win": {

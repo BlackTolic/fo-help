@@ -2,7 +2,17 @@
 // 两步:1.选任务类型(可从历史任务加载) 2.配置参数(挂机打怪详细,其他留白)
 
 import { useState, useEffect } from 'react';
-import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from 'lucide-react';
+import {
+  X,
+  ChevronRight,
+  Plus,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  Check,
+  History,
+  Keyboard,
+} from 'lucide-react';
 import type {
   TaskType,
   TaskConfig,
@@ -19,7 +29,13 @@ import { HistoryTaskDialog } from './HistoryTaskDialog';
 const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] =
   [
     { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
-    { type: 'default-skill', name: '缺省技能', icon: '🎹', desc: '按键编排(F1-F12/Alt/Shift),纯按键循环', ready: true },
+    {
+      type: 'default-skill',
+      name: '缺省技能',
+      icon: '🎹',
+      desc: '按键编排(F1-F12/Alt/Shift),纯按键循环',
+      ready: true,
+    },
     { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
     { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
     { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
@@ -179,7 +195,6 @@ export function TaskConfigDialog({
   // 用 useEffect 而非 useState init 副作用 — 避免 React Strict Mode 双调用导致的重复 setState
   useEffect(() => {
     if (initialConfig) applyConfig(initialConfig);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // 仅 mount 时跑一次 — dialog 不会在生命周期内换 initialConfig
 
   const addWaypoint = () => {
@@ -497,20 +512,17 @@ export function TaskConfigDialog({
             />
           )}
 
-          {step === 'config' &&
-            taskType &&
-            taskType !== 'farm' &&
-            taskType !== 'default-skill' && (
-              <div className="text-center py-12 text-text-secondary">
-                <div className="text-4xl mb-3 opacity-30">
-                  {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
-                </div>
-                <div className="text-base mb-1">
-                  {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
-                </div>
-                <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
+          {step === 'config' && taskType && taskType !== 'farm' && taskType !== 'default-skill' && (
+            <div className="text-center py-12 text-text-secondary">
+              <div className="text-4xl mb-3 opacity-30">
+                {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
               </div>
-            )}
+              <div className="text-base mb-1">
+                {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
+              </div>
+              <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
+            </div>
+          )}
 
           {/* 命名步骤(替代 Electron 不支持的 window.prompt) — 创建流程专属 */}
           {step === 'name' && (
@@ -968,10 +980,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
             步骤列表 <span className="text-text-muted text-[11px]">(按顺序执行)</span>
           </label>
           {!readOnly && (
-            <button
-              onClick={addStep}
-              className="text-xs btn btn-secondary flex items-center gap-1"
-            >
+            <button onClick={addStep} className="text-xs btn btn-secondary flex items-center gap-1">
               <Plus size={12} />
               添加步骤
             </button>
@@ -1120,9 +1129,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
             disabled={readOnly}
             className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
           />
-          <div className="text-[10px] text-text-muted mt-1">
-            一轮跑完到下一轮的等待时间
-          </div>
+          <div className="text-[10px] text-text-muted mt-1">一轮跑完到下一轮的等待时间</div>
         </div>
       </div>
 

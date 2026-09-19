@@ -40,6 +40,8 @@ export const DEFAULT_PROFILE: any = {
   },
   engine: {},
   regions: {},
+  // 默认字库(assets/font/0_ffo.txt,QQ幻想 专用)
+  fontLib: '0_ffo.txt',
 };
 
 export async function readCharacterNameMock(fallback: string): Promise<string> {
@@ -131,17 +133,36 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
 
   if (profile?.fontLib) {
     try {
+      const fs = require('fs');
       const path = require('path');
-      const { app } = require('electron');
+      // utilityProcess 里 require('electron') 拿不到 app,appPath 由主进程通过 init 传入
+      const appPath = init.appPath || process.cwd();
+      // 字库路径双候选(与 dm.dll 同理,damoo-registrar.getDmPath):
+      //   packaged: extraResources 抽到 resources/font/(真实磁盘,asar 外,SetDict 读不了 asar 内文件)
+      //   dev:      项目根/assets/font/
       const fontPath = path.isAbsolute(profile.fontLib)
         ? profile.fontLib
-        : path.join(app.getAppPath(), profile.fontLib);
-      dmApi.setDict(0, fontPath);
-      dmApi.useDict(0);
-      ctx.sendLog('info', `字库已加载: ${fontPath}`);
+        : ([
+            path.join(process.resourcesPath || '', 'font', profile.fontLib),
+            path.join(appPath, 'assets', 'font', profile.fontLib),
+            path.join(appPath, profile.fontLib),
+          ].find((p: string) => fs.existsSync(p)) ?? null);
+      if (!fontPath) {
+        ctx.sendLog('warn', `字库文件不存在: ${profile.fontLib} (已找 resources/font 和 assets/font)`);
+      } else {
+        const ret = dmApi.setDict(0, fontPath);
+        if (ret === 1) {
+          dmApi.useDict(0);
+          ctx.sendLog('info', `字库已加载: ${fontPath}`);
+        } else {
+          ctx.sendLog('warn', `字库加载失败: SetDict 返回 ${ret} (${fontPath})`);
+        }
+      }
     } catch (e: any) {
       ctx.sendLog('warn', `字库加载失败: ${e.message}`);
     }
+  } else {
+    ctx.sendLog('info', `字库未加载`);
   }
 
   // OCR读取角色名称

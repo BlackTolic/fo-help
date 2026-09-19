@@ -231,8 +231,9 @@ export const dmApi = {
 
   // ---- OCR ----
   /** OCR 区域文字,返回字符串 */
-  ocr: (x1: number, y1: number, x2: number, y2: number, color: string, sim: number): string =>
-    String(getRaw().Ocr(x1, y1, x2, y2, color, sim) || ''),
+  ocr: (x1: number, y1: number, x2: number, y2: number, color: string, sim: number): string => {
+    return String(getRaw().Ocr(x1, y1, x2, y2, color, sim) || '');
+  },
 
   // ---- 鼠标 ----
   moveTo: (x: number, y: number): number => getRaw().MoveTo(x, y),
