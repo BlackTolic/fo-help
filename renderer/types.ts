@@ -29,8 +29,13 @@ interface FohelpAPI {
     taskType?: TaskType,
     taskConfig?: TaskConfig,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
-  /** 给已 bootstrap 的 worker 发 start-task,进入战斗 */
-  startTask: (hwnd: number) => Promise<{ ok: boolean }>;
+  /** 给已 bootstrap 的 worker 发 start-task,进入战斗/任务
+   * taskType + taskConfig 可选:调用方在 dialog 保存后才确定,worker 收到后覆盖 init 字段分派 */
+  startTask: (
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig | null,
+  ) => Promise<{ ok: boolean; error?: string }>;
   /** 通过 hwnd 停 worker(用于取消 bootstrap) */
   stopWorkerByHwnd: (hwnd: number) => Promise<{ ok: boolean }>;
   /** 截图测试:截一张到 thumbnails/test-<hwnd>-<ts>.png,返回 filePath */

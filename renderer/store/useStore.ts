@@ -2,9 +2,9 @@
 import { create } from 'zustand';
 import type {
   GameWindow,
-  TaskType,
   WorkerState,
   TaskConfig,
+  TaskType,
   StoredTaskConfig,
 } from '../../shared/types';
 
@@ -80,8 +80,13 @@ interface AppState {
     taskType?: TaskType,
     taskConfig?: TaskConfig,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
-  /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s) */
-  startTask: (hwnd: number) => Promise<{ ok: boolean; error?: string }>;
+  /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s)
+   * taskType + taskConfig 由调用方在 dialog 保存后传入,worker 收到后覆盖 init 字段分派 */
+  startTask: (
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig | null,
+  ) => Promise<{ ok: boolean; error?: string }>;
   /** 取消 bootstrap:通过 hwnd 停掉 worker(用于 dialog 关闭但没保存) */
   cancelBootstrap: (hwnd: number) => Promise<void>;
   stopWorker: (workerId: string) => Promise<void>;
@@ -147,7 +152,14 @@ export const useStore = create<AppState>((set) => ({
 
   saveTaskByName: async (name, config) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.saveTaskConfig(0, config, name);
+    // IPC invoke 本身可能 reject(如主进程写盘抛错),兜住并把错误显示给用户,
+    // 否则异常穿透到 dialog 表现为"确认保存点了没反应"
+    let res: { ok: boolean; stored?: StoredTaskConfig; error?: string };
+    try {
+      res = await window.fohelp.saveTaskConfig(0, config, name);
+    } catch (e: any) {
+      return { ok: false, error: `保存失败: ${e?.message || e}` };
+    }
     if (res.ok) {
       // 刷新历史任务列表
       try {
@@ -162,7 +174,12 @@ export const useStore = create<AppState>((set) => ({
 
   updateTaskByName: async (name, config) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    const res = await window.fohelp.updateTaskConfig(name, config);
+    let res: { ok: boolean; stored?: StoredTaskConfig; error?: string };
+    try {
+      res = await window.fohelp.updateTaskConfig(name, config);
+    } catch (e: any) {
+      return { ok: false, error: `保存失败: ${e?.message || e}` };
+    }
     if (res.ok) {
       // 刷新历史任务列表(更新 updatedAt)
       try {
@@ -246,10 +263,10 @@ export const useStore = create<AppState>((set) => ({
     }
     return res;
   },
-  startTask: async (hwnd) => {
+  startTask: async (hwnd, taskType, taskConfig) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
-    console.log('startTask - 任务启动', hwnd);
-    return await window.fohelp.startTask(hwnd);
+    console.log('startTask - 任务启动', hwnd, taskType);
+    return await window.fohelp.startTask(hwnd, taskType, taskConfig);
   },
   cancelBootstrap: async (hwnd) => {
     if (!window.fohelp) return;

@@ -90,9 +90,15 @@ const api = {
       taskConfig,
     }),
 
-  /** 给已 bootstrap 的 worker 发送开始命令，进入战斗流程。 */
-  startTask: (hwnd: number): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(RequestChannel.StartTask, hwnd),
+  /** 给已 bootstrap 的 worker 发送开始命令，进入战斗/任务流程。
+   * taskType + taskConfig 由调用方在 dialog 保存后才确定,worker 收到后覆盖 init 字段分派
+   */
+  startTask: (
+    hwnd: number,
+    taskType?: TaskType,
+    taskConfig?: TaskConfig | null,
+  ): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.StartTask, { hwnd, taskType, taskConfig }),
 
   /** 通过窗口句柄停止 worker，常用于取消 bootstrap。 */
   stopWorkerByHwnd: (hwnd: number): Promise<{ ok: boolean }> =>

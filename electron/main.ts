@@ -260,13 +260,19 @@ function setupIpc() {
     },
   );
 
-  /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环(等 worker ready 后再发) */
+  /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环(等 worker ready 后再发)
+   * payload: { hwnd, taskType?, taskConfig? }
+   * - taskType + taskConfig 可选:由调用方在 dialog 保存后才确定,worker 收到覆盖 init 字段
+   */
   ipcMain.handle(
     RequestChannel.StartTask,
-    async (_e, hwnd: number): Promise<{ ok: boolean; error?: string }> => {
-      console.log(`[IPC] StartTask hwnd=${hwnd}`);
+    async (
+      _e,
+      payload: { hwnd: number; taskType?: TaskType; taskConfig?: TaskConfig | null },
+    ): Promise<{ ok: boolean; error?: string }> => {
+      console.log(`[IPC] StartTask hwnd=${payload?.hwnd} task=${payload?.taskType}`);
       if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
-      return await workerManager.startTask(hwnd);
+      return await workerManager.startTask(payload.hwnd, payload.taskType, payload.taskConfig);
     },
   );
 

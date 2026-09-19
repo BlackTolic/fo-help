@@ -1,13 +1,17 @@
 // 任务配置服务:按"任务名(name)"存/读 TaskConfig
 // 用户为每个任务起唯一名字,跨游戏窗口复用
-// 文件名 = sanitize(name).json,放在 %APPDATA%/QQ幻想助手/task-configs/
+// 文件名 = sanitize(name).json
+//   - dev:      <项目根>/task-configs/
+//   - packaged: %APPDATA%/QQ幻想助手/task-configs/(getAppPath 在 asar 内,只读写不进去)
 
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import type { StoredTaskConfig, TaskConfig } from '../../shared/types';
 
-const STORAGE_DIR = path.join(app.getAppPath(), 'task-configs');
+const STORAGE_DIR = app.isPackaged
+  ? path.join(app.getPath('userData'), 'task-configs')
+  : path.join(app.getAppPath(), 'task-configs');
 
 function ensureDir() {
   if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });

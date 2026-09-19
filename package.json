@@ -63,25 +63,40 @@
   "build": {
     "appId": "com.fohelp.assistant",
     "productName": "QQ幻想助手",
+    "icon": "build/icon-512.png",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist-electron/**/*",
       "dist/**/*",
-      "assets/**/*",
+      "build/icon.*",
       "profiles/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/dll",
+        "to": "dll"
+      },
+      {
+        "from": "assets/font",
+        "to": "font"
+      }
+    ],
     "win": {
-      "target": "nsis",
-      "arch": [
-        "ia32"
-      ]
+      "requestedExecutionLevel": "requireAdministrator",
+      "target": {
+        "target": "nsis",
+        "arch": [
+          "ia32"
+        ]
+      }
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     }
   }
 }

@@ -69,6 +69,15 @@ function getRaw(): any {
       log.info(`COM 加载成功,版本 ${_dm.Ver()}`);
       // 注册大漠(必须,否则 BindWindowEx 等高级 API 不能用)
       try {
+        // 如果当前时间超过2026年11月1日,则不进行大漠注册
+        // 2026-11-01 00:00:00（本地时区）
+        const DEADLINE_LOCAL = new Date(2026, 10, 1, 0, 0, 0, 0).getTime();
+        const now = Date.now();
+        if (now >= DEADLINE_LOCAL) {
+          log.error('大漠注册已过期,不进行注册');
+          return;
+        }
+
         const regResult = _dm.Reg(DAMOO_REGISTER_CODE, DAMOO_ATTACH_CODE);
         if (regResult === 1) {
           log.info('大漠注册成功');
@@ -147,8 +156,8 @@ export const dmApi = {
   /** 截取屏幕数据(返回 base64) */
   getScreenData: (x1: number, y1: number, x2: number, y2: number): string =>
     getRaw().GetScreenData(x1, y1, x2, y2),
-  /** 截取全屏数据(返回 base64) */
-  getFullScreenData: (filePath: string): string => {
+  /** 截取全屏数据到文件(返回 CapturePng 的结果码,1 成功) */
+  getFullScreenData: (filePath: string): number => {
     const width = getRaw().GetScreenWidth();
     const height = getRaw().GetScreenHeight();
     console.log(`全屏截图,宽度 ${width},高度 ${height}`);
@@ -222,8 +231,9 @@ export const dmApi = {
 
   // ---- OCR ----
   /** OCR 区域文字,返回字符串 */
-  ocr: (x1: number, y1: number, x2: number, y2: number, color: string, sim: number): string =>
-    String(getRaw().Ocr(x1, y1, x2, y2, color, sim) || ''),
+  ocr: (x1: number, y1: number, x2: number, y2: number, color: string, sim: number): string => {
+    return String(getRaw().Ocr(x1, y1, x2, y2, color, sim) || '');
+  },
 
   // ---- 鼠标 ----
   moveTo: (x: number, y: number): number => getRaw().MoveTo(x, y),

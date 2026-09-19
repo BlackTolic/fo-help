@@ -63,5 +63,8 @@ task-configs/
 # 死代码临时备份(死代码清理时挪过去的,确认无问题后可手动删除该目录)
 .deprecated/
 
-# 杂项临时 dll(本地测试时掉进来的,不入库)
-assets/dll/j3j3b.dll
+# 大漠 v7.2543 运行时生成的辅助 dll/exe(随机 hash,如 g22ci.dll / j3j3b.dll)
+# dm.dll 主 dll 保留,其他全部忽略
+assets/dll/*.dll
+assets/dll/*.exe
+!assets/dll/dm.dll
