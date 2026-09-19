@@ -64,8 +64,9 @@ export class MovementController {
     const arriveTolerance = opts?.arriveTolerance ?? 5;
     const stepIntervalMs = opts?.stepIntervalMs ?? 500;
     const deadline = Date.now() + (opts?.timeoutMs ?? 60000);
+    let isArrived = false;
 
-    while (Date.now() < deadline) {
+    while (Date.now() < deadline && !isArrived) {
       const current = await this.readPosition();
       if (!current) {
         log.warn('读不到当前坐标,原地等待重试');
@@ -85,9 +86,14 @@ export class MovementController {
       }
 
       const dir = this.directionTo(current, target);
-      log.debug(`移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`);
+      log.debug(`移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`);  
+     // 这里可以设计两种移动方式:
+     // 1. 点击目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
+     // 2. 直接点地面朝目标方向移动
       await this.stepTowards(current, target, dir);
       await sleep(stepIntervalMs);
+      // 判断距离是否到达
+      isArrived = dist <= arriveTolerance;
     }
 
     log.warn(`移动到 (${target.x}, ${target.y}) 超时`);
@@ -101,11 +107,11 @@ export class MovementController {
    *   - 或按方向键:keyDown → holdMs → keyUp
    */
   protected async stepTowards(
-    _current: MapPosition,
-    _target: MapPosition,
-    _direction: Direction8,
+    current: MapPosition,
+    target: MapPosition,
+    direction: Direction8,
   ): Promise<void> {
-    void this.input;
+   
     log.debug('MovementController.stepTowards 待实现');
   }
 }
