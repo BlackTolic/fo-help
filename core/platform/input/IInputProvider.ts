@@ -71,6 +71,9 @@ export interface IInputProvider {
   /** 绑定到具体窗口 hwnd(把窗口提到前台) */
   bind(hwnd: number): void;
 
+  /** 延时 */
+  delay(ms: number): Promise<void>;
+
   /** 释放资源 */
   destroy(): void;
 }

@@ -52,7 +52,7 @@ export class MovementController {
     // atan2 角度:0=东,逆时针为负;屏幕/地图 y 轴向南,所以直接用 dy
     const angle = (Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI;
     const dirs: Direction8[] = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
-    const idx = Math.round((((angle % 360) + 360) % 360) / 45) % 8;
+    const idx = Math.round(((angle % 360) + 360) % 360 / 45) % 8;
     return dirs[idx];
   }
 
@@ -86,12 +86,10 @@ export class MovementController {
       }
 
       const dir = this.directionTo(current, target);
-      log.debug(
-        `移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`,
-      );
-      // 这里可以设计两种移动方式:
-      // 1. 点击目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
-      // 2. 直接点地面朝目标方向移动
+      log.debug(`移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`);  
+     // 这里可以设计两种移动方式:
+     // 1. 点击目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
+     // 2. 直接点地面朝目标方向移动
       await this.stepTowards(current, target, dir);
       await sleep(stepIntervalMs);
       // 判断距离是否到达
@@ -113,6 +111,7 @@ export class MovementController {
     target: MapPosition,
     direction: Direction8,
   ): Promise<void> {
+    void this.input;
     log.debug('MovementController.stepTowards 待实现');
   }
 }

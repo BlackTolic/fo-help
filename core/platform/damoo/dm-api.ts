@@ -26,7 +26,10 @@ export type MouseMode =
   | 'windows2'
   | 'dx'
   | 'dx2'
-  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message';
+  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message'
+  // ⚠️ 大漠只定义了 dx.mouse.input.lock.api,没有 input.lock.message 变体
+  //   (加了会绑定报 -44 无效参数);input 部分必须补上,否则 LeftClick 落在真实光标处
+  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.input.lock.api';
 export type KeypadMode =
   | 'normal'
   | 'windows'
@@ -48,7 +51,10 @@ export const DEFAULT_DAMOO_CONFIG: DamooConfig = {
   // keypad: 'windows',
   // mode: 0,
   display: 'dx.graphic.2d',
-  mouse: 'dx.mouse.position.lock.api|dx.mouse.position.lock.message',
+  // ⚠️ QQ幻想 不吃 dx 注入的鼠标按键(moveTo 有效但 LeftClick 无效),
+  //   先用 windows 消息模式点击;若游戏需要 dx 输入再换回下面的 dx 组合
+  mouse: 'windows',
+  // mouse: 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.input.lock.api',
   keypad: 'dx.keypad.state.api|dx.keypad.api',
   api: '',
   mode: 0,
@@ -243,10 +249,17 @@ export const dmApi = {
   rightClick: (): number => getRaw().RightClick(),
   middleClick: (): number => getRaw().MiddleClick(),
 
+  // ---- 窗口 ----
+  /** 设置窗口状态: 0关闭 1激活 2最小化 4最大化 8置顶 9取消置顶 */
+  setWindowState: (hwnd: number, flag: number): number => getRaw().SetWindowState(hwnd, flag),
+
   // ---- 键盘 ----
   keyDown: (vkCode: number): number => getRaw().KeyDown(vkCode),
   keyUp: (vkCode: number): number => getRaw().KeyUp(vkCode),
   keyPress: (vkCode: number): number => getRaw().KeyPress(vkCode),
+
+  // ---- 延时 ----
+  delay: (ms: number): number => getRaw().Delay(ms),
 };
 
 // ===== 旧 API 兼容(让原 damoo-instance 的调用方不用大改) =====

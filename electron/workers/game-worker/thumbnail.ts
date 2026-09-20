@@ -89,8 +89,9 @@ const DIR_VECTOR: Record<Direction8, { x: number; y: number }> = {
 };
 
 /**
+ * 将移动方式单独抽出来
  * 测试用移动控制器:点击「画面中心 + 方向 × STEP_PIXELS」的地面来移动
- * (QQ幻想是点击地面移动的 2D 游戏;如果你的游戏操作不同,改 stepTowards 即可)
+ * (QQ幻想是点击地面移动的 2D 游戏;如果你的游戏操作不同,改 stepTowards 即可)\
  */
 class TestMovementController extends MovementController {
   protected async stepTowards(
@@ -104,8 +105,13 @@ class TestMovementController extends MovementController {
       x: Math.round(SCREEN_CENTER.x + (v.x / len) * STEP_PIXELS),
       y: Math.round(SCREEN_CENTER.y + (v.y / len) * STEP_PIXELS),
     };
-    await this.input.moveMouse(clickPos, { kind: 'instant' });
+    console.log('clickPos', clickPos);
+    await this.input.moveMouse(clickPos, { kind: 'instant' });   
+    await new Promise((r) => setTimeout(r, 1000));
+    await this.input.delay(1000);
     await this.input.click('left');
+    await this.input.delay(1000);
+    await new Promise((r) => setTimeout(r, 1000));
   }
 }
 
@@ -138,7 +144,7 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
       `[移动测试] 当前坐标: (${current.x}, ${current.y}) 地图=${current.map ?? '未知'}`,
     );
 
-    const target: MapPosition = { map: current.map, x: current.x + 20, y: current.y };
+    const target: MapPosition = { map: current.map, x: current.x + 80, y: current.y };
     const arrived = await movement.moveTo(target, {
       arriveTolerance: 3,
       stepIntervalMs: 800,
@@ -155,40 +161,58 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
     report(false, `异常: ${e.message}`);
   }
 }
+const winax = require('winax');
 
 export async function takeAndSendThumbnailTest(ctx: WorkerContext, hwnd: number): Promise<void> {
   try {
     // ===== 移动测试:读坐标 → 向东走 20 单位 =====
-    await testMovement(ctx, hwnd);
+    // await testMovement(ctx, hwnd);
 
+    // 大漠文档:有些窗口绑定后需要先激活,否则后台鼠标无效
+    const actRet = dmApi.setWindowState(hwnd, 1);
+    dmApi.delay(1000);
+
+    dmApi.moveTo(512, 411);
+    dmApi.delay(500);
+    const ret = dmApi.leftClick();
+    ctx.sendLog(
+      'info',
+      `激活=${actRet} LeftClick=${ret} lastError=${dmApi.getLastError()}`,
+    );
+
+    // lock 模式下真实光标本来就不动,GetCursorPos 拿到的是屏幕坐标,仅供参考
+    const cx = new winax.Variant(0, 'byref');
+    const cy = new winax.Variant(0, 'byref');
+    dmApi.getCursorPos(cx, cy);
+    ctx.sendLog('info', `真实光标: ${Number(cx)},${Number(cy)}`);
     // ===== 原截图测试(暂时注释,需要时恢复) =====
-    const path = require('path');
-    const fs = require('fs');
-    const thumbsDir = ctx.init.thumbsDir;
-    if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
-    const ts = Date.now();
-    const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
-    const ret = dmApi.capture(1167, 39, 1218, 56, filePath);
-    dmApi.getFullScreenData(path.join(thumbsDir, `testscreen-${hwnd}-${ts}.png`));
-    if (ret !== 1) {
-      ctx.sendLog('warn', `测试截图 Capture 返回 ${ret}`);
-      ctx.postMessage({
-        type: 'thumbnail-test',
-        hwnd,
-        error: `Capture 返回 ${ret}`,
-      });
-      return;
-    }
-    if (!fs.existsSync(filePath)) {
-      ctx.postMessage({ type: 'thumbnail-test', hwnd, error: '文件未生成' });
-      return;
-    }
-    const stat = fs.statSync(filePath);
-    ctx.postMessage({ type: 'thumbnail-test', hwnd, filePath, size: stat.size });
-    ctx.sendLog('info', `测试截图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
+    // const path = require('path');
+    // const fs = require('fs');
+    // const thumbsDir = ctx.init.thumbsDir;
+    // if (!fs.existsSync(thumbsDir)) fs.mkdirSync(thumbsDir, { recursive: true });
+    // const ts = Date.now();
+    // const filePath = path.join(thumbsDir, `test-${hwnd}-${ts}.png`);
+    // const ret = dmApi.capture(1167, 39, 1218, 56, filePath);
+    // dmApi.getFullScreenData(path.join(thumbsDir, `testscreen-${hwnd}-${ts}.png`));
+    // if (ret !== 1) {
+    //   ctx.sendLog('warn', `测试截图 Capture 返回 ${ret}`);
+    //   ctx.postMessage({
+    //     type: 'thumbnail-test',
+    //     hwnd,
+    //     error: `Capture 返回 ${ret}`,
+    //   });
+    //   return;
+    // }
+    // if (!fs.existsSync(filePath)) {
+    //   ctx.postMessage({ type: 'thumbnail-test', hwnd, error: '文件未生成' });
+    //   return;
+    // }
+    // const stat = fs.statSync(filePath);
+    // ctx.postMessage({ type: 'thumbnail-test', hwnd, filePath, size: stat.size });
+    // ctx.sendLog('info', `测试截图已写入 (${(stat.size / 1024).toFixed(0)}KB) → ${filePath}`);
   } catch (e: any) {
     ctx.postMessage({ type: 'thumbnail-test', hwnd: ctx.init.hwnd, error: e.message });
-    ctx.sendLog('warn', `测试截图失败: ${e.message}`);
+    ctx.sendLog('warn', `移动失败: ${e.message}`);
   }
 }
 

@@ -108,7 +108,7 @@ export class DamooInputProvider implements IInputProvider {
           : dmApi.middleClick;
     for (let i = 0; i < count; i++) {
       fn();
-      if (i < count - 1) await new Promise((r) => setTimeout(r, 80));
+      if (i < count - 1) await new Promise((r) => setTimeout(r, 60));
     }
   }
 
@@ -134,6 +134,10 @@ export class DamooInputProvider implements IInputProvider {
     const code = KEY_MAP[key];
     if (code === undefined) throw new Error(`不支持的键: ${key}`);
     dmApi.keyUp(code);
+  }
+
+  async delay(ms: number): Promise<void> {
+    dmApi.delay(ms);
   }
 
   destroy(): void {
