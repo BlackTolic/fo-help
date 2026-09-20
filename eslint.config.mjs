@@ -42,10 +42,7 @@ export default [
     },
     rules: {
       // 跟项目节奏相关的常用阉割
-      '@typescript-eslint/no-unused-vars': [
-        'warn',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
-      ],
+      '@typescript-eslint/no-unused-vars':'off',
       // winax/dm.dll 都是 any 返回值,unsafe-* 一屏幕,关掉
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unsafe-assignment': 'off',

@@ -148,7 +148,10 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
             path.join(appPath, profile.fontLib),
           ].find((p: string) => fs.existsSync(p)) ?? null);
       if (!fontPath) {
-        ctx.sendLog('warn', `字库文件不存在: ${profile.fontLib} (已找 resources/font 和 assets/font)`);
+        ctx.sendLog(
+          'warn',
+          `字库文件不存在: ${profile.fontLib} (已找 resources/font 和 assets/font)`,
+        );
       } else {
         const ret = dmApi.setDict(0, fontPath);
         if (ret === 1) {

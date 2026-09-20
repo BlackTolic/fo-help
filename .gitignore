@@ -12,8 +12,8 @@ release/
 logs/
 
 # IDE
-.vscode/
-.idea/
+#.vscode/
+#.idea/
 *.swp
 
 # 系统

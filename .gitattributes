@@ -1,2 +1,9 @@
+# 统一所有文本文件的行尾为 LF,与 .prettierrc 的 endOfLine: "lf" 保持一致
+# (Windows 上也不再依赖 core.autocrlf 做 CRLF 转换)
+* text=auto eol=lf
+
+# 游戏资源数据(含非 UTF-8 编码的字体数据文件),git 不要做任何文本转换
+assets/font/** -text
+
 # 强制 .gitignore 按文本处理 + 转 UTF-8(去掉 BOM,避免 git 当 binary)
 .gitignore text working-tree-encoding=UTF-8

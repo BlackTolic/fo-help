@@ -33,13 +33,7 @@ export type ScriptStatus =
   | 'paused'; // 暂停
 
 /** 任务名称(显示用) */
-export type TaskName =
-  | '挂机打怪'
-  | '挖矿'
-  | '捕捉宠物'
-  | '装备炼化'
-  | '名誉任务'
-  | '缺省技能';
+export type TaskName = '挂机打怪' | '挖矿' | '捕捉宠物' | '装备炼化' | '名誉任务' | '缺省技能';
 
 /** 路径点 */
 export interface Waypoint {

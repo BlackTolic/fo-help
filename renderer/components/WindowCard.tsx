@@ -186,11 +186,7 @@ export function WindowCard({
       setError(res.error || '启动 worker 失败');
       return;
     }
-    const startRes = await onStartTask(
-      gameWindow.hwnd,
-      stored.config.type,
-      stored.config,
-    );
+    const startRes = await onStartTask(gameWindow.hwnd, stored.config.type, stored.config);
     if (!startRes.ok) {
       alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
     }
@@ -534,11 +530,7 @@ export function WindowCard({
                   // pending 状态:worker 已 ready 但还没收到 start-task
                   //   (上次因 race 暂存过 / 或 worker 还在 waitForConfig 等命令)
                   //   重新发一次 start-task,worker 那边 _startResolve / _pendingStart 都能接住
-                  const res = await onStartTask(
-                    gameWindow.hwnd,
-                    taskConfig?.type,
-                    taskConfig,
-                  );
+                  const res = await onStartTask(gameWindow.hwnd, taskConfig?.type, taskConfig);
                   if (!res.ok) alert(`启动失败: ${res.error || '未知'}`);
                 }}
                 className="btn btn-primary flex-1 flex items-center justify-center gap-1"
