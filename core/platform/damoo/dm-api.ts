@@ -26,10 +26,7 @@ export type MouseMode =
   | 'windows2'
   | 'dx'
   | 'dx2'
-  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message'
-  // ⚠️ 大漠只定义了 dx.mouse.input.lock.api,没有 input.lock.message 变体
-  //   (加了会绑定报 -44 无效参数);input 部分必须补上,否则 LeftClick 落在真实光标处
-  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.input.lock.api';
+  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api'
 export type KeypadMode =
   | 'normal'
   | 'windows'
@@ -53,10 +50,11 @@ export const DEFAULT_DAMOO_CONFIG: DamooConfig = {
   display: 'dx.graphic.2d',
   // ⚠️ QQ幻想 不吃 dx 注入的鼠标按键(moveTo 有效但 LeftClick 无效),
   //   先用 windows 消息模式点击;若游戏需要 dx 输入再换回下面的 dx 组合
-  mouse: 'windows',
-  // mouse: 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.input.lock.api',
-  keypad: 'dx.keypad.state.api|dx.keypad.api',
-  api: '',
+  // 完整 dx 鼠标组合：仅 position.lock 时 MoveTo 有效但 LeftClick 无效（点击需 dx.mouse.api 等输入注入参数）
+    mouse:
+      'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api',
+    keypad: 'dx.keypad.state.api|dx.keypad.api',
+    api: 'dx.public.active.api|dx.public.active.message',
   mode: 0,
 };
 
