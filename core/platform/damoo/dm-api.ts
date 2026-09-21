@@ -26,7 +26,7 @@ export type MouseMode =
   | 'windows2'
   | 'dx'
   | 'dx2'
-  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api'
+  | 'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api';
 export type KeypadMode =
   | 'normal'
   | 'windows'
@@ -51,10 +51,10 @@ export const DEFAULT_DAMOO_CONFIG: DamooConfig = {
   // ⚠️ QQ幻想 不吃 dx 注入的鼠标按键(moveTo 有效但 LeftClick 无效),
   //   先用 windows 消息模式点击;若游戏需要 dx 输入再换回下面的 dx 组合
   // 完整 dx 鼠标组合：仅 position.lock 时 MoveTo 有效但 LeftClick 无效（点击需 dx.mouse.api 等输入注入参数）
-    mouse:
-      'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api',
-    keypad: 'dx.keypad.state.api|dx.keypad.api',
-    api: 'dx.public.active.api|dx.public.active.message',
+  mouse:
+    'dx.mouse.position.lock.api|dx.mouse.position.lock.message|dx.mouse.state.api|dx.mouse.state.message|dx.mouse.api|dx.mouse.focus.input.api|dx.mouse.focus.input.message|dx.mouse.clip.lock.api|dx.mouse.input.lock.api',
+  keypad: 'dx.keypad.state.api|dx.keypad.api',
+  api: 'dx.public.active.api|dx.public.active.message',
   mode: 0,
 };
 
@@ -244,8 +244,14 @@ export const dmApi = {
   /** GetCursorPos 需要 byref 参数(用 winax.Variant) */
   getCursorPos: (xRef: any, yRef: any): number => getRaw().GetCursorPos(xRef, yRef),
   leftClick: (): number => getRaw().LeftClick(),
+  leftDown: (): number => getRaw().LeftDown(),
+  leftUp: (): number => getRaw().LeftUp(),
   rightClick: (): number => getRaw().RightClick(),
+  rightDown: (): number => getRaw().RightDown(),
+  rightUp: (): number => getRaw().RightUp(),
   middleClick: (): number => getRaw().MiddleClick(),
+  middleDown: (): number => getRaw().MiddleDown(),
+  middleUp: (): number => getRaw().MiddleUp(),
 
   // ---- 窗口 ----
   /** 设置窗口状态: 0关闭 1激活 2最小化 4最大化 8置顶 9取消置顶 */

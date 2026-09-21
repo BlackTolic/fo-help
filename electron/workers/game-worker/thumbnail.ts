@@ -7,7 +7,7 @@ import { dmErrorFull } from '../../../core/platform/damoo/dm-errors';
 import { DamooVisionProvider } from '../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../core/perception/MapCoordReader';
-import { MovementControllerByDirection8 } from '../../../core/navigation/MovementController';
+import { MovementControllerByDirection8, MovementControllerByRandom } from '../../../core/navigation/MovementController';
 import type { MapCoordConfig, MapPosition } from '../../../core/perception/types';
 import type { WorkerContext } from './context';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
@@ -92,7 +92,8 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
     input.bind(hwnd);
 
     const coordReader = new MapCoordReader(vision, TEST_MAP_COORD_CONFIG);
-    const movement = new MovementControllerByDirection8(input, coordReader);
+    // const movement = new MovementControllerByDirection8(input, coordReader);
+    const movement = new MovementControllerByRandom(input, coordReader, {});
     const current = await movement.readPosition();
 
     if (!current) {
