@@ -1,0 +1,9 @@
+{
+  // 推荐给本仓库的 Trae IDE / VS Code 扩展
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "bradlc.vscode-tailwindcss",
+    "ms-vscode.vscode-typescript-next"
+  ]
+}
