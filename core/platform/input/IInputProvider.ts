@@ -59,6 +59,12 @@ export interface IInputProvider {
   /** 鼠标点击 */
   click(button: MouseButton, count?: number): Promise<void>;
 
+  /** 鼠标按下不抬(配合 mouseUp 实现按住拖拽/持续移动) */
+  mouseDown(button: MouseButton): Promise<void>;
+
+  /** 鼠标抬起 */
+  mouseUp(button: MouseButton): Promise<void>;
+
   /** 按键(按下 + 抬起) */
   pressKey(key: KeyCode, holdMs?: number): Promise<void>;
 

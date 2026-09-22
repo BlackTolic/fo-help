@@ -112,6 +112,18 @@ export class DamooInputProvider implements IInputProvider {
     }
   }
 
+  async mouseDown(button: MouseButton): Promise<void> {
+    const fn =
+      button === 'left' ? dmApi.leftDown : button === 'right' ? dmApi.rightDown : dmApi.middleDown;
+    fn();
+  }
+
+  async mouseUp(button: MouseButton): Promise<void> {
+    const fn =
+      button === 'left' ? dmApi.leftUp : button === 'right' ? dmApi.rightUp : dmApi.middleUp;
+    fn();
+  }
+
   async pressKey(key: KeyCode, holdMs?: number): Promise<void> {
     const code = KEY_MAP[key];
     if (code === undefined) throw new Error(`不支持的键: ${key}`);

@@ -7,7 +7,7 @@ import { dmErrorFull } from '../../../core/platform/damoo/dm-errors';
 import { DamooVisionProvider } from '../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../core/perception/MapCoordReader';
-import { MovementController, type Direction8 } from '../../../core/navigation/MovementController';
+import { MovementControllerByDirection8, MovementControllerByRandom } from '../../../core/navigation/MovementController';
 import type { MapCoordConfig, MapPosition } from '../../../core/perception/types';
 import type { WorkerContext } from './context';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
@@ -71,52 +71,12 @@ const TEST_MAP_COORD_CONFIG: MapCoordConfig = {
   similarity: DEFAULT_SIM,
 };
 
-/** 游戏画面中心(点击移动的基准点,1024x768 窗口即 512,384) */
-const SCREEN_CENTER = { x: 512, y: 384 };
-/** 每一步点击离中心多远(像素) */
-const STEP_PIXELS = 200;
 
-/** 方向 → 屏幕单位向量(x 东为正,y 南为正) */
-const DIR_VECTOR: Record<Direction8, { x: number; y: number }> = {
-  E: { x: 1, y: 0 },
-  SE: { x: 1, y: 1 },
-  S: { x: 0, y: 1 },
-  SW: { x: -1, y: 1 },
-  W: { x: -1, y: 0 },
-  NW: { x: -1, y: -1 },
-  N: { x: 0, y: -1 },
-  NE: { x: 1, y: -1 },
-};
 
-/**
- * 将移动方式单独抽出来
- * 测试用移动控制器:点击「画面中心 + 方向 × STEP_PIXELS」的地面来移动
- * (QQ幻想是点击地面移动的 2D 游戏;如果你的游戏操作不同,改 stepTowards 即可)\
- */
-class TestMovementController extends MovementController {
-  protected async stepTowards(
-    _current: MapPosition,
-    _target: MapPosition,
-    direction: Direction8,
-  ): Promise<void> {
-    const v = DIR_VECTOR[direction];
-    const len = Math.hypot(v.x, v.y) || 1;
-    const clickPos = {
-      x: Math.round(SCREEN_CENTER.x + (v.x / len) * STEP_PIXELS),
-      y: Math.round(SCREEN_CENTER.y + (v.y / len) * STEP_PIXELS),
-    };
-    console.log('clickPos', clickPos);
-    await this.input.moveMouse(clickPos, { kind: 'instant' });   
-    await new Promise((r) => setTimeout(r, 1000));
-    await this.input.delay(1000);
-    await this.input.click('left');
-    await this.input.delay(1000);
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-}
 
 /** 移动测试:读当前坐标 → 向东走 20 个坐标单位 → 回报结果 */
 export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<void> {
+  // 移动测试报告
   const report = (ok: boolean, detail: string) => {
     ctx.sendLog(ok ? 'info' : 'warn', `[移动测试] ${detail}`);
     ctx.postMessage({
@@ -132,9 +92,10 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
     input.bind(hwnd);
 
     const coordReader = new MapCoordReader(vision, TEST_MAP_COORD_CONFIG);
-    const movement = new TestMovementController(input, coordReader);
-
+    // const movement = new MovementControllerByDirection8(input, coordReader);
+    const movement = new MovementControllerByRandom(input, coordReader, {});
     const current = await movement.readPosition();
+
     if (!current) {
       report(false, '读不到当前坐标(检查 TEST_MAP_COORD_CONFIG 的 coordRoi/coordColor)');
       return;
@@ -145,46 +106,52 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
     );
 
     const target: MapPosition = { map: current.map, x: current.x + 80, y: current.y };
+    // 是否已经到达目标位置
     const arrived = await movement.moveTo(target, {
       arriveTolerance: 3,
       stepIntervalMs: 800,
-      timeoutMs: 20000,
+      noMoveTimeoutMs: 20000,
     });
 
     const after = await movement.readPosition();
     report(
       arrived,
-      `目标 (${target.x}, ${target.y}) ${arrived ? '已到达' : '未到达(超时)'}，` +
+      `目标 (${target.x}, ${target.y}) ${arrived ? '已到达' : '未到达(长时间未移动)'}，` +
         `当前 (${after ? `${after.x}, ${after.y}` : '读不到'})`,
     );
   } catch (e: any) {
     report(false, `异常: ${e.message}`);
   }
 }
-const winax = require('winax');
 
 export async function takeAndSendThumbnailTest(ctx: WorkerContext, hwnd: number): Promise<void> {
   try {
     // ===== 移动测试:读坐标 → 向东走 20 单位 =====
-    // await testMovement(ctx, hwnd);
+    await testMovement(ctx, hwnd);
 
     // 大漠文档:有些窗口绑定后需要先激活,否则后台鼠标无效
-    const actRet = dmApi.setWindowState(hwnd, 1);
-    dmApi.delay(1000);
+    // const actRet = dmApi.setWindowState(hwnd, 1);
+    // dmApi.delay(1000);
 
-    dmApi.moveTo(512, 411);
-    dmApi.delay(500);
-    const ret = dmApi.leftClick();
-    ctx.sendLog(
-      'info',
-      `激活=${actRet} LeftClick=${ret} lastError=${dmApi.getLastError()}`,
-    );
+    // dmApi.moveTo(512, 411);
+    // dmApi.delay(500);
+    //  dmApi.leftClick();
+    //  dmApi.delay(500);
+    //  dmApi.leftClick();
+    //  dmApi.delay(500);
+    //  dmApi.leftClick();
+    //  dmApi.delay(500);
+    //  const ret = dmApi.leftClick();
+    // ctx.sendLog(
+    //   'info',
+    //   `激活=${actRet} LeftClick=${ret} lastError=${dmApi.getLastError()}`,
+    // );
 
-    // lock 模式下真实光标本来就不动,GetCursorPos 拿到的是屏幕坐标,仅供参考
-    const cx = new winax.Variant(0, 'byref');
-    const cy = new winax.Variant(0, 'byref');
-    dmApi.getCursorPos(cx, cy);
-    ctx.sendLog('info', `真实光标: ${Number(cx)},${Number(cy)}`);
+    // // lock 模式下真实光标本来就不动,GetCursorPos 拿到的是屏幕坐标,仅供参考
+    // const cx = new winax.Variant(0, 'byref');
+    // const cy = new winax.Variant(0, 'byref');
+    // dmApi.getCursorPos(cx, cy);
+    // ctx.sendLog('info', `真实光标: ${Number(cx)},${Number(cy)}`);
     // ===== 原截图测试(暂时注释,需要时恢复) =====
     // const path = require('path');
     // const fs = require('fs');
