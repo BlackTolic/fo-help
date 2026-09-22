@@ -56,6 +56,13 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
             ctx.skill.resumeResolve();
             ctx.skill.resumeResolve = null;
           }
+          // 移动攻击测试:同样跳出循环 + 解除暂停
+          ctx.moveAttack.running = false;
+          ctx.moveAttack.paused = false;
+          if (ctx.moveAttack.resumeResolve) {
+            ctx.moveAttack.resumeResolve();
+            ctx.moveAttack.resumeResolve = null;
+          }
           // utilityProcess 子进程:dm.dll 进程级副作用不影响其他子进程
           //   每个子进程独立加载 dm.dll,UnBindWindow 只影响自己
           try {
@@ -79,6 +86,8 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
           if (ctx.init.taskType === 'default-skill') {
             ctx.skill.paused = true;
           }
+          // 移动攻击测试:同样仅置位 paused,主循环内部 await Promise 阻塞
+          ctx.moveAttack.paused = true;
           ctx.setStatus('paused', '用户暂停');
           break;
         case 'resume':
@@ -93,6 +102,12 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
               ctx.skill.resumeResolve();
               ctx.skill.resumeResolve = null;
             }
+          }
+          // 移动攻击测试:同样清 paused + resolve
+          ctx.moveAttack.paused = false;
+          if (ctx.moveAttack.resumeResolve) {
+            ctx.moveAttack.resumeResolve();
+            ctx.moveAttack.resumeResolve = null;
           }
           break;
         case 'screenshot':

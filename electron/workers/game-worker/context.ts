@@ -69,6 +69,15 @@ export class WorkerContext {
     loopCount: 0, // 已跑完多少轮(用于日志 + UI 状态)
   };
 
+  // ===== 移动攻击测试(move-attack)的运行控制 =====
+  // 与 skill 同理:pause/stop 命令可能在 runMoveAttackTest 开始前到达,
+  // 标志放 ctx 上而不是测试函数内部
+  moveAttack = {
+    running: true,
+    paused: false,
+    resumeResolve: null as (() => void) | null,
+  };
+
   currentStep = '(none)';
   mainStart = Date.now();
 

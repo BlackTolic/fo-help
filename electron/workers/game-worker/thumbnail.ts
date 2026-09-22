@@ -7,9 +7,13 @@ import { dmErrorFull } from '../../../core/platform/damoo/dm-errors';
 import { DamooVisionProvider } from '../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../core/perception/MapCoordReader';
-import { MovementControllerByDirection8, MovementControllerByRandom } from '../../../core/navigation/MovementController';
+import {
+  MovementControllerByDirection8,
+  MovementControllerByRandom,
+} from '../../../core/navigation/MovementController';
 import type { MapCoordConfig, MapPosition } from '../../../core/perception/types';
 import type { WorkerContext } from './context';
+import { runMoveAttackTest } from './move-attack';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
 import { COLOR_WHITE } from '../../../core/constant-ocr/color';
 
@@ -71,9 +75,6 @@ const TEST_MAP_COORD_CONFIG: MapCoordConfig = {
   similarity: DEFAULT_SIM,
 };
 
-
-
-
 /** 移动测试:读当前坐标 → 向东走 20 个坐标单位 → 回报结果 */
 export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<void> {
   // 移动测试报告
@@ -126,8 +127,8 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
 
 export async function takeAndSendThumbnailTest(ctx: WorkerContext, hwnd: number): Promise<void> {
   try {
-    // ===== 移动测试:读坐标 → 向东走 20 单位 =====
-    await testMovement(ctx, hwnd);
+    // ===== 移动攻击测试:路径点循环 + 到点释放 CD 已好的指向性技能 =====
+    await runMoveAttackTest(ctx, hwnd);
 
     // 大漠文档:有些窗口绑定后需要先激活,否则后台鼠标无效
     // const actRet = dmApi.setWindowState(hwnd, 1);

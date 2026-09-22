@@ -17,6 +17,7 @@ import type {
   TaskType,
   TaskConfig,
   FarmTaskConfig,
+  FarmSkillConfig,
   Waypoint,
   StoredTaskConfig,
   DefaultSkillTaskConfig,
@@ -156,6 +157,10 @@ export function TaskConfigDialog({
   const [mode, setMode] = useState<'single' | 'aoe' | 'patrol'>('single');
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [nameKeywords, setNameKeywords] = useState('野,狼,鸡,鹿,狐,猫');
+  // 移动攻击相关:怪名颜色 / 技能列表 / 角色移动间隔
+  const [mobNameColor, setMobNameColor] = useState('FFFFFF-FFFFFF');
+  const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
+  const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
   const [note, setNote] = useState('');
 
   // 缺省技能配置
@@ -181,6 +186,9 @@ export function TaskConfigDialog({
       setMode(farm.mode);
       setWaypoints(farm.waypoints || []);
       setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
+      setMobNameColor(farm.mobFilter?.nameColor || 'FFFFFF-FFFFFF');
+      setSkills(farm.skills || []);
+      setMoveStepIntervalMs(farm.movementSpeed ?? 800);
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -243,7 +251,19 @@ export function TaskConfigDialog({
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean),
+          nameColor: mobNameColor.trim() || undefined,
         },
+        // 过滤掉未启用的技能 + 规范化 cooldownMs,保存前清洗(同缺省技能的清洗思路)
+        skills: skills
+          .filter((s) => s.enabled !== false)
+          .map((s) => ({
+            id: s.id,
+            key: s.key,
+            cooldownMs: Math.max(0, s.cooldownMs | 0),
+            enabled: s.enabled !== false,
+            note: s.note,
+          })),
+        movementSpeed: Math.max(100, moveStepIntervalMs | 0),
         note: note || undefined,
       };
     }
@@ -493,6 +513,12 @@ export function TaskConfigDialog({
               updateWaypoint={updateWaypoint}
               nameKeywords={nameKeywords}
               setNameKeywords={setNameKeywords}
+              mobNameColor={mobNameColor}
+              setMobNameColor={setMobNameColor}
+              skills={skills}
+              setSkills={setSkills}
+              moveStepIntervalMs={moveStepIntervalMs}
+              setMoveStepIntervalMs={setMoveStepIntervalMs}
               note={note}
               setNote={setNote}
             />
@@ -666,6 +692,9 @@ export function TaskConfigDialog({
 
 // ---- 挂机打怪配置子组件 ----
 
+/** 移动攻击技能可选键(F1-F9,与 worker 的 MoveAttackSkill.key 对应) */
+const SKILL_KEY_OPTIONS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'];
+
 interface FarmConfigProps {
   readOnly?: boolean;
   mapId: string;
@@ -681,6 +710,12 @@ interface FarmConfigProps {
   updateWaypoint: (id: string, field: keyof Waypoint, value: any) => void;
   nameKeywords: string;
   setNameKeywords: (v: string) => void;
+  mobNameColor: string;
+  setMobNameColor: (v: string) => void;
+  skills: FarmSkillConfig[];
+  setSkills: (v: FarmSkillConfig[] | ((prev: FarmSkillConfig[]) => FarmSkillConfig[])) => void;
+  moveStepIntervalMs: number;
+  setMoveStepIntervalMs: (v: number) => void;
   note: string;
   setNote: (v: string) => void;
 }
@@ -701,11 +736,53 @@ function FarmConfig(props: FarmConfigProps) {
     updateWaypoint,
     nameKeywords,
     setNameKeywords,
+    mobNameColor,
+    setMobNameColor,
+    skills,
+    setSkills,
+    moveStepIntervalMs,
+    setMoveStepIntervalMs,
     note,
     setNote,
   } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
+
+  // ---- 移动攻击技能列表编辑 ----
+  const addSkill = () => {
+    if (readOnly) return;
+    setSkills((ss) => [
+      ...ss,
+      {
+        id: `skill-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        key: 'F1',
+        cooldownMs: 5000,
+        enabled: true,
+      },
+    ]);
+  };
+
+  const removeSkill = (id: string) => {
+    if (readOnly) return;
+    setSkills((ss) => ss.filter((s) => s.id !== id));
+  };
+
+  const moveSkill = (id: string, dir: -1 | 1) => {
+    setSkills((ss) => {
+      const idx = ss.findIndex((s) => s.id === id);
+      if (idx < 0) return ss;
+      const newIdx = idx + dir;
+      if (newIdx < 0 || newIdx >= ss.length) return ss;
+      const next = [...ss];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  };
+
+  const updateSkill = (id: string, patch: Partial<FarmSkillConfig>) => {
+    if (readOnly) return;
+    setSkills((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  };
 
   return (
     <div className="space-y-5">
@@ -870,6 +947,156 @@ function FarmConfig(props: FarmConfigProps) {
           disabled={readOnly}
           className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
         />
+      </div>
+
+      {/* 怪名颜色(移动攻击测试找怪用) */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          怪名颜色 <span className="text-text-muted text-[11px]">(大漠颜色格式)</span>
+        </label>
+        <input
+          type="text"
+          value={mobNameColor}
+          onChange={(e) => setMobNameColor(e.target.value)}
+          placeholder="FFFFFF-FFFFFF"
+          disabled={readOnly}
+          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+        />
+        <div className="text-[10px] text-text-muted mt-1">
+          找怪时按这个字的颜色匹配;不确定就用默认 FFFFFF-FFFFFF(白名)
+        </div>
+      </div>
+
+      {/* 移动攻击技能列表(按技能键 → 点击怪物坐标释放) */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-sm text-text-secondary">
+            技能列表{' '}
+            <span className="text-text-muted text-[11px]">(按技能键 → 点击怪坐标释放)</span>
+          </label>
+          {!readOnly && (
+            <button
+              onClick={addSkill}
+              className="text-xs btn btn-secondary flex items-center gap-1"
+            >
+              <Plus size={12} />
+              添加技能
+            </button>
+          )}
+        </div>
+
+        {skills.length === 0 ? (
+          <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
+            暂无技能(移动攻击测试将用 worker 内置默认 F1-F4)
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {skills.map((skill, i) => (
+              <div
+                key={skill.id}
+                className={`flex items-center gap-1.5 bg-bg-input p-1.5 rounded ${
+                  skill.enabled === false ? 'opacity-50' : ''
+                }`}
+              >
+                <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
+                {!readOnly && (
+                  <input
+                    type="checkbox"
+                    checked={skill.enabled !== false}
+                    onChange={(e) => updateSkill(skill.id, { enabled: e.target.checked })}
+                    title="启用 / 临时禁用"
+                    className="accent-accent-cyan"
+                  />
+                )}
+                <select
+                  value={skill.key}
+                  onChange={(e) => updateSkill(skill.id, { key: e.target.value })}
+                  disabled={readOnly}
+                  className={`bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                  title="技能键"
+                >
+                  {SKILL_KEY_OPTIONS.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-text-muted text-[10px]">CD</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={skill.cooldownMs}
+                  onChange={(e) =>
+                    updateSkill(skill.id, { cooldownMs: parseInt(e.target.value) || 0 })
+                  }
+                  disabled={readOnly}
+                  className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                  title="技能冷却(毫秒,3~10s = 3000~10000)"
+                />
+                <span className="text-text-muted text-[10px]">ms</span>
+                <input
+                  type="text"
+                  placeholder="备注"
+                  value={skill.note || ''}
+                  onChange={(e) => updateSkill(skill.id, { note: e.target.value })}
+                  disabled={readOnly}
+                  className={`flex-1 min-w-0 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                />
+                {!readOnly && (
+                  <>
+                    <button
+                      onClick={() => moveSkill(skill.id, -1)}
+                      disabled={i === 0}
+                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                      title="上移"
+                    >
+                      <ArrowUp size={12} />
+                    </button>
+                    <button
+                      onClick={() => moveSkill(skill.id, 1)}
+                      disabled={i === skills.length - 1}
+                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                      title="下移"
+                    >
+                      <ArrowDown size={12} />
+                    </button>
+                    <button
+                      onClick={() => removeSkill(skill.id)}
+                      className="text-accent-red/70 hover:text-accent-red"
+                      title="删除该技能"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="text-[10px] text-text-muted mt-1">
+          到路径点后,对不在冷却中的技能依次:按键 → 点击怪坐标。短 CD 每个点都能放,长 CD
+          隔几个点自动轮到
+        </div>
+      </div>
+
+      {/* 角色移动间隔 */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          移动间隔 <span className="text-text-muted text-[11px]">(毫秒,角色移动速度)</span>
+        </label>
+        <input
+          type="number"
+          min={100}
+          step={100}
+          value={moveStepIntervalMs}
+          onChange={(e) => setMoveStepIntervalMs(parseInt(e.target.value) || 800)}
+          disabled={readOnly}
+          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+        />
+        <div className="text-[10px] text-text-muted mt-1">
+          每走一步后等多久再读坐标纠偏;移速快的角色可以调小(如 500),慢的角色调大(如 1000)
+        </div>
       </div>
 
       {/* 备注 */}

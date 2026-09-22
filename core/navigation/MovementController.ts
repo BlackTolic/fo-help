@@ -102,9 +102,9 @@ export class MovementController {
           }
 
           const dir = this.directionTo(current, target);
-          log.debug(
-            `移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`,
-          );
+          // log.debug(
+          //   `移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`,
+          // );
           // 这里可以设计两种移动方式:
           // 1. 点击目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
           // 2. 直接点地面朝目标方向移动
@@ -245,7 +245,6 @@ export class MovementControllerByRandom extends MovementController {
   protected async stepTowards(
     current: MapPosition,
     target: MapPosition,
-    _direction: Direction8,
   ): Promise<void> {
     // 地图坐标 y 轴向南 = 屏幕 y 轴向南,atan2 角可直接映射到屏幕圆上落点
     const exactAngle = Math.atan2(target.y - current.y, target.x - current.x);
@@ -261,9 +260,9 @@ export class MovementControllerByRandom extends MovementController {
       await this.input.mouseDown('left');
       this.holding = true;
     }
-    const jitterDeg = ((angle - exactAngle) * 180) / Math.PI;
-    const { dist } = this.deltaTo(current, target);
-    log.debug(`随机移动: 落点 (${x},${y}) 抖动 ${jitterDeg.toFixed(1)}° 距目标 ${dist.toFixed(1)}`);
+    // const jitterDeg = ((angle - exactAngle) * 180) / Math.PI;
+    // const { dist } = this.deltaTo(current, target);
+    // log.debug(`随机移动: 落点 (${x},${y}) 抖动 ${jitterDeg.toFixed(1)}° 距目标 ${dist.toFixed(1)}`);
   }
 
   /** 到达:先松左键,再点一下圆心(角色脚下),让角色停在目标位置(基类循环到达时调用) */

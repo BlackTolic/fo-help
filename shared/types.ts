@@ -45,6 +45,20 @@ export interface Waypoint {
   note?: string;
 }
 
+/** 移动攻击技能配置(指向性技能:按技能键 → 点击目标坐标完成释放) */
+export interface FarmSkillConfig {
+  /** 唯一 id(UI 排序/删除用) */
+  id: string;
+  /** 技能键(F1-F9) */
+  key: string;
+  /** 技能冷却(毫秒,3~10s 不等) */
+  cooldownMs: number;
+  /** 是否启用(临时禁用不删除) */
+  enabled?: boolean;
+  /** 备注 */
+  note?: string;
+}
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -54,14 +68,20 @@ export interface FarmTaskConfig {
   customMapName?: string;
   /** 打怪模式: single=单怪 / aoe=AOE 群刷 / patrol=路径巡逻 */
   mode: 'single' | 'aoe' | 'patrol';
-  /** 路径点列表(patrol 模式必填) */
+  /** 路径点列表(patrol 模式必填;移动攻击测试作为 A→B→C… 移动路径) */
   waypoints: Waypoint[];
-  /** 找怪关键字 */
+  /** 找怪配置 */
   mobFilter: {
     nameKeywords: string[];
     minLevel?: number;
     maxLevel?: number;
+    /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用) */
+    nameColor?: string;
   };
+  /** 移动攻击技能列表(按技能键 → 点击怪物坐标;空 = 用 worker 内置默认) */
+  skills?: FarmSkillConfig[];
+  /** 角色移动间隔(毫秒):移动一步后等多久再读坐标,越小走位越频繁(worker 的 stepIntervalMs) */
+  movementSpeed?: number;
   /** 自定义备注 */
   note?: string;
 }
