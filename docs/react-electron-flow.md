@@ -253,7 +253,7 @@ renderer/index.tsx → App.tsx
          ├─ takeAndSendThumbnail:
          │   ├─ dmApi.capture(0, 0, 192, 108, filePath)
          │   └─ postMessage({type:'thumbnail', dataUrl:'thumb://image/<hwnd>'})
-         ├─ new CombatEngine(...)
+         ├─ (无战斗引擎:任务由 start-task 决定,tasks/index.ts 按类型分派)
          ├─ setStatus('idle', '等待启动')
          └─ await new Promise((resolve) => { _startResolve = resolve })
              [★ worker 阻塞在这里,等父进程发 start-task]

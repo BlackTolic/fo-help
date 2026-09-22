@@ -242,10 +242,7 @@ export class MovementControllerByRandom extends MovementController {
    * 朝目标走一小步:鼠标落到「中心 + 随机角度/半径」的圆上并按住左键
    * @_direction 基类按八方向量化后的方向,本实现用连续精确角,故忽略
    */
-  protected async stepTowards(
-    current: MapPosition,
-    target: MapPosition,
-  ): Promise<void> {
+  protected async stepTowards(current: MapPosition, target: MapPosition): Promise<void> {
     // 地图坐标 y 轴向南 = 屏幕 y 轴向南,atan2 角可直接映射到屏幕圆上落点
     const exactAngle = Math.atan2(target.y - current.y, target.x - current.x);
     const angle = exactAngle + (Math.random() * 2 - 1) * this.angleJitterRad;

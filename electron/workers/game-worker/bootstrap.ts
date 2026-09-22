@@ -1,7 +1,11 @@
 // bootstrap: 子进程启动流程
-//   profile 准备 → loadDamoo → bindWindow → 字库 → OCR 角色名 → 发 state → 缩略图 → 组装战斗引擎
+//   profile 准备 → loadDamoo → bindWindow → 字库 → OCR 角色名 → 发 state → 缩略图
 // 失败路径与原 game-utility-worker.ts 完全一致:
 //   大漠未加载 / 绑定失败 → setStatus('alert', ...) 后返回 false,不再继续后续步骤
+//
+// 注:原流程末尾会无条件组装 CombatEngine 挂到 ctx.combat(供 pause/stop/resume 直接操作)。
+//   挂机打怪改成「沿路径点循环 + 到点按技能键点怪物」后不再使用 CombatEngine,该步骤已移除;
+//   任务级暂停/停止统一由 ctx 上的运行标志驱动(ctx.skill / ctx.moveAttack)。
 
 import {
   getDamoo,
@@ -14,7 +18,6 @@ import { dmErrorFull } from '../../../core/platform/damoo/dm-errors';
 import type { TaskType, TaskName } from '../../../shared/types';
 import type { WorkerContext } from './context';
 import { takeAndSendThumbnail } from './thumbnail';
-import { assembleCombatEngine } from './tasks/farm';
 
 export const taskNameMap: Record<TaskType, TaskName> = {
   farm: '挂机打怪',
@@ -69,12 +72,9 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
 
   const profile = init.profile || DEFAULT_PROFILE;
   ctx.profile = profile;
+  // 注:挂机打怪的找怪关键字/颜色直接读 ctx.init.taskConfig(tasks/farm.ts 的 resolveConfig),
+  //   不再往 profile.combat.mobFilter 里灌。这里只做一条启动日志方便排查。
   if (init.taskConfig?.type === 'farm' && init.taskConfig.mobFilter?.nameKeywords) {
-    profile.combat = profile.combat || {};
-    profile.combat.mobFilter = {
-      ...profile.combat.mobFilter,
-      nameKeywords: init.taskConfig.mobFilter.nameKeywords,
-    };
     ctx.sendLog(
       'info',
       `taskConfig 找怪关键字: ${init.taskConfig.mobFilter.nameKeywords.join(', ')}`,
@@ -188,8 +188,7 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
   }
   ctx.sendLog('info', `thumbnail 发送完成 (耗时 ${Date.now() - tCap}ms)`);
 
-  // 战斗引擎无条件组装(与任务类型无关):pause/stop/resume 命令会直接操作 ctx.combat
-  ctx.combat = assembleCombatEngine(ctx);
-  ctx.sendLog('info', '战斗引擎已就绪,开始循环...');
+  // 启动流程到此结束:任务类型/配置由 start-task 命令下发,tasks/index.ts 按类型分派
+  ctx.sendLog('info', 'bootstrap 完成,等待 start-task 命令...');
   return true;
 }

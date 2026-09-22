@@ -1,12 +1,13 @@
 // WorkerContext: game utilityProcess 子进程的共享上下文
-//   持有 init 数据 + 全部运行期状态(currentStatus/killCount/combat/缺省技能控制标志等),
+//   持有 init 数据 + 全部运行期状态(currentStatus/killCount/缺省技能与移动攻击的运行标志等),
 //   以及跨模块共用的通信方法(sendLog/setStatus/stepStart/stepEnd/postMessage)
 // 这些原来是 game-utility-worker.ts 的模块级变量/函数,拆模块后集中到这里,
 // 语义与模块级变量完全一致(包括 pause/stop 可在任务 start() 之前到达的边界行为)
 
+// 注:ctx.combat(CombatEngine)已下线 -- 挂机打怪改用 tasks/farm.ts 的「路径点循环 + 到点放技能」,
+//   暂停/继续/停止统一走下面的运行标志(ctx.skill / ctx.moveAttack)。
 import { createLogger } from '../../../core/logger';
 import { DEFAULT_DAMOO_CONFIG, type DamooConfig } from '../../../core/platform/damoo/dm-api';
-import type { CombatEngine } from '../../../core/combat/CombatEngine';
 import type { TaskType, ScriptStatus } from '../../../shared/types';
 
 export interface InitData {
@@ -45,7 +46,6 @@ export class WorkerContext {
   killCount = 0;
   bindSuccess = false;
   characterName = '';
-  combat: CombatEngine | null = null;
   dm: any = null;
   profile: any = null;
   damooConfig: DamooConfig = DEFAULT_DAMOO_CONFIG;

@@ -2,6 +2,9 @@
 // 以及 bootstrap 模式的启动闸门(waitForStartCommand)
 // 消息解包:Electron 32.x UtilityProcess 把父进程消息包成 MessageEvent 形状,这里统一拆开
 
+// 注:任务级 pause/resume/stop 不再操作战斗引擎(ctx.combat 已下线),
+//   统一置位 ctx 上的运行标志(ctx.skill 缺省技能 / ctx.moveAttack 挂机打怪),
+//   由各自的任务循环 await 解除暂停。
 import { dmApi } from '../../../core/platform/damoo/dm-api';
 import type { WorkerContext } from './context';
 import { handleScreenshot, takeAndSendThumbnailTest } from './thumbnail';
@@ -48,7 +51,6 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
             ctx.startResolve();
             ctx.startResolve = null;
           }
-          ctx.combat?.stop();
           // 缺省技能:让按键循环跳出(顺便解除暂停,避免卡在 await Promise)
           ctx.skill.running = false;
           ctx.skill.paused = false;
@@ -56,7 +58,7 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
             ctx.skill.resumeResolve();
             ctx.skill.resumeResolve = null;
           }
-          // 移动攻击测试:同样跳出循环 + 解除暂停
+          // 移动攻击任务(farm 用):同样跳出循环 + 解除暂停
           ctx.moveAttack.running = false;
           ctx.moveAttack.paused = false;
           if (ctx.moveAttack.resumeResolve) {
@@ -81,20 +83,16 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
             ctx.startResolve();
             ctx.startResolve = null;
           }
-          ctx.combat?.stop();
           // 缺省技能:仅置位 paused,按键循环内部 await Promise 阻塞
           if (ctx.init.taskType === 'default-skill') {
             ctx.skill.paused = true;
           }
-          // 移动攻击测试:同样仅置位 paused,主循环内部 await Promise 阻塞
+          // 移动攻击任务(farm 用):同样仅置位 paused,主循环内部 await Promise 阻塞
           ctx.moveAttack.paused = true;
           ctx.setStatus('paused', '用户暂停');
           break;
         case 'resume':
           ctx.sendLog('info', '收到 resume');
-          if (ctx.combat) {
-            ctx.combat.start().catch((e) => ctx.sendLog('error', `resume 失败: ${e.message}`));
-          }
           // 缺省技能:清 paused + resolve 暂停 Promise
           if (ctx.init.taskType === 'default-skill') {
             ctx.skill.paused = false;
@@ -103,7 +101,7 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
               ctx.skill.resumeResolve = null;
             }
           }
-          // 移动攻击测试:同样清 paused + resolve
+          // 移动攻击任务(farm 用):同样清 paused + resolve
           ctx.moveAttack.paused = false;
           if (ctx.moveAttack.resumeResolve) {
             ctx.moveAttack.resumeResolve();

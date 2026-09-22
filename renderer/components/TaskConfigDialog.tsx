@@ -747,6 +747,11 @@ function FarmConfig(props: FarmConfigProps) {
   } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
+  /**
+   * 群刷模式的技能点击距离 = 移速 - 200(与 worker tasks/farm.ts 的 AOE_DISTANCE_OFFSET 一致)。
+   * 这里只用于文案提示,真正生效的值由 worker 按 taskConfig.movementSpeed 算。
+   */
+  const aoeDistancePx = Math.max(0, (moveStepIntervalMs || 800) - 200);
 
   // ---- 移动攻击技能列表编辑 ----
   const addSkill = () => {
@@ -839,7 +844,7 @@ function FarmConfig(props: FarmConfigProps) {
         </div>
         <div className="text-[11px] text-text-muted mt-1">
           {mode === 'single' && '每次打一只怪,适合近战/脆皮'}
-          {mode === 'aoe' && '群刷,适合法师/道士有 AOE 技能'}
+          {mode === 'aoe' && '群刷:技能丢在自身移动反方向(移速-200px)处,适合法师/道士有 AOE 技能'}
           {mode === 'patrol' && '按路径点循环巡逻,适合大范围挂机'}
         </div>
       </div>
@@ -1075,8 +1080,15 @@ function FarmConfig(props: FarmConfigProps) {
           </div>
         )}
         <div className="text-[10px] text-text-muted mt-1">
-          到路径点后,对不在冷却中的技能依次:按键 → 点击怪坐标。短 CD 每个点都能放,长 CD
-          隔几个点自动轮到
+          到路径点后,对不在冷却中的技能依次:按键 → 点击目标点。
+          {mode === 'aoe' ? (
+            <>
+              群刷:点「自身移动反方向、离自身 {aoeDistancePx}px」处(移速 - 200),范围技能丢在背后引怪
+            </>
+          ) : (
+            <>单怪/巡逻:OCR 扫怪名点在怪身上,扫不到则点移动反方向兜底。</>
+          )}{' '}
+          短 CD 每个点都能放,长 CD 隔几个点自动轮到
         </div>
       </div>
 
