@@ -21,6 +21,7 @@ const KEY_MAP: Record<KeyCode, number> = {
   F7: 118,
   F8: 119,
   F9: 120,
+  F10: 121,
   Q: 81,
   W: 87,
   E: 69,

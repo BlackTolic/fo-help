@@ -40,24 +40,43 @@ export interface Waypoint {
   id: string;
   x: number;
   y: number;
-  /** farm-spot = 挂机点 / rest = 休息点(回血回蓝) / path = 路径中间点 */
+  /** farm-spot = 挂机点(可绑定技能) / rest = 休息点(回血回蓝) / path = 路径中间点 */
   type: 'farm-spot' | 'rest' | 'path';
+  /** 挂机点绑定的技能 id 列表(引用 FarmTaskConfig.skills;空/未配 = worker 回退为全部技能) */
+  skillIds?: string[];
   note?: string;
 }
 
-/** 移动攻击技能配置(指向性技能:按技能键 → 点击目标坐标完成释放) */
+/** 技能施法方式 */
+export type SkillCastMethod =
+  | 'quick' // 快捷施法:只按键
+  | 'target' // 缺省施法:按键 + 鼠标左键点击目标坐标
+  | 'self'; // 状态施法:点击角色自身 + 按键(自身 buff 类)
+
+/** 挂机打怪技能配置(任务级;路径点通过 skillIds 引用其中若干个) */
 export interface FarmSkillConfig {
-  /** 唯一 id(UI 排序/删除用) */
+  /** 唯一 id(UI 排序/删除 + 路径点绑定用) */
   id: string;
-  /** 技能键(F1-F9) */
+  /** 技能键(F1-F10) */
   key: string;
-  /** 技能冷却(毫秒,3~10s 不等) */
+  /** 技能名称(便于在路径点绑定界面辨认) */
+  name?: string;
+  /** 技能时间间隔/冷却(毫秒,两次释放之间的最短间隔) */
   cooldownMs: number;
+  /** 技能吟唱时间(毫秒):target=按键后等多久再点鼠标;quick/self=按键后等多久再放下一个技能 */
+  castMs?: number;
+  /** 施法距离(屏幕像素,以角色为圆心):定点打怪=缺省施法技能落点离自身的距离(0=默认300px);定点识别=超出该距离的怪跳过不打 */
+  rangePx?: number;
+  /** 施法方式(默认 target,兼容旧配置) */
+  method?: SkillCastMethod;
   /** 是否启用(临时禁用不删除) */
   enabled?: boolean;
   /** 备注 */
   note?: string;
 }
+
+/** 挂机打怪模式: fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
+export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
 
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
@@ -66,8 +85,8 @@ export interface FarmTaskConfig {
   mapId: string;
   /** 自定义地图名(mapId='custom' 时用) */
   customMapName?: string;
-  /** 打怪模式: single=单怪 / aoe=AOE 群刷 / patrol=路径巡逻 */
-  mode: 'single' | 'aoe' | 'patrol';
+  /** 打怪模式: fixed=定点打怪(固定技能) / fixed-detect=定点识别 / move-detect=移动识别 */
+  mode: FarmMode;
   /** 路径点列表(patrol 模式必填;移动攻击测试作为 A→B→C… 移动路径) */
   waypoints: Waypoint[];
   /** 找怪配置 */
@@ -78,7 +97,7 @@ export interface FarmTaskConfig {
     /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用) */
     nameColor?: string;
   };
-  /** 移动攻击技能列表(按技能键 → 点击怪物坐标;空 = 用 worker 内置默认) */
+  /** 任务级技能列表(路径点通过 skillIds 引用;空 = 用 worker 内置默认) */
   skills?: FarmSkillConfig[];
   /** 角色移动间隔(毫秒):移动一步后等多久再读坐标,越小走位越频繁(worker 的 stepIntervalMs) */
   movementSpeed?: number;

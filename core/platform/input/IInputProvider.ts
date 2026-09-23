@@ -14,6 +14,7 @@ export type KeyCode =
   | 'F7'
   | 'F8'
   | 'F9'
+  | 'F10'
   | 'Q'
   | 'W'
   | 'E'

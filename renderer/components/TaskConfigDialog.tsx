@@ -18,6 +18,8 @@ import type {
   TaskConfig,
   FarmTaskConfig,
   FarmSkillConfig,
+  FarmMode,
+  SkillCastMethod,
   Waypoint,
   StoredTaskConfig,
   DefaultSkillTaskConfig,
@@ -154,10 +156,10 @@ export function TaskConfigDialog({
   // 挂机打怪配置
   const [mapId, setMapId] = useState('hu-ya-shan');
   const [customMapName, setCustomMapName] = useState('');
-  const [mode, setMode] = useState<'single' | 'aoe' | 'patrol'>('single');
+  const [mode, setMode] = useState<FarmMode>('fixed');
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [nameKeywords, setNameKeywords] = useState('野,狼,鸡,鹿,狐,猫');
-  // 移动攻击相关:怪名颜色 / 技能列表 / 角色移动间隔
+  // 找怪相关:怪名颜色 / 任务级技能列表 / 角色移动间隔
   const [mobNameColor, setMobNameColor] = useState('FFFFFF-FFFFFF');
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
   const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
@@ -183,11 +185,27 @@ export function TaskConfigDialog({
       const farm = cfg as FarmTaskConfig;
       setMapId(farm.mapId);
       setCustomMapName(farm.customMapName || '');
-      setMode(farm.mode);
+      // 兼容旧配置:旧模式(single/patrol/aoe)统一迁到当前实现的「定点打怪」;
+      // 定点识别(旧 fixed-detect)本期尚未开放,仅原样保留
+      const legacyModeMap: Record<string, FarmMode> = {
+        single: 'fixed',
+        patrol: 'fixed',
+        aoe: 'fixed',
+      };
+      setMode(legacyModeMap[farm.mode] ?? farm.mode ?? 'fixed');
       setWaypoints(farm.waypoints || []);
       setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
       setMobNameColor(farm.mobFilter?.nameColor || 'FFFFFF-FFFFFF');
-      setSkills(farm.skills || []);
+      // 旧技能没有施法方式/吟唱/距离字段,按旧行为(target + 400ms 吟唱 + 不限距离)补默认值
+      setSkills(
+        (farm.skills || []).map((s) => ({
+          ...s,
+          name: s.name || '',
+          method: s.method ?? 'target',
+          castMs: s.castMs ?? 400,
+          rangePx: s.rangePx ?? 0,
+        })),
+      );
       setMoveStepIntervalMs(farm.movementSpeed ?? 800);
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
@@ -253,13 +271,17 @@ export function TaskConfigDialog({
             .filter(Boolean),
           nameColor: mobNameColor.trim() || undefined,
         },
-        // 过滤掉未启用的技能 + 规范化 cooldownMs,保存前清洗(同缺省技能的清洗思路)
+        // 过滤掉未启用的技能 + 规范化数值,保存前清洗(同缺省技能的清洗思路)
         skills: skills
           .filter((s) => s.enabled !== false)
           .map((s) => ({
             id: s.id,
             key: s.key,
+            name: s.name?.trim() || undefined,
             cooldownMs: Math.max(0, s.cooldownMs | 0),
+            castMs: Math.max(0, s.castMs ?? 0),
+            rangePx: Math.max(0, s.rangePx ?? 0),
+            method: s.method ?? 'target',
             enabled: s.enabled !== false,
             note: s.note,
           })),
@@ -511,6 +533,7 @@ export function TaskConfigDialog({
               removeWaypoint={removeWaypoint}
               moveWaypoint={moveWaypoint}
               updateWaypoint={updateWaypoint}
+              setWaypoints={setWaypoints}
               nameKeywords={nameKeywords}
               setNameKeywords={setNameKeywords}
               mobNameColor={mobNameColor}
@@ -692,8 +715,15 @@ export function TaskConfigDialog({
 
 // ---- 挂机打怪配置子组件 ----
 
-/** 移动攻击技能可选键(F1-F9,与 worker 的 MoveAttackSkill.key 对应) */
-const SKILL_KEY_OPTIONS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'];
+/** 技能可选键(F1-F10,与 worker 的 MoveAttackSkill.key 对应) */
+const SKILL_KEY_OPTIONS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10'];
+
+/** 施法方式选项 */
+const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string }[] = [
+  { value: 'quick', label: '快捷施法', desc: '只按技能键' },
+  { value: 'target', label: '缺省施法', desc: '按键 + 左键点击目标坐标' },
+  { value: 'self', label: '状态施法', desc: '点击角色自身 + 按键' },
+];
 
 interface FarmConfigProps {
   readOnly?: boolean;
@@ -701,13 +731,14 @@ interface FarmConfigProps {
   setMapId: (v: string) => void;
   customMapName: string;
   setCustomMapName: (v: string) => void;
-  mode: 'single' | 'aoe' | 'patrol';
-  setMode: (v: 'single' | 'aoe' | 'patrol') => void;
+  mode: FarmMode;
+  setMode: (v: FarmMode) => void;
   waypoints: Waypoint[];
   addWaypoint: () => void;
   removeWaypoint: (id: string) => void;
   moveWaypoint: (id: string, dir: -1 | 1) => void;
   updateWaypoint: (id: string, field: keyof Waypoint, value: any) => void;
+  setWaypoints: (v: Waypoint[] | ((prev: Waypoint[]) => Waypoint[])) => void;
   nameKeywords: string;
   setNameKeywords: (v: string) => void;
   mobNameColor: string;
@@ -734,6 +765,7 @@ function FarmConfig(props: FarmConfigProps) {
     removeWaypoint,
     moveWaypoint,
     updateWaypoint,
+    setWaypoints,
     nameKeywords,
     setNameKeywords,
     mobNameColor,
@@ -747,13 +779,8 @@ function FarmConfig(props: FarmConfigProps) {
   } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
-  /**
-   * 群刷模式的技能点击距离 = 移速 - 200(与 worker tasks/farm.ts 的 AOE_DISTANCE_OFFSET 一致)。
-   * 这里只用于文案提示,真正生效的值由 worker 按 taskConfig.movementSpeed 算。
-   */
-  const aoeDistancePx = Math.max(0, (moveStepIntervalMs || 800) - 200);
 
-  // ---- 移动攻击技能列表编辑 ----
+  // ---- 任务级技能列表编辑 ----
   const addSkill = () => {
     if (readOnly) return;
     setSkills((ss) => [
@@ -761,7 +788,11 @@ function FarmConfig(props: FarmConfigProps) {
       {
         id: `skill-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         key: 'F1',
+        name: '',
         cooldownMs: 5000,
+        castMs: 400,
+        rangePx: 0,
+        method: 'target' as SkillCastMethod,
         enabled: true,
       },
     ]);
@@ -770,6 +801,10 @@ function FarmConfig(props: FarmConfigProps) {
   const removeSkill = (id: string) => {
     if (readOnly) return;
     setSkills((ss) => ss.filter((s) => s.id !== id));
+    // 清掉路径点上对该技能的引用,避免留下失效 id
+    setWaypoints((ws) =>
+      ws.map((w) => (w.skillIds ? { ...w, skillIds: w.skillIds.filter((sid) => sid !== id) } : w)),
+    );
   };
 
   const moveSkill = (id: string, dir: -1 | 1) => {
@@ -822,38 +857,253 @@ function FarmConfig(props: FarmConfigProps) {
       <div>
         <label className="text-sm text-text-secondary mb-1.5 block">打怪模式</label>
         <div className="grid grid-cols-3 gap-2">
-          {(['single', 'aoe', 'patrol'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              disabled={readOnly}
-              className={`
-                px-3 py-2 rounded border text-sm transition-colors ${disabledCls}
-                ${
-                  mode === m
-                    ? 'bg-accent-cyan/15 border-accent-cyan/50 text-accent-cyan'
-                    : 'bg-bg-input border-border-base text-text-secondary hover:border-border-active'
-                }
-              `}
-            >
-              {m === 'single' && '🎯 单怪'}
-              {m === 'aoe' && '💥 群刷'}
-              {m === 'patrol' && '🚶 巡逻'}
-            </button>
-          ))}
+          {(
+            [
+              {
+                value: 'fixed',
+                label: '🎯 定点打怪',
+                ready: true,
+                desc: '在固定路径点上,释放固定技能(不做识别)',
+              },
+              {
+                value: 'fixed-detect',
+                label: '🔍 定点识别',
+                ready: false,
+                desc: '在固定路径点上,用图色识别怪物名称,再释放绑定的技能',
+              },
+              {
+                value: 'move-detect',
+                label: '🚶 移动识别',
+                ready: false,
+                desc: '移动途中识别到怪物名称,优先停下打怪,打完继续赶路',
+              },
+            ] as const
+          ).map((m) => {
+            const selectable = m.ready && !readOnly;
+            const active = mode === m.value;
+            return (
+              <button
+                key={m.value}
+                onClick={() => selectable && setMode(m.value)}
+                disabled={!selectable}
+                title={m.ready ? m.desc : `${m.desc}(即将推出)`}
+                className={`
+                  px-3 py-2 rounded border text-sm transition-colors relative
+                  ${
+                    active
+                      ? 'bg-accent-cyan/15 border-accent-cyan/50 text-accent-cyan'
+                      : selectable
+                        ? 'bg-bg-input border-border-base text-text-secondary hover:border-border-active'
+                        : 'bg-bg-input/50 border-border-base/50 text-text-muted/60 cursor-not-allowed'
+                  }
+                `}
+              >
+                <span>{m.label}</span>
+                {!m.ready && (
+                  <span className="absolute -top-2 -right-1 text-[9px] px-1 rounded bg-text-muted/30 text-text-muted">
+                    即将推出
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        <div className="text-[11px] text-text-muted mt-1">
-          {mode === 'single' && '每次打一只怪,适合近战/脆皮'}
-          {mode === 'aoe' && '群刷:技能丢在自身移动反方向(移速-200px)处,适合法师/道士有 AOE 技能'}
-          {mode === 'patrol' && '按路径点循环巡逻,适合大范围挂机'}
+        <div className="text-[11px] text-text-muted mt-1.5">
+          {mode === 'fixed' &&
+            '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
+          {mode === 'fixed-detect' &&
+            '在固定路径点上,用图色识别怪物名称,再释放该点绑定的技能(即将推出)'}
+          {mode === 'move-detect' && '移动途中识别到怪物名称,优先停下打怪,打完再继续前往路径点'}
         </div>
       </div>
 
-      {/* 路径点(patrol 模式才有意义) */}
+      {/* 技能设置(先配技能,再在下方路径点上选择用哪些) */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            路径点 <span className="text-text-muted text-[11px]">(patrol 模式必填,其他选填)</span>
+            技能设置{' '}
+            <span className="text-text-muted text-[11px]">
+              (F1-F10;路径点从这里选择要释放的技能)
+            </span>
+          </label>
+          {!readOnly && (
+            <button
+              onClick={addSkill}
+              className="text-xs btn btn-secondary flex items-center gap-1"
+            >
+              <Plus size={12} />
+              添加技能
+            </button>
+          )}
+        </div>
+
+        {skills.length === 0 ? (
+          <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
+            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式)
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {skills.map((skill, i) => {
+              const method = skill.method ?? 'target';
+              const isTarget = method === 'target';
+              return (
+                <div
+                  key={skill.id}
+                  className={`bg-bg-input p-2 rounded space-y-2 ${
+                    skill.enabled === false ? 'opacity-50' : ''
+                  }`}
+                >
+                  {/* 第一行:序号 / 启用 / 键位 / 名称 / 施法方式 / 操作 */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-text-muted text-[11px] w-5 text-center">#{i + 1}</span>
+                    {!readOnly && (
+                      <input
+                        type="checkbox"
+                        checked={skill.enabled !== false}
+                        onChange={(e) => updateSkill(skill.id, { enabled: e.target.checked })}
+                        title="启用 / 临时禁用"
+                        className="accent-accent-cyan"
+                      />
+                    )}
+                    <select
+                      value={skill.key}
+                      onChange={(e) => updateSkill(skill.id, { key: e.target.value })}
+                      disabled={readOnly}
+                      className={`w-14 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                      title="技能键"
+                    >
+                      {SKILL_KEY_OPTIONS.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="技能名称"
+                      value={skill.name || ''}
+                      onChange={(e) => updateSkill(skill.id, { name: e.target.value })}
+                      disabled={readOnly}
+                      className={`w-28 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                      title="技能名称(便于在路径点辨认)"
+                    />
+                    <select
+                      value={method}
+                      onChange={(e) =>
+                        updateSkill(skill.id, { method: e.target.value as SkillCastMethod })
+                      }
+                      disabled={readOnly}
+                      className={`w-24 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                      title={CAST_METHOD_OPTIONS.find((o) => o.value === method)?.desc}
+                    >
+                      {CAST_METHOD_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="flex-1" />
+                    {!readOnly && (
+                      <>
+                        <button
+                          onClick={() => moveSkill(skill.id, -1)}
+                          disabled={i === 0}
+                          className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                          title="上移"
+                        >
+                          <ArrowUp size={12} />
+                        </button>
+                        <button
+                          onClick={() => moveSkill(skill.id, 1)}
+                          disabled={i === skills.length - 1}
+                          className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                          title="下移"
+                        >
+                          <ArrowDown size={12} />
+                        </button>
+                        <button
+                          onClick={() => removeSkill(skill.id)}
+                          className="text-accent-red/70 hover:text-accent-red"
+                          title="删除该技能(已绑定到路径点的引用会一并清掉)"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* 第二行:参数 — 吟唱 / 施法距离只有「缺省施法」需要 */}
+                  <div className="flex items-center gap-2 pl-7">
+                    <span className="text-text-muted text-[10px] shrink-0">间隔</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={500}
+                      value={skill.cooldownMs}
+                      onChange={(e) =>
+                        updateSkill(skill.id, { cooldownMs: parseInt(e.target.value) || 0 })
+                      }
+                      disabled={readOnly}
+                      className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                      title="技能时间间隔(毫秒,两次释放之间的最短间隔)"
+                    />
+                    <span className="text-text-muted text-[10px]">ms</span>
+                    {isTarget ? (
+                      <>
+                        <span className="text-text-muted text-[10px] shrink-0">吟唱</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={100}
+                          value={skill.castMs ?? 400}
+                          onChange={(e) =>
+                            updateSkill(skill.id, { castMs: parseInt(e.target.value) || 0 })
+                          }
+                          disabled={readOnly}
+                          className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                          title="吟唱时间(毫秒):按键后等多久再点鼠标"
+                        />
+                        <span className="text-text-muted text-[10px]">ms</span>
+                        <span className="text-text-muted text-[10px] shrink-0">施法距离</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={50}
+                          value={skill.rangePx ?? 0}
+                          onChange={(e) =>
+                            updateSkill(skill.id, { rangePx: parseInt(e.target.value) || 0 })
+                          }
+                          disabled={readOnly}
+                          className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                          title="施法距离(屏幕像素,以角色为圆心):落点离自身的距离(0=用默认300px)"
+                        />
+                        <span className="text-text-muted text-[10px]">px</span>
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-text-muted">
+                        {method === 'quick'
+                          ? '只按键,不需要吟唱/施法距离'
+                          : '点角色自身 + 按键,不需要吟唱/施法距离'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div className="text-[10px] text-text-muted mt-1">
+          施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、
+          施法距离处」);状态施法 = 点击角色自身 +
+          按键。配好技能后,在下方"挂机点"类型的路径点上选择要释放的技能
+        </div>
+      </div>
+
+      {/* 路径点(定点打怪按此循环:走到点 → 挂机点放技能;休息点/路径点只路过) */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-sm text-text-secondary">
+            路径点 <span className="text-text-muted text-[11px]">(挂机点可选择释放的技能)</span>
           </label>
           {!readOnly && (
             <button
@@ -871,226 +1121,167 @@ function FarmConfig(props: FarmConfigProps) {
             暂无路径点
           </div>
         ) : (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {waypoints.map((wp, i) => (
-              <div key={wp.id} className="flex items-center gap-1.5 bg-bg-input p-1.5 rounded">
-                <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
-                <select
-                  value={wp.type}
-                  onChange={(e) => updateWaypoint(wp.id, 'type', e.target.value)}
-                  disabled={readOnly}
-                  className={`bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                >
-                  <option value="farm-spot">挂机点</option>
-                  <option value="rest">休息点</option>
-                  <option value="path">路径点</option>
-                </select>
-                <span className="text-text-muted text-xs">X</span>
-                <input
-                  type="number"
-                  value={wp.x}
-                  onChange={(e) => updateWaypoint(wp.id, 'x', parseInt(e.target.value) || 0)}
-                  disabled={readOnly}
-                  className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
-                />
-                <span className="text-text-muted text-xs">Y</span>
-                <input
-                  type="number"
-                  value={wp.y}
-                  onChange={(e) => updateWaypoint(wp.id, 'y', parseInt(e.target.value) || 0)}
-                  disabled={readOnly}
-                  className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
-                />
-                <input
-                  type="text"
-                  placeholder="备注"
-                  value={wp.note || ''}
-                  onChange={(e) => updateWaypoint(wp.id, 'note', e.target.value)}
-                  disabled={readOnly}
-                  className={`flex-1 min-w-0 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                />
-                {!readOnly && (
-                  <>
-                    <button
-                      onClick={() => moveWaypoint(wp.id, -1)}
-                      disabled={i === 0}
-                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
-                    >
-                      <ArrowUp size={12} />
-                    </button>
-                    <button
-                      onClick={() => moveWaypoint(wp.id, 1)}
-                      disabled={i === waypoints.length - 1}
-                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
-                    >
-                      <ArrowDown size={12} />
-                    </button>
-                    <button
-                      onClick={() => removeWaypoint(wp.id)}
-                      className="text-accent-red/70 hover:text-accent-red"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 找怪关键字 */}
-      <div>
-        <label className="text-sm text-text-secondary mb-1.5 block">
-          找怪关键字 <span className="text-text-muted text-[11px]">(逗号分隔)</span>
-        </label>
-        <input
-          type="text"
-          value={nameKeywords}
-          onChange={(e) => setNameKeywords(e.target.value)}
-          placeholder="野,狼,鸡,鹿,狐,猫"
-          disabled={readOnly}
-          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
-        />
-      </div>
-
-      {/* 怪名颜色(移动攻击测试找怪用) */}
-      <div>
-        <label className="text-sm text-text-secondary mb-1.5 block">
-          怪名颜色 <span className="text-text-muted text-[11px]">(大漠颜色格式)</span>
-        </label>
-        <input
-          type="text"
-          value={mobNameColor}
-          onChange={(e) => setMobNameColor(e.target.value)}
-          placeholder="FFFFFF-FFFFFF"
-          disabled={readOnly}
-          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
-        />
-        <div className="text-[10px] text-text-muted mt-1">
-          找怪时按这个字的颜色匹配;不确定就用默认 FFFFFF-FFFFFF(白名)
-        </div>
-      </div>
-
-      {/* 移动攻击技能列表(按技能键 → 点击怪物坐标释放) */}
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label className="text-sm text-text-secondary">
-            技能列表{' '}
-            <span className="text-text-muted text-[11px]">(按技能键 → 点击怪坐标释放)</span>
-          </label>
-          {!readOnly && (
-            <button
-              onClick={addSkill}
-              className="text-xs btn btn-secondary flex items-center gap-1"
-            >
-              <Plus size={12} />
-              添加技能
-            </button>
-          )}
-        </div>
-
-        {skills.length === 0 ? (
-          <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无技能(移动攻击测试将用 worker 内置默认 F1-F4)
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {skills.map((skill, i) => (
-              <div
-                key={skill.id}
-                className={`flex items-center gap-1.5 bg-bg-input p-1.5 rounded ${
-                  skill.enabled === false ? 'opacity-50' : ''
-                }`}
-              >
-                <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
-                {!readOnly && (
+              <div key={wp.id} className="bg-bg-input p-2 rounded space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-text-muted text-[11px] w-5 text-center">#{i + 1}</span>
+                  <select
+                    value={wp.type}
+                    onChange={(e) => {
+                      const t = e.target.value;
+                      // 从挂机点切成休息点/路径点时,清掉技能绑定(避免留下不可见的失效引用)
+                      updateWaypoint(wp.id, 'type', t);
+                      if (t !== 'farm-spot') updateWaypoint(wp.id, 'skillIds', []);
+                    }}
+                    disabled={readOnly}
+                    className={`w-24 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                  >
+                    <option value="farm-spot">挂机点</option>
+                    <option value="rest">休息点</option>
+                    <option value="path">路径点</option>
+                  </select>
+                  <span className="text-text-muted text-[10px]">X</span>
                   <input
-                    type="checkbox"
-                    checked={skill.enabled !== false}
-                    onChange={(e) => updateSkill(skill.id, { enabled: e.target.checked })}
-                    title="启用 / 临时禁用"
-                    className="accent-accent-cyan"
+                    type="number"
+                    value={wp.x}
+                    onChange={(e) => updateWaypoint(wp.id, 'x', parseInt(e.target.value) || 0)}
+                    disabled={readOnly}
+                    className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                   />
-                )}
-                <select
-                  value={skill.key}
-                  onChange={(e) => updateSkill(skill.id, { key: e.target.value })}
-                  disabled={readOnly}
-                  className={`bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                  title="技能键"
-                >
-                  {SKILL_KEY_OPTIONS.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-text-muted text-[10px]">CD</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={500}
-                  value={skill.cooldownMs}
-                  onChange={(e) =>
-                    updateSkill(skill.id, { cooldownMs: parseInt(e.target.value) || 0 })
-                  }
-                  disabled={readOnly}
-                  className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
-                  title="技能冷却(毫秒,3~10s = 3000~10000)"
-                />
-                <span className="text-text-muted text-[10px]">ms</span>
-                <input
-                  type="text"
-                  placeholder="备注"
-                  value={skill.note || ''}
-                  onChange={(e) => updateSkill(skill.id, { note: e.target.value })}
-                  disabled={readOnly}
-                  className={`flex-1 min-w-0 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                />
-                {!readOnly && (
-                  <>
-                    <button
-                      onClick={() => moveSkill(skill.id, -1)}
-                      disabled={i === 0}
-                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
-                      title="上移"
-                    >
-                      <ArrowUp size={12} />
-                    </button>
-                    <button
-                      onClick={() => moveSkill(skill.id, 1)}
-                      disabled={i === skills.length - 1}
-                      className="text-text-muted hover:text-text-primary disabled:opacity-30"
-                      title="下移"
-                    >
-                      <ArrowDown size={12} />
-                    </button>
-                    <button
-                      onClick={() => removeSkill(skill.id)}
-                      className="text-accent-red/70 hover:text-accent-red"
-                      title="删除该技能"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </>
+                  <span className="text-text-muted text-[10px]">Y</span>
+                  <input
+                    type="number"
+                    value={wp.y}
+                    onChange={(e) => updateWaypoint(wp.id, 'y', parseInt(e.target.value) || 0)}
+                    disabled={readOnly}
+                    className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                  />
+                  <div className="flex-1" />
+                  {!readOnly && (
+                    <>
+                      <button
+                        onClick={() => moveWaypoint(wp.id, -1)}
+                        disabled={i === 0}
+                        className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        onClick={() => moveWaypoint(wp.id, 1)}
+                        disabled={i === waypoints.length - 1}
+                        className="text-text-muted hover:text-text-primary disabled:opacity-30"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
+                      <button
+                        onClick={() => removeWaypoint(wp.id)}
+                        className="text-accent-red/70 hover:text-accent-red"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* 挂机点:选择该点释放的技能(休息点/路径点不显示) */}
+                {wp.type === 'farm-spot' && (
+                  <div className="flex items-center gap-x-1.5 gap-y-1 pl-7 flex-wrap">
+                    <span className="text-text-muted text-[10px] shrink-0 mr-0.5">释放技能</span>
+                    {skills.length === 0 ? (
+                      <span className="text-[10px] text-text-muted">
+                        先在上方"技能设置"里添加技能(不选 = 到点释放全部技能)
+                      </span>
+                    ) : (
+                      <>
+                        {skills.map((s) => {
+                          const checked = (wp.skillIds ?? []).includes(s.id);
+                          const unavailable = s.enabled === false;
+                          const method = s.method ?? 'target';
+                          return (
+                            <label
+                              key={s.id}
+                              title={`${s.key}${s.name ? ` ${s.name}` : ''}(${
+                                CAST_METHOD_OPTIONS.find((o) => o.value === method)?.label
+                              })`}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
+                                unavailable
+                                  ? 'border-border-base/50 text-text-muted/50 cursor-not-allowed'
+                                  : checked
+                                    ? 'border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan'
+                                    : 'border-border-base text-text-secondary hover:border-border-active cursor-pointer'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                className="accent-accent-cyan"
+                                disabled={readOnly || unavailable}
+                                checked={checked}
+                                onChange={(e) => {
+                                  const cur = wp.skillIds ?? [];
+                                  const next = e.target.checked
+                                    ? [...cur, s.id]
+                                    : cur.filter((sid) => sid !== s.id);
+                                  updateWaypoint(wp.id, 'skillIds', next);
+                                }}
+                              />
+                              <span>
+                                {s.key}
+                                {s.name ? `·${s.name}` : ''}
+                              </span>
+                            </label>
+                          );
+                        })}
+                        {(wp.skillIds ?? []).length === 0 && (
+                          <span className="text-[10px] text-text-muted">(不选 = 释放全部技能)</span>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
           </div>
         )}
-        <div className="text-[10px] text-text-muted mt-1">
-          到路径点后,对不在冷却中的技能依次:按键 → 点击目标点。
-          {mode === 'aoe' ? (
-            <>
-              群刷:点「自身移动反方向、离自身 {aoeDistancePx}px」处(移速 - 200),范围技能丢在背后引怪
-            </>
-          ) : (
-            <>单怪/巡逻:OCR 扫怪名点在怪身上,扫不到则点移动反方向兜底。</>
-          )}{' '}
-          短 CD 每个点都能放,长 CD 隔几个点自动轮到
-        </div>
       </div>
+
+      {/* 找怪关键字 / 怪名颜色:只有需要识别的模式(定点识别/移动识别)才展示 */}
+      {mode !== 'fixed' && (
+        <>
+          {/* 找怪关键字 */}
+          <div>
+            <label className="text-sm text-text-secondary mb-1.5 block">
+              找怪关键字 <span className="text-text-muted text-[11px]">(逗号分隔)</span>
+            </label>
+            <input
+              type="text"
+              value={nameKeywords}
+              onChange={(e) => setNameKeywords(e.target.value)}
+              placeholder="野,狼,鸡,鹿,狐,猫"
+              disabled={readOnly}
+              className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
+            />
+          </div>
+
+          {/* 怪名颜色(识别找怪用) */}
+          <div>
+            <label className="text-sm text-text-secondary mb-1.5 block">
+              怪名颜色 <span className="text-text-muted text-[11px]">(大漠颜色格式)</span>
+            </label>
+            <input
+              type="text"
+              value={mobNameColor}
+              onChange={(e) => setMobNameColor(e.target.value)}
+              placeholder="FFFFFF-FFFFFF"
+              disabled={readOnly}
+              className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+            />
+            <div className="text-[10px] text-text-muted mt-1">
+              找怪时按这个字的颜色匹配;不确定就用默认 FFFFFF-FFFFFF(白名)
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 角色移动间隔 */}
       <div>

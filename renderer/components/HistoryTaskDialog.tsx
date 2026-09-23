@@ -33,6 +33,16 @@ const TASK_LABEL: Record<TaskType, { name: string; Icon: any }> = {
   'default-skill': { name: '缺省技能', Icon: FileText },
 };
 
+/** 挂机打怪模式显示名(含旧配置 single/aoe/patrol 的兼容映射,与编辑页的迁移保持一致) */
+const FARM_MODE_LABELS: Record<string, string> = {
+  fixed: '定点打怪',
+  'fixed-detect': '定点识别',
+  'move-detect': '移动识别',
+  single: '定点打怪',
+  patrol: '定点打怪',
+  aoe: '定点打怪',
+};
+
 interface Props {
   /** 全局所有已保存的任务(去重后,每个 name 一条) */
   history: StoredTaskConfig[];
@@ -112,7 +122,9 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                       <div className="text-[11px] text-text-muted truncate">
                         {stored.config.type === 'farm' && (
                           <>
-                            地图 {(stored.config as any).mapId} · 模式 {(stored.config as any).mode}{' '}
+                            地图 {(stored.config as any).mapId} · 模式{' '}
+                            {FARM_MODE_LABELS[(stored.config as any).mode] ??
+                              (stored.config as any).mode}{' '}
                             ·{' '}
                           </>
                         )}

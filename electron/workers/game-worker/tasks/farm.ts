@@ -1,13 +1,25 @@
-// 挂机打怪(farm)任务:沿路径点循环移动,每到一个点停下,释放所有 CD 已好的技能
+// 挂机打怪(farm)任务:沿路径点循环移动,到挂机点按绑定的技能释放
 //
-// 技能释放方式(按你的游戏):按技能键(F1-F9) → 鼠标左键点击屏幕某点,点哪里由「打怪模式」决定:
-//   single 单怪 / patrol 巡逻:OCR 扫怪名,点在怪身上(扫不到 → 兜底点,见 FALLBACK)
-//   aoe 群刷:                不扫怪,点在「自身移动方向的反方向、离自身 movementSpeed-200 px」处
-//                            (范围技能丢在身后引怪群,AOE_DISTANCE_OFFSET)
-// 结束条件:stop 命令 / 跑满最大圈数 / 血量过低(可选) / 连续多个路径点卡住
+// 模式(2026-09 改版):
+//   fixed        定点打怪(当前实现):到挂机点不做识别,技能打在固定方向固定距离(移动反方向)
+//   fixed-detect 定点识别(即将推出):到挂机点 → 图色识别怪物名称 → 释放该点绑定的技能
+//   move-detect  移动识别(尚未实现,UI 未开放):移动途中识别,识别到怪停下打
+//
+// 技能释放方式(按 taskConfig.skills 里每个技能的 method):
+//   quick  快捷施法:只按技能键 → 等吟唱时间
+//   target 缺省施法:按技能键 → 等吟唱时间 → 左键点击目标坐标
+//                   (定点打怪=移动反方向「施法距离」处,未配则默认 300px,并夹到画面内;
+//                    定点识别=识别到的怪,没识别到则跳过)
+//   self   状态施法:左键点击角色自身(屏幕中心)→ 按技能键 → 等吟唱时间
+// 技能字段:cooldownMs(技能时间间隔)/ castMs(吟唱时间)/ rangePx(施法距离,0=见上默认)
+// 路径点:farm-spot 挂机点(绑定 skillIds,空=释放全部技能)/ rest 休息点 / path 路径中间点(后两种不放技能)
+//
+// 结束条件:stop 命令 / 跑满最大圈数 / 连续多个路径点卡住
 //
 // 配置来源:优先读 ctx.init.taskConfig(WindowCard「挂机打怪」弹窗点"确认/保存"后
 //   经 start-task 命令下发);字段缺失时回退到下面的内置默认值。
+// 兼容旧配置:mode single/patrol/aoe → fixed;旧技能无 method/castMs/rangePx
+//   时按 target/400ms/不限距离处理;旧路径点无 skillIds → 挂机点释放全部技能。
 //
 // 暂停/继续/停止:主循环只认 ctx.moveAttack 标志,由 commands.ts 的
 //   pause/resume/stop 命令维护(标志放 ctx 上:命令可能在任务 start() 之前到达)
@@ -21,6 +33,7 @@
 //   (传 opts.label='移动攻击';两条路径只有日志前缀 / 结果上报方式不同,循环逻辑只此一份)。
 
 // 223,56 -> 182,68 -> 151,74 -> 198,107 -> 230,82 ->223,56
+// 6s 0.5s /5s 0.75s/10s   ->F7:1S
 
 import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { DamooVisionProvider } from '../../../../core/platform/vision/damoo/DamooProvider';
@@ -50,22 +63,20 @@ const DEFAULT_PATH_POINTS = [
   { x: 85, y: 115 }, // E
 ];
 
-/** 默认指向性技能列表:cooldownMs 按游戏实际填(3~10s 不等) */
-const DEFAULT_SKILLS = [
-  { key: 'F1' as const, cooldownMs: 3000 },
-  { key: 'F2' as const, cooldownMs: 5000 },
-  { key: 'F3' as const, cooldownMs: 8000 },
-  { key: 'F4' as const, cooldownMs: 10000 },
+/** 默认技能列表(taskConfig 未配技能时用;字段同 MoveAttackSkill) */
+const DEFAULT_SKILLS: MoveAttackSkill[] = [
+  { id: 'default-f1', key: 'F1', cooldownMs: 3000, castMs: 400, rangePx: 0, method: 'target' },
+  { id: 'default-f2', key: 'F2', cooldownMs: 5000, castMs: 400, rangePx: 0, method: 'target' },
+  { id: 'default-f3', key: 'F3', cooldownMs: 8000, castMs: 400, rangePx: 0, method: 'target' },
+  { id: 'default-f4', key: 'F4', cooldownMs: 10000, castMs: 400, rangePx: 0, method: 'target' },
 ];
 
 /** 默认找怪配置 */
 const DEFAULT_MONSTER_KEYWORDS = ['野狼', '野猪'];
 const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 
-/** 按技能键后等多久再点鼠标(给游戏响应技能的时间) */
-const PRESS_TO_CLICK_MS = 400;
-/** 两个技能释放之间的间隔(避免按键/点击冲突) */
-const BETWEEN_SKILLS_MS = 400;
+/** 两个技能释放之间的间隔(避免按键/点击冲突;按键到点击的等待已由技能 castMs 取代旧固定值) */
+const BETWEEN_SKILLS_MS = 800;
 /** 到达路径点后,站稳多久再扫描/释放 */
 const SETTLE_MS = 500;
 
@@ -78,23 +89,17 @@ const MONSTER_SCAN = {
   clickOffset: { x: 0, y: 20 },
 };
 
-/** 兜底点击方向:扫不到怪时,点在角色脚下哪个方向 */
-const FALLBACK = {
-  /**
-   * behind = 移动的反方向(引怪场景:怪在身后追着你跑)
-   * fixed  = 固定角度(fixedAngleDeg,0=正右,90=正下,180=正左)
-   */
+/**
+ * 固定施法方向/距离(定点打怪用:不做识别,缺省施法技能就打在角色的这个方向上)
+ * - behind = 移动的反方向(引怪场景:怪在身后追着你跑)
+ * - fixed  = 固定角度(fixedAngleDeg,0=正右,90=正下,180=正左)
+ * - distance = 未配「施法距离」的技能,落点离屏幕中心(角色)的默认距离(px)
+ */
+const FIXED_AIM = {
   mode: 'behind' as 'behind' | 'fixed',
   fixedAngleDeg: 0,
-  /** 点击位置离屏幕中心的距离(px) */
   distance: 300,
 };
-
-/**
- * 群刷模式(aoe)点击点离自身的距离偏移:distance = movementSpeed - AOE_DISTANCE_OFFSET
- * 例:移动间隔 800 → 点在离自身 600px 的移动反方向处
- */
-const AOE_DISTANCE_OFFSET = 200;
 
 /** 点击点离画面边界至少留这么多像素(避免点到窗口边框/窗口外) */
 const CLICK_MARGIN = 4;
@@ -119,21 +124,40 @@ const MAP_COORD_CONFIG = {
 // ===== 运行时配置(由 taskConfig + 默认值合成)=====
 
 interface MoveAttackSkill {
-  key: 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9';
+  /** 技能配置 id(冷却记录按 id,key 可能重复配置) */
+  id: string;
+  key: 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9' | 'F10';
+  /** 技能名称(日志展示用) */
+  name?: string;
+  /** 技能时间间隔(毫秒,两次释放的最短间隔) */
   cooldownMs: number;
+  /** 吟唱时间(毫秒):target=按键后等多久点鼠标;quick/self=按键后等多久放下一个 */
+  castMs: number;
+  /** 施法距离(屏幕像素,以角色为圆心);target 技能:怪超出距离则跳过;0 = 不限制 */
+  rangePx: number;
+  /** 施法方式:quick=只按键 / target=按键+左键点目标 / self=点自己+按键 */
+  method: 'quick' | 'target' | 'self';
+}
+
+/** 解析后的路径点 */
+interface ResolvedWaypoint {
+  x: number;
+  y: number;
+  /** farm-spot 挂机点(放技能) / rest 休息点 / path 路径中间点(都不放技能) */
+  type: 'farm-spot' | 'rest' | 'path';
+  /** 该点绑定的技能(仅 farm-spot 用;空数组 = 不放) */
+  skills: MoveAttackSkill[];
 }
 
 interface ResolvedConfig {
-  /** 打怪模式:single=单怪 / aoe=群刷(技能丢自身背后) / patrol=路径巡逻 */
-  mode: 'single' | 'aoe' | 'patrol';
-  pathPoints: { x: number; y: number }[];
+  /** 打怪模式:fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
+  mode: 'fixed' | 'fixed-detect' | 'move-detect';
+  waypoints: ResolvedWaypoint[];
   skills: MoveAttackSkill[];
   monsterKeywords: string[];
   monsterColor: string;
-  /** 移动步进间隔(ms),来自 taskConfig.movementSpeed;群刷模式下同时是"移速"基数 */
+  /** 移动步进间隔(ms),来自 taskConfig.movementSpeed */
   stepIntervalMs: number;
-  /** 群刷模式(aoe):技能点击点离自身的距离 = stepIntervalMs - AOE_DISTANCE_OFFSET */
-  aoeDistancePx: number;
   maxLoops: number;
 }
 
@@ -149,7 +173,16 @@ export interface FarmLoopOptions {
   label?: string;
 }
 
-const VALID_SKILL_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9']);
+const VALID_SKILL_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10']);
+
+/** 旧配置模式 → 新模式(本期只实现定点打怪,旧模式统一迁移过去) */
+const LEGACY_MODE_MAP: Record<string, ResolvedConfig['mode']> = {
+  single: 'fixed',
+  patrol: 'fixed',
+  aoe: 'fixed',
+};
+
+/** 定点打怪:缺省施法技能没配「施法距离」时,落点用 FIXED_AIM.distance(300px) */
 
 /**
  * 从 ctx.init.taskConfig(FarmTaskConfig)解析挂机打怪配置,缺失字段用内置默认值兜底
@@ -158,27 +191,50 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   const cfg = ctx.init.taskConfig as FarmTaskConfig | undefined;
   const isFarm = cfg?.type === 'farm';
 
-  // 打怪模式:单怪 / 群刷 / 巡逻(决定"技能点哪里",见文件头)
-  const mode: ResolvedConfig['mode'] = isFarm && cfg.mode ? cfg.mode : 'single';
+  // 打怪模式:定点打怪(当前实现)/定点识别/移动识别(旧值自动迁移,见 LEGACY_MODE_MAP)
+  const rawMode = isFarm && cfg.mode ? cfg.mode : 'fixed';
+  const mode: ResolvedConfig['mode'] =
+    (LEGACY_MODE_MAP[rawMode] as ResolvedConfig['mode'] | undefined) ??
+    (rawMode as ResolvedConfig['mode']);
 
-  // 路径点:waypoints 非空则用,否则用默认
-  const pathPoints =
-    isFarm && cfg.waypoints && cfg.waypoints.length > 0
-      ? cfg.waypoints.map((w) => ({ x: w.x, y: w.y }))
-      : DEFAULT_PATH_POINTS;
-
-  // 技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD),否则用默认
+  // 任务级技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD),否则用默认
+  // 旧技能缺 method/castMs/rangePx → 按旧行为 target/400ms/不限距离
   let skills: MoveAttackSkill[] = DEFAULT_SKILLS;
   if (isFarm && cfg.skills && cfg.skills.some((s) => s.enabled !== false)) {
     const resolved = cfg.skills
       .filter((s) => s.enabled !== false)
       .filter((s) => VALID_SKILL_KEYS.has(s.key))
       .map((s) => ({
+        id: s.id,
         key: s.key as MoveAttackSkill['key'],
+        name: s.name,
         cooldownMs: Math.max(0, s.cooldownMs | 0),
+        castMs: Math.max(0, s.castMs ?? 400),
+        rangePx: Math.max(0, s.rangePx ?? 0),
+        method: (s.method ?? 'target') as MoveAttackSkill['method'],
       }));
     if (resolved.length > 0) skills = resolved;
   }
+
+  // 路径点:waypoints 非空则用,否则用默认(默认点视为挂机点)
+  // 挂机点按 skillIds 绑定技能;旧路径点无 skillIds → 兼容为"释放全部技能"
+  const waypoints: ResolvedWaypoint[] =
+    isFarm && cfg.waypoints && cfg.waypoints.length > 0
+      ? cfg.waypoints.map((w) => {
+          const type = (w.type ?? 'farm-spot') as ResolvedWaypoint['type'];
+          let wpSkills: MoveAttackSkill[] = [];
+          if (type === 'farm-spot') {
+            const ids = w.skillIds && w.skillIds.length > 0 ? w.skillIds : skills.map((s) => s.id);
+            wpSkills = skills.filter((s) => ids.includes(s.id));
+          }
+          return { x: w.x, y: w.y, type, skills: wpSkills };
+        })
+      : DEFAULT_PATH_POINTS.map((p) => ({
+          x: p.x,
+          y: p.y,
+          type: 'farm-spot' as const,
+          skills,
+        }));
 
   // 找怪关键字/颜色
   const monsterKeywords =
@@ -194,19 +250,15 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   const stepIntervalMs =
     isFarm && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : 800;
 
-  // 群刷模式:技能点击点离自身的距离 = 移速 - 200(移速太小则夹到 0,避免点到自身另一侧)
-  const aoeDistancePx = Math.max(0, stepIntervalMs - AOE_DISTANCE_OFFSET);
-
   const maxLoops = END_CONDITIONS.maxLoops;
 
   return {
     mode,
-    pathPoints,
+    waypoints,
     skills,
     monsterKeywords,
     monsterColor,
     stepIntervalMs,
-    aoeDistancePx,
     maxLoops,
   };
 }
@@ -241,11 +293,11 @@ function scanMonster(keywords: string[], color: string): Point | null {
 
 /**
  * 点击方向(弧度,屏幕坐标系):
- * - FALLBACK.mode='behind'(默认):移动方向的反方向(引怪:怪在身后追着你跑)
- * - FALLBACK.mode='fixed':固定角度 FALLBACK.fixedAngleDeg
+ * - FIXED_AIM.mode='behind'(默认):移动方向的反方向(引怪:怪在身后追着你跑)
+ * - FIXED_AIM.mode='fixed':固定角度 FIXED_AIM.fixedAngleDeg
  */
 function aimAngle(current: MapPosition, prev: MapPosition | null): number {
-  if (FALLBACK.mode === 'fixed') return (FALLBACK.fixedAngleDeg * Math.PI) / 180;
+  if (FIXED_AIM.mode === 'fixed') return (FIXED_AIM.fixedAngleDeg * Math.PI) / 180;
   if (!prev) return 0; // 第一个点没有上一位置可参考,默认正右
   // 地图坐标 y 轴向南 = 屏幕 y 轴向南,atan2 角可直接映射到屏幕偏移
   return Math.atan2(current.y - prev.y, current.x - prev.x) + Math.PI; // 移动反方向
@@ -305,30 +357,34 @@ export async function runFarmLoop(
 
   // 解析配置:优先用「挂机打怪」弹窗确认后下发的 taskConfig,缺失回退默认值
   const conf = resolveConfig(ctx);
+  const modeLabel =
+    conf.mode === 'fixed-detect' ? '定点识别' : conf.mode === 'fixed' ? '定点打怪' : '移动识别';
+  const farmSpotCount = conf.waypoints.filter((w) => w.type === 'farm-spot').length;
   ctx.sendLog(
     'info',
-    `[${label}] 配置: 模式=${conf.mode} 路径点=${conf.pathPoints.length} 技能=[${conf.skills
-      .map((s) => `${s.key}/${s.cooldownMs}ms`)
+    `[${label}] 配置: 模式=${modeLabel}(${conf.mode}) 路径点=${conf.waypoints.length}(挂机点=${farmSpotCount}) 技能=[${conf.skills
+      .map(
+        (s) =>
+          `${s.key}${s.name ? `·${s.name}` : ''}/${s.cooldownMs}ms/吟唱${s.castMs}ms/距离${
+            s.rangePx === 0 ? '未配' : `${s.rangePx}px`
+          }/${s.method}`,
+      )
       .join(
         ', ',
       )}] 关键字=[${conf.monsterKeywords.join(',')}] 颜色=${conf.monsterColor} 移动间隔=${conf.stepIntervalMs}ms` +
-      (conf.mode === 'aoe' ? ` 群刷点击距离=${conf.aoeDistancePx}px` : '') +
       ` 最大圈数=${conf.maxLoops}` +
+      (conf.mode === 'move-detect' ? '(移动识别尚未实现,按定点打怪执行)' : '') +
       (ctx.init.taskConfig?.type === 'farm' ? '' : '(taskConfig 非 farm,用内置默认)'),
   );
 
   try {
     const vision = new DamooVisionProvider();
-    const input = new DamooInputProvider();
+    const input = new DamooInputProvider() as any;
     vision.bind(hwnd);
     input.bind(hwnd);
 
     const coordReader = new MapCoordReader(vision, MAP_COORD_CONFIG);
     const movement = new MovementControllerByRandom(input, coordReader, { center: SCREEN_CENTER });
-    // const hpReader =
-    //   END_CONDITIONS.minSelfHpPercent > 0 && ctx.profile?.regions?.selfHp
-    //     ? new CoordinateReader(vision, ctx.profile)
-    //     : null;
 
     const start = await movement.readPosition();
     if (!start) {
@@ -337,6 +393,26 @@ export async function runFarmLoop(
       return { ok: false, detail };
     }
     ctx.sendLog('info', `[${label}] 起点: (${start.x}, ${start.y}) 地图=${start.map ?? '未知'}`);
+
+    // todo
+    // if (input) {
+    //   const skill = conf.skills.filter((s) => s.key === 'F7')[0];
+    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.delay(300);
+    //   await input.click('left');
+    //   await input.delay(300);
+    //   await input.pressKey(skill.key);
+    //   await input.delay(5000);
+    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.click('left');
+    //   await input.pressKey(skill.key);
+    //   await input.delay(5000);
+    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.click('left');
+    //   await input.pressKey(skill.key);
+    //   // 结束
+    //   return { ok: true, detail: '成功' };
+    // }
 
     const lastCast = new Map<string, number>(); // 每个技能的上次释放时间戳
     let loop = 0;
@@ -367,11 +443,11 @@ export async function runFarmLoop(
       ctx.setStatus('moving', `${label} 第 ${loop}/${conf.maxLoops} 圈`);
       ctx.sendLog('info', `[${label}] 第 ${loop}/${conf.maxLoops} 圈开始`);
 
-      for (const point of conf.pathPoints) {
+      for (const wp of conf.waypoints) {
         if (!ctrl.running) break;
 
-        const target: MapPosition = { map: start.map, x: point.x, y: point.y };
-        // 移动到路径点
+        const target: MapPosition = { map: start.map, x: wp.x, y: wp.y };
+        // 移动到下一个路径点
         const arrived = await movement.moveTo(target, {
           arriveTolerance: 3,
           stepIntervalMs: conf.stepIntervalMs,
@@ -383,7 +459,7 @@ export async function runFarmLoop(
           stuckCount++;
           ctx.sendLog(
             'warn',
-            `[${label}] 路径点 (${point.x},${point.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`,
+            `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`,
           );
           if (stuckCount >= END_CONDITIONS.maxStuckPoints) {
             const detail = `连续 ${stuckCount} 个路径点卡住,终止`;
@@ -407,43 +483,109 @@ export async function runFarmLoop(
         //   }
         // }
 
-        // 到达:站稳 → 决定"技能点哪里" → 释放所有 CD 已好的技能
+        // 到达:站稳后再识别/释放
         await sleep(SETTLE_MS);
-        // 单怪/巡逻:OCR 扫怪物名称 + 鼠标左键点怪(扫不到 → 移动反方向兜底点,引怪)
-        // 群刷:      不扫怪,技能键 + 鼠标左键点「移动反方向、离自身 movementSpeed-200 px」处
-        const isAoe = conf.mode === 'aoe';
-        const angle = aimAngle(current, prev);
-        // 群刷的距离按移速算,但会被画面边界截短(竖着走时 600px 已经超出画面中心到上下边的 400px)
-        const aoeAim = clampDistanceToView(angle, conf.aoeDistancePx);
-        const monster = isAoe ? null : scanMonster(conf.monsterKeywords, conf.monsterColor);
-        // todo 测算施法距离
-        const clickPos = isAoe
-          // ? pointAt(angle, aoeAim.distance)
-             ? pointAt(angle, 300)
-          : (monster ?? pointAt(angle, FALLBACK.distance));
-        let clickDesc: string;
-        if (isAoe) {
-          clickDesc =
-            `群刷:移动反方向点击 (${clickPos.x},${clickPos.y}) 距离=${aoeAim.distance}px` +
-            (aoeAim.clamped ? `(移速-200=${conf.aoeDistancePx}px 超出画面,已夹到边界)` : '');
-        } else if (monster) {
-          clickDesc = `发现怪物 @(${clickPos.x},${clickPos.y})`;
-        } else {
-          clickDesc = `未发现怪物,兜底点击 (${clickPos.x},${clickPos.y})`;
+
+        // 休息点 / 路径中间点:只路过,不放技能
+        if (wp.type !== 'farm-spot') {
+          ctx.sendLog(
+            'info',
+            `[${label}] 到达 (${current.x},${current.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`,
+          );
+          prev = current;
+          continue;
         }
-        ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) ${clickDesc}`);
+        // 挂机点但没绑定技能(用户显式清空):不放,避免误用旧"全部释放"兜底
+        if (wp.skills.length === 0) {
+          ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) 挂机点,未绑定技能,跳过`);
+          prev = current;
+          continue;
+        }
+
+        // 定点打怪(fixed,当前实现):不扫怪,缺省施法技能打在固定方向(移动反方向)
+        // 定点识别(fixed-detect):扫怪名 → 按每个技能的施法方式释放(没扫到 → 指向性技能跳过)
+        const isDetect = conf.mode === 'fixed-detect';
+        const angle = aimAngle(current, prev);
+        const monster = isDetect ? scanMonster(conf.monsterKeywords, conf.monsterColor) : null;
+        // 怪离角色(屏幕中心)的像素距离:target 技能按各自的施法距离过滤
+        const monsterDist = monster
+          ? Math.hypot(monster.x - SCREEN_CENTER.x, monster.y - SCREEN_CENTER.y)
+          : null;
+
+        // 定点打怪:固定方向的落点(每个技能各自的距离在下面按 rangePx 算)
+        const fixedAim = clampDistanceToView(angle, FIXED_AIM.distance);
+        const fixedPoint = pointAt(angle, fixedAim.distance);
+
+        let clickDesc: string;
+        if (isDetect) {
+          clickDesc = monster
+            ? `发现怪物 @(${monster.x},${monster.y}) 距离=${Math.round(monsterDist!)}px`
+            : '未发现怪物';
+        } else {
+          clickDesc =
+            `定点打怪:移动反方向落点 (${fixedPoint.x},${fixedPoint.y}) 默认距离=${fixedAim.distance}px` +
+            (fixedAim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : '');
+        }
+        ctx.sendLog(
+          'info',
+          `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ${clickDesc}`,
+        );
 
         const now = Date.now();
-        for (const skill of conf.skills) {
+        for (const skill of wp.skills) {
           if (!ctrl.running) break;
-          const last = lastCast.get(skill.key) || 0;
-          if (now - last < skill.cooldownMs) continue; // 还在 CD,跳过
-          await input.pressKey(skill.key);
-          await sleep(PRESS_TO_CLICK_MS);
-          await input.moveMouse(clickPos, { kind: 'instant' });
-          await input.click('left');
-          lastCast.set(skill.key, Date.now());
-          ctx.sendLog('info', `[${label}] 释放 ${skill.key} @(${clickPos.x},${clickPos.y})`);
+          const last = lastCast.get(skill.id) || 0;
+          if (now - last < skill.cooldownMs) continue; // 技能时间间隔未到,跳过
+
+          const skillLabel = `${skill.key}${skill.name ? `·${skill.name}` : ''}`;
+
+          // target(缺省施法)前置检查 + 落点:
+          //   定点识别 → 需要识别到怪,且在施法距离内
+          //   定点打怪 → 固定方向,距离 = 施法距离(未配则用 FIXED_AIM.distance),夹到画面内
+          let clickPos: Point | null = null;
+          if (skill.method === 'target') {
+            if (isDetect) {
+              if (!monster) continue; // 定点识别没扫到怪,指向性技能跳过
+              if (skill.rangePx > 0 && monsterDist !== null && monsterDist > skill.rangePx) {
+                ctx.sendLog(
+                  'info',
+                  `[${label}] ${skillLabel} 跳过:怪距离 ${Math.round(monsterDist)}px 超出施法距离 ${skill.rangePx}px`,
+                );
+                continue;
+              }
+              clickPos = monster;
+            } else {
+              const dist = skill.rangePx > 0 ? skill.rangePx : FIXED_AIM.distance;
+              clickPos = pointAt(angle, clampDistanceToView(angle, dist).distance);
+            }
+          }
+
+          if (skill.method === 'self') {
+            // 状态施法:左键点击角色自身(屏幕中心) → 按键 → 等吟唱
+            await input.moveMouse(
+              { x: SCREEN_CENTER.x - 20, y: SCREEN_CENTER.y },
+              { kind: 'instant' },
+            );
+            await input.delay(300);
+            await input.click('left');
+            await input.delay(300);
+            await input.pressKey(skill.key);
+            if (skill.castMs > 0) await sleep(skill.castMs);
+            ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @自身(状态施法)`);
+          } else if (skill.method === 'quick') {
+            // 快捷施法:只按键 → 等吟唱
+            await input.pressKey(skill.key);
+            if (skill.castMs > 0) await sleep(skill.castMs);
+            ctx.sendLog('info', `[${label}] 释放 ${skillLabel}(快捷施法)`);
+          } else {
+            // 缺省施法:按键 → 等吟唱 → 左键点击落点
+            await input.pressKey(skill.key);
+            if (skill.castMs > 0) await sleep(skill.castMs);
+            await input.moveMouse(clickPos!, { kind: 'instant' });
+            await input.click('left');
+            ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @(${clickPos!.x},${clickPos!.y})`);
+          }
+          lastCast.set(skill.id, Date.now());
           await sleep(BETWEEN_SKILLS_MS);
         }
 

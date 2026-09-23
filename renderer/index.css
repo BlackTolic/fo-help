@@ -28,6 +28,16 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-border-active;
   }
+  /* 去掉 number 输入框的鼠标微调按钮(上下箭头) — 统一用键盘输入 */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
 }
 
 @layer components {

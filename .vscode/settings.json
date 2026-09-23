@@ -1,4 +1,13 @@
 {
-  "editor.defaultFormatter": "esbenz.prettier-vscode",
-  "editor.formatOnSave": true
+  // Prettier:配置读仓库根目录的 .prettierrc,忽略规则读 .prettierignore
+  // (扩展会自动解析 node_modules 里的 prettier 3.4.2,而不是它内置的版本)
+  // 注意扩展 ID 是 esbenp.prettier-vscode,拼错会导致保存时静默不格式化
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+
+  // 只有能解析到 .prettierrc 的文件才格式化,避免回落到默认配置(printWidth 80、双引号)改坏风格
+  "prettier.requireConfig": true,
+
+  // 行尾统一 LF,和 .prettierrc 的 endOfLine: "lf"、.gitattributes 的 eol=lf 保持一致
+  "files.eol": "\n"
 }
