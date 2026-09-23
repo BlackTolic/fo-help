@@ -325,10 +325,10 @@ export async function runFarmLoop(
 
     const coordReader = new MapCoordReader(vision, MAP_COORD_CONFIG);
     const movement = new MovementControllerByRandom(input, coordReader, { center: SCREEN_CENTER });
-    const hpReader =
-      END_CONDITIONS.minSelfHpPercent > 0 && ctx.profile?.regions?.selfHp
-        ? new CoordinateReader(vision, ctx.profile)
-        : null;
+    // const hpReader =
+    //   END_CONDITIONS.minSelfHpPercent > 0 && ctx.profile?.regions?.selfHp
+    //     ? new CoordinateReader(vision, ctx.profile)
+    //     : null;
 
     const start = await movement.readPosition();
     if (!start) {
