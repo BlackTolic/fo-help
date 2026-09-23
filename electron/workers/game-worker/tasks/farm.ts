@@ -25,9 +25,10 @@
 //   pause/resume/stop 命令维护(标志放 ctx 上:命令可能在任务 start() 之前到达)
 //
 // 为什么"到点才释放"而不是移动中释放:
-//   QQ 幻想是点地移动,移动时左键处于按住状态(MovementControllerByRandom.holding),
-//   而指向性技能需要"按技能键 → 左键点击怪物"。移动中放技能,点击会被当成移动指令,
-//   所以必须等 moveTo 到达(arriveTolerance 内)、控制器松开左键后再释放。
+//   QQ 幻想是点地移动,移动本身就是鼠标左键操作(精确点移动:每步单击地面;
+//   随机圆点法:按住左键不放),而指向性技能需要"按技能键 → 左键点击怪物"。
+//   移动中放技能,点击会被当成移动指令,所以必须等 moveTo 到达(arriveTolerance 内)、
+//   角色停下来之后再释放。
 //
 // screenshot-test 命令(thumbnail.ts → move-attack.ts)复用同一个 runFarmLoop 做移动攻击测试
 //   (传 opts.label='移动攻击';两条路径只有日志前缀 / 结果上报方式不同,循环逻辑只此一份)。
@@ -35,11 +36,15 @@
 // 223,56 -> 182,68 -> 151,74 -> 198,107 -> 230,82 ->223,56
 // 6s 0.5s /5s 0.75s/10s   ->F7:1S
 
+// 精确移动
+// 223/56 -- 209/57 -- 208/70 -- 206/73 -- 217/78 -- 220/86 -- 232/83 -- 240/78  --- 227/73 -- 219/63  --- 223/56
+
 import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { DamooVisionProvider } from '../../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
-import { MovementControllerByRandom } from '../../../../core/navigation/MovementController';
+import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
+import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import { CoordinateReader } from '../../../../core/state/CoordinateReader';
 import type { Point } from '../../../../core/platform/vision/IVisionProvider';
 import type { MapPosition } from '../../../../core/perception/types';
@@ -119,6 +124,71 @@ const MAP_COORD_CONFIG = {
   coordRoi: DEFAULT_ROLE_POSITION['1280*800'],
   coordColor: COLOR_WHITE,
   similarity: DEFAULT_SIM,
+};
+
+/**
+ * 地图坐标 → 屏幕坐标 的标定(精确点移动 MovementControllerByPrecisePoint 用)
+ *
+ * 模型与标定方法见 core/navigation/MapCalibration.ts 顶部注释。
+ * 下面 7 组样本是重新实测的:每组 from = 点击前角色地图坐标、screen = 点击的屏幕点、
+ * to = 点击后角色实际走到(坐标读数)的地图坐标;每组给两条方程(屏幕 x/y 各一条)。
+ * 7 组最小二乘拟合(连角色锚点一起解)得到:
+ *   矩阵 a=39.45 b=-0.84 c=-0.21 d=39.89,锚点反推 ≈(644,396),最大残差 32.7px(0.82 单位)。
+ * 结论:两轴比例都 ≈40(水平 39.45 / 竖直 39.89,pxPerUnit 兜底 40 仍然合适),
+ * 轴间耦合很小(b/c 都接近 0);残差落在「地图坐标整数读数的量化误差(±1 单位 ≈40px)」内。
+ */
+const MAP_CALIBRATION: PrecisePointConfig = {
+  /** 角色脚下 = 当前坐标在屏幕上的位置;1280x800 窗口中心 */
+  selfScreen: SCREEN_CENTER,
+  /** 游戏画面区域(大漠绑定后是窗口客户区相对坐标);底部 UI 不能点就把它减掉 */
+  gameRect: MONSTER_SCAN.roi,
+  margin: CLICK_MARGIN,
+  /** 样本定不出某轴时的兜底比例(实测水平 ≈39 / 竖直 ≈40) */
+  pxPerUnit: 40,
+  samples: [
+    // 点 (970,53) → (221,47)
+    {
+      from: { map: null, x: 213, y: 55 },
+      screen: { x: 970, y: 53 },
+      to: { map: null, x: 221, y: 47 },
+    },
+    // 点 (1148,645) → (234,53)
+    {
+      from: { map: null, x: 221, y: 47 },
+      screen: { x: 1148, y: 645 },
+      to: { map: null, x: 234, y: 53 },
+    },
+    // 点 (231,608) → (223,58)
+    {
+      from: { map: null, x: 234, y: 53 },
+      screen: { x: 231, y: 608 },
+      to: { map: null, x: 223, y: 58 },
+    },
+    // 点 (282,137) → (214,51)
+    {
+      from: { map: null, x: 223, y: 58 },
+      screen: { x: 282, y: 137 },
+      to: { map: null, x: 214, y: 51 },
+    },
+    // 点 (656,651) → (215,58)
+    {
+      from: { map: null, x: 214, y: 51 },
+      screen: { x: 656, y: 651 },
+      to: { map: null, x: 215, y: 58 },
+    },
+    // 点 (1094,370) → (226,57)
+    {
+      from: { map: null, x: 215, y: 58 },
+      screen: { x: 1094, y: 370 },
+      to: { map: null, x: 226, y: 57 },
+    },
+    // 点 (90,349) → (212,56)
+    {
+      from: { map: null, x: 226, y: 57 },
+      screen: { x: 90, y: 349 },
+      to: { map: null, x: 212, y: 56 },
+    },
+  ],
 };
 
 // ===== 运行时配置(由 taskConfig + 默认值合成)=====
@@ -384,7 +454,8 @@ export async function runFarmLoop(
     input.bind(hwnd);
 
     const coordReader = new MapCoordReader(vision, MAP_COORD_CONFIG);
-    const movement = new MovementControllerByRandom(input, coordReader, { center: SCREEN_CENTER });
+    // 移动方式:精确点(目标地图坐标 → 屏幕点单击);标定见 MAP_CALIBRATION
+    const movement = new MovementControllerByPrecisePoint(input, coordReader, MAP_CALIBRATION);
 
     const start = await movement.readPosition();
     if (!start) {
@@ -449,9 +520,12 @@ export async function runFarmLoop(
         const target: MapPosition = { map: start.map, x: wp.x, y: wp.y };
         // 移动到下一个路径点
         const arrived = await movement.moveTo(target, {
-          arriveTolerance: 3,
+          // 精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即「到位」
+          arriveTolerance: 1,
           stepIntervalMs: conf.stepIntervalMs,
           noMoveTimeoutMs: 20000,
+          // 坐标读数是整数,只要变了(±1)就算在移动,别让「没移动」计时误判卡住
+          moveEpsilon: 0.5,
         });
 
         const current: MapPosition | null = (await movement.readPosition()) ?? prev;
@@ -563,7 +637,7 @@ export async function runFarmLoop(
           if (skill.method === 'self') {
             // 状态施法:左键点击角色自身(屏幕中心) → 按键 → 等吟唱
             await input.moveMouse(
-              { x: SCREEN_CENTER.x - 20, y: SCREEN_CENTER.y },
+              { x: SCREEN_CENTER.x, y: SCREEN_CENTER.y - 50 },
               { kind: 'instant' },
             );
             await input.delay(300);

@@ -4,10 +4,11 @@
 // 原理:循环「读当前坐标 → 和目标比较 → 走一小步」,直到到达;
 //      若坐标长时间(默认 3 分钟)没有变化则视为卡住,退出返回 false。
 //
-// "走一小步"的具体操作因游戏而异,集中在 stepTowards() 里实现:
-//   - 点击大地图/小地图上的目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
-//   - 或直接点地面朝目标方向移动
-//   - 或调用游戏内自动寻路(如果有)
+// "走一小步"的具体操作因游戏而异,集中在 stepTowards() 里实现;本项目已实现三种:
+//   1. MovementControllerByDirection8  — 点击「画面中心 + 八方向 × 固定距离」的地面
+//   2. MovementControllerByRandom      — 画面中心外的圆上随机落点,按住左键持续走
+//   3. MovementControllerByPrecisePoint — MapCalibration 把目标地图坐标换算成屏幕点后单击
+//      (点地移动的游戏用这个:落点就是目标坐标对应的屏幕位置,能精确停在目标坐标上)
 // 到达/退出时的收尾(如释放按住的鼠标键)用 onArrived()/onMoveEnd() 钩子,不要覆写 moveTo。
 //
 // 坐标系假设:x 向东递增,y 向南递增(2D 游戏惯例;不对就改 directionTo)
@@ -16,6 +17,8 @@ import type { IInputProvider } from '../platform/input/IInputProvider';
 import type { Point } from '../platform/vision/IVisionProvider';
 import type { MapCoordReader } from '../perception/MapCoordReader';
 import type { MapPosition } from '../perception/types';
+import { MapCalibration } from './MapCalibration';
+import type { MapCalibrationConfig } from './MapCalibration';
 import { createLogger } from '../logger';
 
 const log = createLogger('navigation.movement');
@@ -105,9 +108,8 @@ export class MovementController {
           // log.debug(
           //   `移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`,
           // );
-          // 这里可以设计两种移动方式:
-          // 1. 点击目标点(需要 地图坐标 → 屏幕坐标 的换算,配 mapCalibration)
-          // 2. 直接点地面朝目标方向移动
+          // 具体怎么走由子类的 stepTowards 决定(见文件顶部三种实现的说明);
+          // 方向量化后的 dir 只有「八方向点地」那类实现用得上,精确点/随机圆点各自算连续角
           await this.stepTowards(current, target, dir);
           await sleep(stepIntervalMs);
         }
@@ -279,6 +281,141 @@ export class MovementControllerByRandom extends MovementController {
     if (!this.holding) return;
     await this.input.mouseUp('left');
     this.holding = false;
+  }
+}
+
+/**
+ * 移动方式三:精确点移动(点地移动的游戏用,如 QQ 幻想)
+ *
+ * 每步:
+ *   1. 读当前地图坐标(基类循环做)→ 用 MapCalibration 把目标地图坐标换算成屏幕点
+ *   2. 落点超出游戏画面时,沿「角色 → 目标」方向裁到画面内(方向不变,只是近了点)
+ *   3. 鼠标移到落点单击左键:游戏会命令角色走到「该落点对应的地图坐标」
+ *   4. 走一段后再读坐标、重算落点,反复逼近,直到进入 arriveTolerance
+ *
+ * 和 MovementControllerByRandom 的区别:
+ *   - 随机圆点法只保证方向对,走多远由按住时长决定,停在哪全看运气;
+ *     本实现每一击的落点就是「目标坐标此刻对应的屏幕位置」,所以最后能精确停在目标坐标上
+ *   - 不按住左键(每步单击),不需要 onArrived/onMoveEnd 释放,收尾自然停住
+ *
+ * 比例(scaleX/scaleY)靠 MapCalibration 标定,标定方法与例子见 MapCalibration.ts 顶部注释。
+ * 比例没标准时每步都会重新读坐标、重新逼近,所以不影响能不能到达,但走位表现会不同:
+ *   - 估小(实际一单位比 scale 远):每步走不到目标,多走几步,单调收敛
+ *   - 估大(实际一单位比 scale 近):每步走过头,角色在目标两侧来回;
+ *     靠下面的「过冲自适应」把该轴步长逐次减半,几次之后收敛;
+ *     错得离谱、减到下限还在来回时放弃本点(基类"长时间没移动"超时返回 false,任务按卡住处理),
+ *     不会无限来回卡死任务。
+ *     ⚠️ 估大时落点在目标之外,角色是"路过"目标:基类可能判定到达而角色还在朝落点走
+ *     (到达之后坐标还会继续偏出去)。根治办法是补该轴实测样本,把比例标定准。
+ */
+export interface PrecisePointConfig extends MapCalibrationConfig {
+  /** 鼠标就位后多久点击(ms,默认 300:同上一步点击的间隔,给游戏反应时间) */
+  pressDelayMs?: number;
+}
+
+/** 单轴步长比例的下限:低于它说明比例错得离谱,本点放弃(见 adaptGain) */
+const GAIN_FLOOR = 1 / 32;
+/** 判断坐标差方向时的零阈值(坐标是整数,这个值只用来排除浮点 0) */
+const SIGN_EPS = 1e-6;
+
+export class MovementControllerByPrecisePoint extends MovementController {
+  private readonly calib: MapCalibration;
+  // 鼠标就位后多久点击(ms,默认 300:同上一步点击的间隔,给游戏反应时间)
+  private readonly pressDelayMs: number;
+  /** 每个轴的步长比例:正常 1,检测到该轴过冲就减半(只在本次 moveTo 内累计) */
+  private readonly stepGain = { x: 1, y: 1 };
+  /** 上一步坐标差的方向(±1/0),用来发现"这一步跑到目标另一边去了" */
+  private readonly lastSign = { x: 0, y: 0 };
+  /** 比例错得离谱、自适应也救不回来:不再点击,让基类按"长时间没移动"超时收尾 */
+  private gaveUp = false;
+
+  constructor(input: IInputProvider, coords: MapCoordReader, config: PrecisePointConfig = {}) {
+    super(input, coords);
+    this.calib = new MapCalibration(config);
+    this.pressDelayMs = config.pressDelayMs ?? 300;
+  }
+
+  /** 地图坐标 → 屏幕落点(不含画面裁剪、不含过冲自适应;调试/校验标定用) */
+  mapToScreen(map: MapPosition, anchor: MapPosition): Point {
+    return this.calib.mapToScreen(map, anchor);
+  }
+
+  /**
+   * 朝目标走一小步:点一下「目标坐标对应的屏幕位置」
+   * @_direction 基类按八方向量化后的方向;本实现用连续坐标换算,故忽略
+   */
+  protected async stepTowards(current: MapPosition, target: MapPosition): Promise<void> {
+    if (this.gaveUp) return; // 已在 adaptGain 里放弃本点,不要再点击(角色停下,等基类超时)
+
+    this.adaptGain(target.x - current.x, target.y - current.y);
+    if (this.gaveUp) return;
+
+    const { selfScreen } = this.calib;
+    const aim = this.calib.mapToScreen(target, current);
+    // 按自适应比例缩短落点距离(绕角色缩放,方向不变)
+    const { point, clamped } = this.calib.clampToView({
+      x: selfScreen.x + (aim.x - selfScreen.x) * this.stepGain.x,
+      y: selfScreen.y + (aim.y - selfScreen.y) * this.stepGain.y,
+    });
+
+    await this.input.moveMouse(point, { kind: 'instant' });
+    await this.input.delay(this.pressDelayMs);
+    await this.input.click('left');
+
+    const { dist } = this.deltaTo(current, target);
+    log.info(
+      `精确点移动: 当前坐标 (${current.x},${current.y})，目标坐标 (${target.x},${target.y})`,
+    );
+    log.debug(
+      `精确点移动: 落点 (${point.x},${point.y}) 距目标 ${dist.toFixed(1)} 单位` +
+        (clamped ? '(超出画面,已裁到边界)' : '') +
+        (this.stepGain.x !== 1 || this.stepGain.y !== 1
+          ? ` 步长比例=(${this.stepGain.x},${this.stepGain.y})`
+          : ''),
+    );
+  }
+
+  /** 每个路径点(每次 moveTo)重新开始:过冲自适应只在本次 moveTo 内累计 */
+  protected override async onMoveEnd(): Promise<void> {
+    this.stepGain.x = 1;
+    this.stepGain.y = 1;
+    this.lastSign.x = 0;
+    this.lastSign.y = 0;
+    this.gaveUp = false;
+  }
+
+  /**
+   * 过冲自适应:某轴「目标 - 当前」的符号翻转,说明上一步点过头了(该轴比例估大了),
+   * 把该轴步长比例减半 —— 点得近一半,下一步就落回目标这一侧。
+   *
+   * 为什么能收敛:实际走过的距离 = 坐标差 × (配置比例 × 比例) / 真实比例 = 坐标差 × k。
+   * 过冲只会在 k > 1 时发生,而每次翻转都让 k 减半,所以翻转几次后 k ≤ 1,
+   * 之后每步都走不到目标(不再翻转),单调逼近直到进入 arriveTolerance。
+   */
+  private adaptGain(dx: number, dy: number): void {
+    const axes = [
+      { name: 'x' as const, delta: dx, label: '水平' },
+      { name: 'y' as const, delta: dy, label: '垂直' },
+    ];
+    for (const { name, delta, label } of axes) {
+      const sign = delta > SIGN_EPS ? 1 : delta < -SIGN_EPS ? -1 : 0;
+      if (sign === 0) continue; // 该轴已经在目标上,没有过冲可言
+      if (this.lastSign[name] !== 0 && sign !== this.lastSign[name]) {
+        this.stepGain[name] /= 2;
+        if (this.stepGain[name] < GAIN_FLOOR) {
+          this.gaveUp = true;
+          log.warn(
+            `精确点移动:目标 (${label}方向)反复过冲,步长比例已减到 ${this.stepGain[name]},` +
+              `放弃本点(检查 MAP_CALIBRATION:${label}比例估大了,补一条该轴的实测样本)`,
+          );
+          return;
+        }
+        log.warn(
+          `精确点移动:${label}方向过冲,步长比例减半到 ${this.stepGain[name]}(比例可能估大了)`,
+        );
+      }
+      this.lastSign[name] = sign;
+    }
   }
 }
 
