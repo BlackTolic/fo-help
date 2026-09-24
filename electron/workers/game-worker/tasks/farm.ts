@@ -82,9 +82,9 @@ const DEFAULT_MONSTER_KEYWORDS = ['野狼', '野猪'];
 const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 
 /** 两个技能释放之间的间隔(避免按键/点击冲突;按键到点击的等待已由技能 castMs 取代旧固定值) */
-const BETWEEN_SKILLS_MS = 800;
+const BETWEEN_SKILLS_MS = 300;
 /** 到达路径点后,站稳多久再扫描/释放 */
-const SETTLE_MS = 500;
+const SETTLE_MS = 200;
 
 /** 怪物扫描配置(搜索区域/偏移是屏幕几何,留在代码里;关键字/颜色来自 taskConfig) */
 const MONSTER_SCAN = {
@@ -524,8 +524,8 @@ export async function runFarmLoop(
         const arrived = await movement.moveTo(target, {
           // 精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即「到位」
           arriveTolerance: 1,
-          stepIntervalMs: conf.stepIntervalMs,
-          noMoveTimeoutMs: 20000,
+          stepIntervalMs: conf.stepIntervalMs, // 移动步进间隔(ms)
+          noMoveTimeoutMs: 10000, //10S没有移动视为卡住
           // 坐标读数是整数,只要变了(±1)就算在移动,别让「没移动」计时误判卡住
           moveEpsilon: 0.5,
         });
@@ -550,7 +550,7 @@ export async function runFarmLoop(
         if (!current) continue;
 
         // 到达:站稳后再识别/释放
-        await sleep(SETTLE_MS);
+        // await sleep(SETTLE_MS);
 
         // 休息点 / 路径中间点:只路过,不放技能
         if (wp.type !== 'farm-spot') {
@@ -602,6 +602,10 @@ export async function runFarmLoop(
           if (!ctrl.running) break;
           const last = lastCast.get(skill.id) || 0;
           if (now - last < skill.cooldownMs) continue; // 技能时间间隔未到,跳过
+          // 对于连续的技能配置
+          if (wp.skills.length > 2) {
+            await sleep(500);
+          }
 
           const skillLabel = `${skill.key}${skill.name ? `·${skill.name}` : ''}`;
 
@@ -632,9 +636,9 @@ export async function runFarmLoop(
               { x: SCREEN_CENTER.x, y: SCREEN_CENTER.y - 50 },
               { kind: 'instant' },
             );
-            await input.delay(300);
+            await input.delay(200);
             await input.click('left');
-            await input.delay(300);
+            await input.delay(200);
             await input.pressKey(skill.key);
             if (skill.castMs > 0) await sleep(skill.castMs);
             ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @自身(状态施法)`);
@@ -644,15 +648,17 @@ export async function runFarmLoop(
             if (skill.castMs > 0) await sleep(skill.castMs);
             ctx.sendLog('info', `[${label}] 释放 ${skillLabel}(快捷施法)`);
           } else {
+            await input.moveMouse(clickPos!, { kind: 'instant' });
             // 缺省施法:按键 → 等吟唱 → 左键点击落点
             await input.pressKey(skill.key);
-            if (skill.castMs > 0) await sleep(skill.castMs);
-            await input.moveMouse(clickPos!, { kind: 'instant' });
+            // await input.delay(200);
             await input.click('left');
+            // 等吟唱
+            if (skill.castMs > 0) await sleep(skill.castMs);
             ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @(${clickPos!.x},${clickPos!.y})`);
           }
           lastCast.set(skill.id, Date.now());
-          await sleep(BETWEEN_SKILLS_MS);
+          // await sleep(BETWEEN_SKILLS_MS);
         }
 
         prev = current;
