@@ -71,10 +71,10 @@ export class MovementController {
    * @returns true=到达,false=卡住(超过 noMoveTimeoutMs 坐标无变化)/读不到坐标/跨地图
    */
   async moveTo(target: MapPosition, opts?: MoveOptions): Promise<boolean> {
-    const arriveTolerance = opts?.arriveTolerance ?? 5;
-    const stepIntervalMs = opts?.stepIntervalMs ?? 500;
-    const noMoveTimeoutMs = opts?.noMoveTimeoutMs ?? 3 * 60 * 1000;
-    const moveEpsilon = opts?.moveEpsilon ?? 1;
+    const arriveTolerance = opts?.arriveTolerance ?? 5; // 默认 5 坐标单位
+    const stepIntervalMs = opts?.stepIntervalMs ?? 200; // 默认 200ms,同上一步点击的间隔,给游戏反应时间
+    const noMoveTimeoutMs = opts?.noMoveTimeoutMs ?? 3 * 60 * 1000; // 默认 3 分钟:坐标一直无变化视为卡住
+    const moveEpsilon = opts?.moveEpsilon ?? 1; // 默认 1 坐标单位,防止坐标抖动不断重置计时
     let lastPos: MapPosition | null = null;
     let lastMovedAt = Date.now();
 
@@ -332,7 +332,7 @@ export class MovementControllerByPrecisePoint extends MovementController {
   constructor(input: IInputProvider, coords: MapCoordReader, config: PrecisePointConfig = {}) {
     super(input, coords);
     this.calib = new MapCalibration(config);
-    this.pressDelayMs = config.pressDelayMs ?? 300;
+    this.pressDelayMs = config.pressDelayMs ?? 300; // 默认 300ms,同上一步点击的间隔,给游戏反应时间
   }
 
   /** 地图坐标 → 屏幕落点(不含画面裁剪、不含过冲自适应;调试/校验标定用) */

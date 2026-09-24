@@ -38,6 +38,7 @@
 
 // 精确移动
 // 223/56 -- 209/57 -- 208/70 -- 206/73 -- 217/78 -- 220/86 -- 232/83 -- 240/78  --- 227/73 -- 219/63  --- 223/56
+// 无泪南郊： 229/53 -- 215/51 -- 202/50--192/56 --182/61 ---185 /69----184/76 --187/85 -- 199/90 --208/84 --- 219/82 ---225/74 ---217/65 --225/58
 
 import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { DamooVisionProvider } from '../../../../core/platform/vision/damoo/DamooProvider';
@@ -514,6 +515,7 @@ export async function runFarmLoop(
       ctx.setStatus('moving', `${label} 第 ${loop}/${conf.maxLoops} 圈`);
       ctx.sendLog('info', `[${label}] 第 ${loop}/${conf.maxLoops} 圈开始`);
 
+      // 沿路径点移动
       for (const wp of conf.waypoints) {
         if (!ctrl.running) break;
 
@@ -546,16 +548,6 @@ export async function runFarmLoop(
         // 到达路径点:重置卡住计数
         stuckCount = 0;
         if (!current) continue;
-
-        // 血量检查(可选结束条件)
-        // if (hpReader) {
-        //   const hp = await hpReader.readSelfHpPercent().catch(() => null);
-        //   if (hp !== null && hp <= END_CONDITIONS.minSelfHpPercent) {
-        //     const detail = `血量过低 (${hp}%),终止`;
-        //     ctx.sendLog('warn', `[${label}] ${detail}`);
-        //     return { ok: false, detail };
-        //   }
-        // }
 
         // 到达:站稳后再识别/释放
         await sleep(SETTLE_MS);
