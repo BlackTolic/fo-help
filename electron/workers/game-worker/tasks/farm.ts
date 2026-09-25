@@ -5,7 +5,11 @@
 //   fixed-detect 定点识别(即将推出):到挂机点 → 图色识别怪物名称 → 释放该点绑定的技能
 //   move-detect  移动识别(尚未实现,UI 未开放):移动途中识别,识别到怪停下打
 //
-// 技能释放方式(按 taskConfig.skills 里每个技能的 method):
+// 技能释放方式(按 taskConfig.castMode):
+//   smart  智能施法(默认):到每个挂机点,从全部技能里选一个没进 CD 的技能释放;
+//          多个可释放时选 cooldownMs 最长的;全部冷却中则不释放,留到下一个挂机点
+//   custom 自定义施法:按各挂机点绑定的 skillIds 释放(不选 = 全部),逐个点技能
+// 每个技能按 method 施法:
 //   quick  快捷施法:只按技能键 → 等吟唱时间
 //   target 缺省施法:按技能键 → 等吟唱时间 → 左键点击目标坐标
 //                   (定点打怪=移动反方向「施法距离」处,未配则默认 300px,并夹到画面内;
@@ -14,7 +18,7 @@
 // 技能字段:cooldownMs(技能时间间隔)/ castMs(吟唱时间)/ rangePx(施法距离,0=见上默认)
 // 路径点:farm-spot 挂机点(绑定 skillIds,空=释放全部技能)/ rest 休息点 / path 路径中间点(后两种不放技能)
 //
-// 结束条件:stop 命令 / 跑满最大圈数 / 连续多个路径点卡住
+// 结束条件:stop 命令 / 跑满最大圈数 / 检测到角色死亡(isCharacterDead)
 //
 // 配置来源:优先读 ctx.init.taskConfig(WindowCard「挂机打怪」弹窗点"确认/保存"后
 //   经 start-task 命令下发);字段缺失时回退到下面的内置默认值。
@@ -149,9 +153,13 @@ const MAP_COORD_CONFIG = {
 const MAP_CALIBRATION: PrecisePointConfig = {
   /** 角色脚下 = 当前坐标在屏幕上的位置;1280x800 窗口中心 */
   selfScreen: SCREEN_CENTER,
-  /** 游戏画面区域(大漠绑定后是窗口客户区相对坐标);底部 UI 不能点就把它减掉 */
+  /** 游戏画面区域(大漠绑定后是窗口客户区相对坐标) */
   gameRect: MONSTER_SCAN.roi,
-  margin: CLICK_MARGIN,
+  /**
+   * 点击点离画面各边的最小边距:路径点换算出的屏幕坐标超出该范围时,
+   * 沿「角色 → 目标」方向裁回边距内(避免点到窗口外/上下方游戏 UI 上)
+   */
+  margin: { top: 100, bottom: 70, left: 10, right: 10 },
   /** 样本定不出某轴时的兜底比例(实测水平 ≈39 / 竖直 ≈40) */
   pxPerUnit: 40,
   samples: [
@@ -231,13 +239,15 @@ interface ResolvedWaypoint {
 interface ResolvedConfig {
   /** 打怪模式:fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
   mode: 'fixed' | 'fixed-detect' | 'move-detect';
+  /** 施法方式:smart=智能施法(每个挂机点选一个 CD 最长的可释放技能) / custom=按路径点绑定的技能释放 */
+  castMode: 'smart' | 'custom';
   waypoints: ResolvedWaypoint[]; // 解析后的路径点
   skills: MoveAttackSkill[]; // 任务级技能列表
   monsterKeywords: string[]; // 怪名字关键词(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
   monsterColor: string; // 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
   /** 移动步进间隔(ms),来自 taskConfig.movementSpeed */
   stepIntervalMs: number;
-  maxLoops?: number;
+  maxLoops: number;
 }
 
 /** runFarmLoop 的运行结果(任务 start() 与 screenshot-test 测试路径共用) */
@@ -276,6 +286,10 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     (LEGACY_MODE_MAP[rawMode] as ResolvedConfig['mode'] | undefined) ??
     (rawMode as ResolvedConfig['mode']);
 
+  // 施法方式:缺省 = 智能施法
+  const castMode: ResolvedConfig['castMode'] =
+    isFarm && cfg.castMode === 'custom' ? 'custom' : 'smart';
+
   // 任务级技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD)
   let skills: MoveAttackSkill[] = [];
   if (isFarm && cfg.skills && cfg.skills.some((s) => s.enabled !== false)) {
@@ -294,12 +308,17 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   }
 
   // 路径点:waypoints 非空则用
+  // 智能施法:挂机点不绑定技能,到点从全部任务技能里自动选,这里直接挂全部技能
   const waypoints: ResolvedWaypoint[] = cfg.waypoints.map((w) => {
     const type = (w.type ?? 'farm-spot') as ResolvedWaypoint['type'];
     let wpSkills: MoveAttackSkill[] = [];
     if (type === 'farm-spot') {
-      const ids = w.skillIds && w.skillIds.length > 0 ? w.skillIds : skills.map((s) => s.id);
-      wpSkills = skills.filter((s) => ids.includes(s.id));
+      if (castMode === 'smart') {
+        wpSkills = skills;
+      } else {
+        const ids = w.skillIds && w.skillIds.length > 0 ? w.skillIds : skills.map((s) => s.id);
+        wpSkills = skills.filter((s) => ids.includes(s.id));
+      }
     }
     return { x: w.x, y: w.y, type, skills: wpSkills };
   });
@@ -322,6 +341,7 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
 
   return {
     mode,
+    castMode,
     waypoints,
     skills,
     monsterKeywords,
@@ -332,6 +352,15 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 判断角色是否死亡(打怪循环的退出条件之一,与 maxLoops 并列)。
+ * TODO: 死亡判断逻辑由你决定(如:识别复活按钮图色 / 血量 OCR 归零),
+ * 目前恒返回 false = 不启用该退出条件。实现后返回 true 即退出打怪循环。
+ */
+function isCharacterDead(): boolean {
+  return false;
+}
 
 /** 扫描怪物,返回屏幕坐标;找不到返回 null */
 function scanMonster(keywords: string[], color: string): Point | null {
@@ -440,6 +469,7 @@ export async function runFarmLoop(
       .join(
         ', ',
       )}] 关键字=[${conf.monsterKeywords.join(',')}] 颜色=${conf.monsterColor} 移动间隔=${conf.stepIntervalMs}ms` +
+      ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}` +
       ` 最大圈数=${conf.maxLoops}` +
       (conf.mode === 'move-detect' ? '(移动识别尚未实现,按定点打怪执行)' : '') +
       (ctx.init.taskConfig?.type === 'farm' ? '' : '(taskConfig 非 farm,用内置默认)'),
@@ -512,9 +542,23 @@ export async function runFarmLoop(
       ctx.setStatus('moving', `${label} 第 ${loop}/${conf.maxLoops} 圈`);
       ctx.sendLog('info', `[${label}] 第 ${loop}/${conf.maxLoops} 圈开始`);
 
+      // 角色死亡也退出打怪循环(判断逻辑见 isCharacterDead)
+      if (isCharacterDead()) {
+        const detail = `第 ${loop} 圈开始时检测到角色死亡,退出打怪循环`;
+        ctx.sendLog('warn', `[${label}] ${detail}`);
+        return { ok: true, detail };
+      }
+
       // 沿路径点移动
       for (const wp of conf.waypoints) {
         if (!ctrl.running) break;
+
+        // 移动前再查一次死亡(挂机点间移动耗时较长,避免死后继续跑完整圈)
+        if (isCharacterDead()) {
+          const detail = `第 ${loop} 圈途中检测到角色死亡,退出打怪循环`;
+          ctx.sendLog('warn', `[${label}] ${detail}`);
+          return { ok: true, detail };
+        }
 
         const target: MapPosition = { map: start.map, x: wp.x, y: wp.y };
         // 移动到下一个路径点
@@ -595,10 +639,25 @@ export async function runFarmLoop(
         );
 
         const now = Date.now();
-        for (const skill of wp.skills) {
+        // 待释放技能:
+        //   自定义施法 = 该点绑定技能里所有 CD 已好的,依次全部释放(当前原有行为)
+        //   智能施法   = 全部技能里 CD 已好的,只取 cooldownMs 最长的一个释放;
+        //                没有可释放的就不释放,留到下一个挂机点
+        let skillsToCast: MoveAttackSkill[];
+        if (conf.castMode === 'smart') {
+          const ready = wp.skills.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
+          skillsToCast = ready.length
+            ? [ready.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))]
+            : [];
+          if (skillsToCast.length === 0) {
+            ctx.sendLog('info', `[${label}] 无可释放技能(全部冷却中),留到下一个挂机点`);
+          }
+        } else {
+          skillsToCast = wp.skills.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
+        }
+
+        for (const skill of skillsToCast) {
           if (!ctrl.running) break;
-          const last = lastCast.get(skill.id) || 0;
-          if (now - last < skill.cooldownMs) continue; // 技能时间间隔未到,跳过
           // 对于连续的技能配置
           if (wp.skills.length > 2) {
             await sleep(500);
@@ -634,8 +693,8 @@ export async function runFarmLoop(
               { kind: 'instant' },
             );
             await input.delay(200);
-            await input.click('left');
-            await input.delay(200);
+            await input.click('right');
+            await input.delay(300);
             await input.pressKey(skill.key);
             if (skill.castMs > 0) await sleep(skill.castMs);
             ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @自身(状态施法)`);

@@ -78,6 +78,9 @@ export interface FarmSkillConfig {
 /** 挂机打怪模式: fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
 export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
 
+/** 挂机打怪施法方式: smart=智能施法(每个挂机点自动选一个可释放技能) / custom=自定义施法(按路径点绑定的技能) */
+export type FarmCastMode = 'smart' | 'custom';
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -87,6 +90,8 @@ export interface FarmTaskConfig {
   customMapName?: string;
   /** 打怪模式: fixed=定点打怪(固定技能) / fixed-detect=定点识别 / move-detect=移动识别 */
   mode: FarmMode;
+  /** 施法方式: smart=智能施法(每个挂机点从全部技能里选一个 CD 最长的可释放技能;不绑定点技能) / custom=自定义施法(按路径点绑定的 skillIds,不选=全部);缺省 = smart */
+  castMode?: FarmCastMode;
   /** 路径点列表(patrol 模式必填;移动攻击测试作为 A→B→C… 移动路径) */
   waypoints: Waypoint[];
   /** 找怪配置 */

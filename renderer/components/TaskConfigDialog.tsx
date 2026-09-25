@@ -19,6 +19,7 @@ import type {
   FarmTaskConfig,
   FarmSkillConfig,
   FarmMode,
+  FarmCastMode,
   SkillCastMethod,
   Waypoint,
   StoredTaskConfig,
@@ -157,6 +158,8 @@ export function TaskConfigDialog({
   const [mapId, setMapId] = useState('hu-ya-shan');
   const [customMapName, setCustomMapName] = useState('');
   const [mode, setMode] = useState<FarmMode>('fixed');
+  // 施法方式:智能施法(默认)= 到挂机点自动选一个可释放技能;自定义 = 按路径点绑定技能释放
+  const [castMode, setCastMode] = useState<FarmCastMode>('smart');
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [nameKeywords, setNameKeywords] = useState('野,狼,鸡,鹿,狐,猫');
   // 找怪相关:怪名颜色 / 任务级技能列表 / 角色移动间隔
@@ -193,6 +196,8 @@ export function TaskConfigDialog({
         aoe: 'fixed',
       };
       setMode(legacyModeMap[farm.mode] ?? farm.mode ?? 'fixed');
+      // 旧配置没有 castMode 字段,按默认的智能施法处理
+      setCastMode(farm.castMode ?? 'smart');
       setWaypoints(farm.waypoints || []);
       setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
       setMobNameColor(farm.mobFilter?.nameColor || 'FFFFFF-FFFFFF');
@@ -263,6 +268,7 @@ export function TaskConfigDialog({
         mapId,
         customMapName: mapId === 'custom' ? customMapName : undefined,
         mode,
+        castMode,
         waypoints,
         mobFilter: {
           nameKeywords: nameKeywords
@@ -528,6 +534,8 @@ export function TaskConfigDialog({
               setCustomMapName={setCustomMapName}
               mode={mode}
               setMode={setMode}
+              castMode={castMode}
+              setCastMode={setCastMode}
               waypoints={waypoints}
               addWaypoint={addWaypoint}
               removeWaypoint={removeWaypoint}
@@ -733,6 +741,9 @@ interface FarmConfigProps {
   setCustomMapName: (v: string) => void;
   mode: FarmMode;
   setMode: (v: FarmMode) => void;
+  /** 施法方式:smart=智能施法(默认) / custom=自定义施法(按路径点绑定技能) */
+  castMode: FarmCastMode;
+  setCastMode: (v: FarmCastMode) => void;
   waypoints: Waypoint[];
   addWaypoint: () => void;
   removeWaypoint: (id: string) => void;
@@ -760,6 +771,8 @@ function FarmConfig(props: FarmConfigProps) {
     setCustomMapName,
     mode,
     setMode,
+    castMode,
+    setCastMode,
     waypoints,
     addWaypoint,
     removeWaypoint,
@@ -1095,7 +1108,10 @@ function FarmConfig(props: FarmConfigProps) {
         <div className="text-[10px] text-text-muted mt-1">
           施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、
           施法距离处」);状态施法 = 点击角色自身 +
-          按键。配好技能后,在下方"挂机点"类型的路径点上选择要释放的技能
+          按键。配好技能后,
+          {castMode === 'smart'
+            ? '智能施法会在每个挂机点自动从列表里选一个可释放的技能'
+            : '在下方"挂机点"类型的路径点上选择要释放的技能'}
         </div>
       </div>
 
@@ -1103,7 +1119,10 @@ function FarmConfig(props: FarmConfigProps) {
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            路径点 <span className="text-text-muted text-[11px]">(挂机点可选择释放的技能)</span>
+            路径点{' '}
+            <span className="text-text-muted text-[11px]">
+              {castMode === 'custom' ? '(挂机点可选择释放的技能)' : ''}
+            </span>
           </label>
           {!readOnly && (
             <button
@@ -1114,6 +1133,41 @@ function FarmConfig(props: FarmConfigProps) {
               添加点
             </button>
           )}
+        </div>
+
+        {/* 施法方式:智能施法(默认)= 到每个挂机点自动选一个可释放技能(CD 最长的);
+            自定义施法 = 在每个挂机点上自己选择要释放的技能 */}
+        <div className="flex items-center gap-4 mb-2 pl-0.5">
+          {(
+            [
+              { value: 'smart', label: '智能施法' },
+              { value: 'custom', label: '自定义施法' },
+            ] as { value: FarmCastMode; label: string }[]
+          ).map((o) => (
+            <label
+              key={o.value}
+              className={`inline-flex items-center gap-1.5 text-xs ${
+                readOnly ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+              }`}
+            >
+              <input
+                type="radio"
+                name="farm-cast-mode"
+                className="accent-accent-cyan"
+                disabled={readOnly}
+                checked={castMode === o.value}
+                onChange={() => setCastMode(o.value)}
+              />
+              <span className={castMode === o.value ? 'text-text-primary' : 'text-text-secondary'}>
+                {o.label}
+              </span>
+            </label>
+          ))}
+          <span className="text-text-muted text-[10px]">
+            {castMode === 'smart'
+              ? '到每个挂机点,自动从技能列表里选一个未在冷却中的技能释放(都可释放时选 CD 最长的;都在冷却则跳过)'
+              : '在下方每个挂机点上勾选要释放的技能(不选 = 释放全部)'}
+          </span>
         </div>
 
         {waypoints.length === 0 ? (
@@ -1184,8 +1238,8 @@ function FarmConfig(props: FarmConfigProps) {
                   )}
                 </div>
 
-                {/* 挂机点:选择该点释放的技能(休息点/路径点不显示) */}
-                {wp.type === 'farm-spot' && (
+                {/* 自定义施法:挂机点选择该点释放的技能(休息点/路径点不显示;智能施法下也不显示) */}
+                {wp.type === 'farm-spot' && castMode === 'custom' && (
                   <div className="flex items-center gap-x-1.5 gap-y-1 pl-7 flex-wrap">
                     <span className="text-text-muted text-[10px] shrink-0 mr-0.5">释放技能</span>
                     {skills.length === 0 ? (

@@ -29,6 +29,13 @@ const log = createLogger('navigation.calibration');
 const DEFAULT_GAME_RECT: Rect = { x: 0, y: 0, w: 1280, h: 800 };
 /** 点击点离画面边界至少留几像素(避免点到窗口边框/窗口外) */
 const DEFAULT_MARGIN = 4;
+/** margin 按四边指定时的兜底值 */
+const DEFAULT_MARGINS: ViewMargins = {
+  top: DEFAULT_MARGIN,
+  bottom: DEFAULT_MARGIN,
+  left: DEFAULT_MARGIN,
+  right: DEFAULT_MARGIN,
+};
 /** 样本/显式比例都没有时用的兜底比例(本项目实测:水平 38、竖直 40) */
 const DEFAULT_PX_PER_UNIT = 40;
 /** 判断「样本够不够解出矩阵」的阈值(相对值,见 fitRow) */
@@ -56,13 +63,21 @@ export interface MapMatrix {
   d: number;
 }
 
+/** 四边独立边距(px):点击点离画面各边的最小距离 */
+export interface ViewMargins {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
 export interface MapCalibrationConfig {
   /** 角色脚下(当前地图坐标在屏幕上的位置):默认 gameRect 的中心 */
   selfScreen?: Point;
   /** 游戏画面区域(窗口客户区,大漠绑定后是客户区相对坐标):默认 {0,0,1280,800} */
   gameRect?: Rect;
-  /** 点击点离画面边界的最小像素:默认 4 */
-  margin?: number;
+  /** 点击点离画面边界的最小像素:默认 4;也可按四边分别指定(如避开顶部/底部 UI) */
+  margin?: number | ViewMargins;
   /** 直接指定映射矩阵(优先于样本与下面的对角比例) */
   matrix?: MapMatrix;
   /** 标定点击样本:拟合出映射矩阵(优先于 scaleX/scaleY/pxPerUnit) */
@@ -231,8 +246,8 @@ export class MapCalibration {
   readonly selfScreen: Point;
   /** 游戏画面区域 */
   readonly gameRect: Rect;
-  /** 点击点离画面边界的最小像素 */
-  readonly margin: number;
+  /** 点击点离画面各边的最小像素(四边独立) */
+  readonly margins: ViewMargins;
   /** 地图坐标差 → 屏幕偏移 */
   readonly matrix: MapMatrix;
 
@@ -242,7 +257,10 @@ export class MapCalibration {
       x: this.gameRect.x + Math.round(this.gameRect.w / 2),
       y: this.gameRect.y + Math.round(this.gameRect.h / 2),
     };
-    this.margin = config.margin ?? DEFAULT_MARGIN;
+    this.margins =
+      typeof config.margin === 'number'
+        ? { top: config.margin, bottom: config.margin, left: config.margin, right: config.margin }
+        : { ...DEFAULT_MARGINS, ...config.margin };
 
     const fallback: Point = {
       x: config.scaleX ?? config.pxPerUnit ?? DEFAULT_PX_PER_UNIT,
@@ -311,10 +329,10 @@ export class MapCalibration {
    */
   clampToView(point: Point): { point: Point; clamped: boolean } {
     const { x: minX, y: minY, w, h } = this.gameRect;
-    const left = minX + this.margin;
-    const top = minY + this.margin;
-    const right = minX + w - this.margin;
-    const bottom = minY + h - this.margin;
+    const left = minX + this.margins.left;
+    const top = minY + this.margins.top;
+    const right = minX + w - this.margins.right;
+    const bottom = minY + h - this.margins.bottom;
 
     const dx = point.x - this.selfScreen.x;
     const dy = point.y - this.selfScreen.y;
