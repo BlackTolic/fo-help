@@ -68,14 +68,18 @@ export class InterruptWatcher {
     return this.running;
   }
 
+  // 轮询一次,检测所有弹框
+  // 每个弹框检测器独立运行,互不干扰
   private pollOnce(): void {
     const now = Date.now();
     for (const rule of this.rules) {
+      // 验证码弹框单类型,不支持并发处理
       if (this.inflight.has(rule.type)) continue;
+      // 单类型弹框 single-flight:上一个 handler 没跑完时不再触发
       const cooldown = rule.cooldownMs ?? 5000;
       const last = this.lastTrigger.get(rule.type) || 0;
+      // 冷却期未到,不触发
       if (now - last < cooldown) continue;
-
       let match;
       try {
         match = rule.detector.detect();
@@ -87,6 +91,7 @@ export class InterruptWatcher {
 
       this.lastTrigger.set(rule.type, now);
       this.inflight.add(rule.type);
+      // 上报事件
       this.opts.onEvent?.({
         kind: 'detected',
         type: rule.type,

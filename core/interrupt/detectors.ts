@@ -5,14 +5,9 @@ import { dmApi } from '../platform/damoo/dm-api';
 import type { Point } from '../platform/vision/IVisionProvider';
 import { VERIFY_CODE_TITLE, INVITE_TEAM_ROI, type WindowSizeKey } from '../constant-ocr/popup';
 import type { PopupDetector, PopupMatch } from './types';
-
-/** 大漠 findStr 结果 "x|y" → 坐标;失败返回 null */
-function parseFindStrPos(result: string): Point | null {
-  if (!result) return null;
-  const [x, y] = result.split('|').map((v) => parseInt(v, 10));
-  if (Number.isNaN(x) || Number.isNaN(y)) return null;
-  return { x, y };
-}
+// ⚠️ 必须用相对路径:worker/core 是 tsc 直出 CommonJS,没有打包器改写别名,
+//   写成 '@core/utils/parse' 会在 worker require 阶段直接 MODULE_NOT_FOUND 崩掉(code=1)
+import { parseTextPos } from '../utils/parse';
 
 /**
  * 神医验证码弹框检测
@@ -22,7 +17,7 @@ export function createVerifyCodeDetector(sizeKey: WindowSizeKey): PopupDetector 
   const conf = VERIFY_CODE_TITLE[sizeKey];
   return {
     detect(): PopupMatch | null {
-      const result = dmApi.findStr(
+      const result = dmApi.findStrFastE(
         conf.x1,
         conf.y1,
         conf.x2,
@@ -31,7 +26,7 @@ export function createVerifyCodeDetector(sizeKey: WindowSizeKey): PopupDetector 
         conf.color,
         conf.sim,
       );
-      const anchor = parseFindStrPos(result);
+      const anchor = parseTextPos(result);
       if (!anchor) return null;
       return { type: 'verify-code', anchor };
     },

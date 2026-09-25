@@ -18,7 +18,7 @@ import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
 import { ThumbnailService } from './thumbnail-service';
 import { getAppSettings } from './app-settings-service';
-import { getThumbsDir } from '../main';
+import { getThumbsDir, getVerifyCodesDir } from '../main';
 
 const log = createLogger('worker-manager');
 
@@ -80,6 +80,9 @@ export class WorkerManager {
       taskConfig,
       waitForConfig,
       thumbsDir,
+      // 验证码截图目录(dev = 项目根/logs/verify-codes,packaged = userData/logs/verify-codes),
+      // 主进程退出时清空,见 main.ts cleanupVerifyCodes()
+      verifyCodeDir: getVerifyCodesDir(),
       // app.getAppPath() 只能在主进程调,utilityProcess 里 require('electron') 拿不到 app
       appPath: app.getAppPath(),
       // 设置(分辨率 / 大漠注册码 / 大模型 API key):每次启动 worker 前新鲜读盘

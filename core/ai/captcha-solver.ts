@@ -102,6 +102,7 @@ export class DashScopeCaptchaSolver implements CaptchaSolver {
         throw new Error(`DashScope HTTP ${resp.status}: ${body.slice(0, 200)}`);
       }
       const data: any = await resp.json();
+      console.log('DashScope 响应', JSON.stringify(data));
       const content: string = data?.choices?.[0]?.message?.content ?? '';
       if (Array.isArray(content)) {
         // 部分模型返回 content 数组

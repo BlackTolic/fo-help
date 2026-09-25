@@ -80,7 +80,7 @@ function buildPopupRules(ctx: WorkerContext, sizeKey: WindowSizeKey): PopupRule[
     {
       type: 'verify-code',
       detector: createVerifyCodeDetector(sizeKey),
-      handler: createVerifyCodeHandler(sizeKey, solver),
+      handler: createVerifyCodeHandler(sizeKey, solver, ctx.init.verifyCodeDir),
       // 验证码处理含 LLM 调用(数秒),single-flight 期间不会重复触发;
       // cooldown 兜底防处理失败后立即重试把接口打爆
       cooldownMs: 10000,
@@ -101,26 +101,28 @@ function buildPopupRules(ctx: WorkerContext, sizeKey: WindowSizeKey): PopupRule[
 export function startInterruptWatcher(ctx: WorkerContext): void {
   if (ctx.interruptWatcher) return;
   const hwnd = ctx.init.hwnd;
+  // 定分辨率档位
   const sizeKey = resolveWindowSizeKey(hwnd, ctx.init.settings?.resolution);
 
   const input = new DamooInputProvider() as any;
   input.bind(hwnd);
 
+  // 启动看门狗
   const watcher = new InterruptWatcher(buildPopupRules(ctx, sizeKey), {
-    input,
-    intervalMs: 700,
-    log: (level, msg) => ctx.sendLog(level, msg),
+    input, // 大漠输入提供器
+    intervalMs: 700, // 轮询间隔(毫秒)
+    log: (level, msg) => ctx.sendLog(level, msg), // 日志回调
     onEvent: (event) => {
       // 结构化事件上报主进程(便于 UI 展示/统计);失败不阻断看门狗
       try {
-        ctx.postMessage({ type: 'interrupt', event });
+        ctx.postMessage({ type: 'interrupt', event }); // 上报事件
       } catch {
         /* noop */
       }
     },
   });
   watcher.start();
-  ctx.interruptWatcher = watcher;
+  ctx.interruptWatcher = watcher; // 挂载到上下文,stop 命令时停
   ctx.sendLog('info', `[弹框看门狗] 已启动(分辨率档=${sizeKey})`);
 }
 

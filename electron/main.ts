@@ -28,6 +28,19 @@ export function getThumbsDir(): string {
   return THUMBS_DIR;
 }
 
+/**
+ * 验证码截图目录(worker 侧 handlers.ts 写,主进程退出时清理):
+ * - dev: 项目根/logs/verify-codes — 运行时产物集中在 logs/(已在 .gitignore)
+ * - packaged: userData/logs/verify-codes — asar 内写不进去
+ * 目录由 worker 按需创建,这里只负责退出时清空(logs/ 本身保留)。
+ */
+const VERIFY_CODES_DIR = app.isPackaged
+  ? path.join(app.getPath('userData'), 'logs', 'verify-codes')
+  : path.join(app.getAppPath(), 'logs', 'verify-codes');
+export function getVerifyCodesDir(): string {
+  return VERIFY_CODES_DIR;
+}
+
 // 强制 stdout/stderr 用 UTF-8(Windows 默认 GBK,会让中文日志在 PowerShell 显示成乱码)
 if (process.stdout && typeof (process.stdout as any).setDefaultEncoding === 'function') {
   (process.stdout as any).setDefaultEncoding('utf8');
@@ -391,6 +404,31 @@ function cleanupThumbs(): void {
 }
 
 /**
+ * 清理验证码截图目录(退出时调,截图只在本轮运行期间供排查用)
+ * 只删 logs/verify-codes 本身,同级的日志文件不受影响。
+ */
+function cleanupVerifyCodes(): void {
+  try {
+    if (!fs.existsSync(VERIFY_CODES_DIR)) return;
+    for (const f of fs.readdirSync(VERIFY_CODES_DIR)) {
+      try {
+        fs.unlinkSync(path.join(VERIFY_CODES_DIR, f));
+      } catch {
+        /* noop */
+      }
+    }
+    try {
+      fs.rmdirSync(VERIFY_CODES_DIR);
+    } catch {
+      /* noop */
+    }
+    console.log(`[verify-codes] 清理目录: ${VERIFY_CODES_DIR}`);
+  } catch (e) {
+    console.warn('[verify-codes] 清理失败:', (e as Error).message);
+  }
+}
+
+/**
  * 清理 dm.dll 加载时留下的辅助文件
  *
  * dm.dll v7.2543 在完整初始化后会提取辅助 dll/exe 到同目录(assets/dll/),
@@ -440,6 +478,7 @@ app.whenReady().then(() => {
     }
   });
   console.log(`[thumbs] 目录: ${THUMBS_DIR} (协议 thumb://image/<hwnd>)`);
+  console.log(`[verify-codes] 目录: ${VERIFY_CODES_DIR} (退出时清空)`);
 
   setupIpc();
   createWindow();
@@ -466,6 +505,7 @@ app.on('window-all-closed', () => {
   workerManager?.shutdownAll();
   thumbnailService?.clearAll();
   cleanupThumbs();
+  cleanupVerifyCodes();
   cleanupDmDllSideFiles();
   if (process.platform !== 'darwin') app.quit();
 });
@@ -473,5 +513,6 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   workerManager?.shutdownAll();
   thumbnailService?.clearAll();
+  cleanupVerifyCodes();
   cleanupDmDllSideFiles();
 });

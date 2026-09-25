@@ -20,6 +20,8 @@ export interface InitData {
   taskConfig?: any;
   waitForConfig?: boolean;
   thumbsDir?: string;
+  /** 验证码截图目录(dev = 项目根/logs/verify-codes,packaged = userData/logs/verify-codes) */
+  verifyCodeDir?: string;
   // 主进程算好传进来:utilityProcess 里 require('electron') 拿不到 app
   appPath?: string;
   /** 应用设置(分辨率 / 大漠注册码 / 大模型 API key),由主进程读盘后随 init 下发 */

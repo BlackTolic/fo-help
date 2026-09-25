@@ -52,70 +52,70 @@ export function createTeamInviteRejectHandler(sizeKey: WindowSizeKey): PopupHand
  * 神医验证码 → 大模型求解并点击正确选项
  * 兜底策略(与参考工程一致):模型不可用/识别失败时直接点第一个选项 I,
  * 避免弹框超时把角色踢下线
+ *
+ * 截图落在 captureDir(主进程下发:dev = 项目根/logs/verify-codes,
+ * packaged = userData/logs/verify-codes),保留到应用退出时由主进程统一清理,方便事后核对识别结果;
+ * 未下发时退回系统临时目录,保证 handler 可独立使用。
+ * 文件名带 pid:多开时每个窗口一个 worker 进程,同毫秒截图不会互相覆盖。
  */
 export function createVerifyCodeHandler(
   sizeKey: WindowSizeKey,
   solver: CaptchaSolver,
+  captureDir?: string,
 ): PopupHandler {
+  const dir = captureDir || path.join(os.tmpdir(), 'fo-help-verify-codes');
+  const pid = process.pid;
   return {
     async handle(match: PopupMatch, ctx: PopupHandlerContext): Promise<void> {
       const { anchor } = match;
-      const tmpDir = os.tmpdir();
       const ts = Date.now();
-      const questionPath = path.join(tmpDir, `fo-verify-q-${ts}.png`);
-      const optionsPath = path.join(tmpDir, `fo-verify-o-${ts}.png`);
+      const questionPath = path.join(dir, `fo-verify-q-${pid}-${ts}.png`);
+      const optionsPath = path.join(dir, `fo-verify-o-${pid}-${ts}.png`);
 
-      try {
-        // 1. 截取问题区 + 选项区
-        const q = VERIFY_CODE_CAPTURE.question;
-        const o = VERIFY_CODE_CAPTURE.options;
-        const rq = dmApi.capturePng(
-          anchor.x + q.dx1,
-          anchor.y + q.dy1,
-          anchor.x + q.dx2,
-          anchor.y + q.dy2,
-          questionPath,
-        );
-        const ro = dmApi.capturePng(
-          anchor.x + o.dx1,
-          anchor.y + o.dy1,
-          anchor.x + o.dx2,
-          anchor.y + o.dy2,
-          optionsPath,
-        );
-        if (rq !== 1 || ro !== 1) {
-          ctx.log('warn', `验证码截图失败(q=${rq}, o=${ro}),直接兜底点第一个选项`);
-          await clickVerifyOption('I', anchor, ctx);
-          return;
-        }
+      // 截图保留在本轮运行期间供排查,应用退出时由主进程统一清理
+      fs.mkdirSync(dir, { recursive: true });
 
-        // 2. 大模型求解
-        const questionB64 = fs.readFileSync(questionPath).toString('base64');
-        const optionsB64 = fs.readFileSync(optionsPath).toString('base64');
-        let answer: VerifyAnswer | null = null;
-        try {
-          answer = await solver.solve(questionB64, optionsB64);
-        } catch (e: any) {
-          ctx.log('warn', `大模型求解失败: ${e?.message || e}`);
-        }
-        if (!answer) {
-          ctx.log('warn', '未识别出答案,兜底点第一个选项');
-          answer = 'I';
-        }
-
-        // 3. 点击对应选项
-        ctx.log('info', `选择答案选项 ${answer}`);
-        await clickVerifyOption(answer, anchor, ctx);
-      } finally {
-        // 截图是临时调试用,用完即删;排查时可先注释这里
-        for (const p of [questionPath, optionsPath]) {
-          try {
-            fs.unlinkSync(p);
-          } catch {
-            /* noop */
-          }
-        }
+      // 1. 截取问题区 + 选项区
+      const q = VERIFY_CODE_CAPTURE.question;
+      const o = VERIFY_CODE_CAPTURE.options;
+      const rq = dmApi.capturePng(
+        anchor.x + q.dx1,
+        anchor.y + q.dy1,
+        anchor.x + q.dx2,
+        anchor.y + q.dy2,
+        questionPath,
+      );
+      const ro = dmApi.capturePng(
+        anchor.x + o.dx1,
+        anchor.y + o.dy1,
+        anchor.x + o.dx2,
+        anchor.y + o.dy2,
+        optionsPath,
+      );
+      if (rq !== 1 || ro !== 1) {
+        ctx.log('warn', `验证码截图失败(q=${rq}, o=${ro}),直接兜底点第一个选项`);
+        await clickVerifyOption('I', anchor, ctx);
+        return;
       }
+      ctx.log('info', `验证码截图已保存 → ${dir}`);
+
+      // 2. 大模型求解
+      const questionB64 = fs.readFileSync(questionPath).toString('base64');
+      const optionsB64 = fs.readFileSync(optionsPath).toString('base64');
+      let answer: VerifyAnswer | null = null;
+      try {
+        answer = await solver.solve(questionB64, optionsB64);
+      } catch (e: any) {
+        ctx.log('warn', `大模型求解失败: ${e?.message || e}`);
+      }
+      if (!answer) {
+        ctx.log('warn', '未识别出答案,兜底点第一个选项');
+        answer = 'I';
+      }
+
+      // 3. 点击对应选项
+      ctx.log('info', `选择答案选项 ${answer}`);
+      await clickVerifyOption(answer, anchor, ctx);
     },
   };
 }
