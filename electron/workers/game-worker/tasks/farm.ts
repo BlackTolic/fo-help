@@ -61,30 +61,30 @@ import type { TaskController, TaskFactoryContext } from './types';
 const SCREEN_CENTER: Point = { x: 640, y: 400 };
 
 /** 默认路径点(地图坐标):从 A 出发依次经过 B/C/D/E,一圈结束后自动回到 A 再循环 */
-const DEFAULT_PATH_POINTS = [
-  { x: 100, y: 100 }, // A 起点,每圈终点也回到这里
-  { x: 130, y: 100 }, // B
-  { x: 130, y: 130 }, // C
-  { x: 100, y: 130 }, // D
-  { x: 85, y: 115 }, // E
-];
+// const DEFAULT_PATH_POINTS = [
+//   { x: 100, y: 100 }, // A 起点,每圈终点也回到这里
+//   { x: 130, y: 100 }, // B
+//   { x: 130, y: 130 }, // C
+//   { x: 100, y: 130 }, // D
+//   { x: 85, y: 115 }, // E
+// ];
 
 /** 默认技能列表(taskConfig 未配技能时用;字段同 MoveAttackSkill) */
-const DEFAULT_SKILLS: MoveAttackSkill[] = [
-  { id: 'default-f1', key: 'F1', cooldownMs: 3000, castMs: 400, rangePx: 0, method: 'target' },
-  { id: 'default-f2', key: 'F2', cooldownMs: 5000, castMs: 400, rangePx: 0, method: 'target' },
-  { id: 'default-f3', key: 'F3', cooldownMs: 8000, castMs: 400, rangePx: 0, method: 'target' },
-  { id: 'default-f4', key: 'F4', cooldownMs: 10000, castMs: 400, rangePx: 0, method: 'target' },
-];
+// const DEFAULT_SKILLS: MoveAttackSkill[] = [
+//   { id: 'default-f1', key: 'F1', cooldownMs: 3000, castMs: 400, rangePx: 0, method: 'target' },
+//   { id: 'default-f2', key: 'F2', cooldownMs: 5000, castMs: 400, rangePx: 0, method: 'target' },
+//   { id: 'default-f3', key: 'F3', cooldownMs: 8000, castMs: 400, rangePx: 0, method: 'target' },
+//   { id: 'default-f4', key: 'F4', cooldownMs: 10000, castMs: 400, rangePx: 0, method: 'target' },
+// ];
 
 /** 默认找怪配置 */
 const DEFAULT_MONSTER_KEYWORDS = ['野狼', '野猪'];
 const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 
-/** 两个技能释放之间的间隔(避免按键/点击冲突;按键到点击的等待已由技能 castMs 取代旧固定值) */
-const BETWEEN_SKILLS_MS = 300;
-/** 到达路径点后,站稳多久再扫描/释放 */
-const SETTLE_MS = 200;
+// /** 两个技能释放之间的间隔(避免按键/点击冲突;按键到点击的等待已由技能 castMs 取代旧固定值) */
+// const BETWEEN_SKILLS_MS = 300;
+// /** 到达路径点后,站稳多久再扫描/释放 */
+// const SETTLE_MS = 200;
 
 /** 怪物扫描配置(搜索区域/偏移是屏幕几何,留在代码里;关键字/颜色来自 taskConfig) */
 const MONSTER_SCAN = {
@@ -105,6 +105,14 @@ const FIXED_AIM = {
   mode: 'behind' as 'behind' | 'fixed',
   fixedAngleDeg: 0,
   distance: 300,
+};
+
+/** 默认配置 */
+const DEFAULT_CONFIG = {
+  /** 默认找怪配置 */
+  mobFilter: {
+    nameColor: DEFAULT_MONSTER_COLOR,
+  },
 };
 
 /** 点击点离画面边界至少留这么多像素(避免点到窗口边框/窗口外) */
@@ -223,13 +231,13 @@ interface ResolvedWaypoint {
 interface ResolvedConfig {
   /** 打怪模式:fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
   mode: 'fixed' | 'fixed-detect' | 'move-detect';
-  waypoints: ResolvedWaypoint[];
-  skills: MoveAttackSkill[];
-  monsterKeywords: string[];
-  monsterColor: string;
+  waypoints: ResolvedWaypoint[]; // 解析后的路径点
+  skills: MoveAttackSkill[]; // 任务级技能列表
+  monsterKeywords: string[]; // 怪名字关键词(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
+  monsterColor: string; // 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
   /** 移动步进间隔(ms),来自 taskConfig.movementSpeed */
   stepIntervalMs: number;
-  maxLoops: number;
+  maxLoops?: number;
 }
 
 /** runFarmLoop 的运行结果(任务 start() 与 screenshot-test 测试路径共用) */
@@ -259,7 +267,7 @@ const LEGACY_MODE_MAP: Record<string, ResolvedConfig['mode']> = {
  * 从 ctx.init.taskConfig(FarmTaskConfig)解析挂机打怪配置,缺失字段用内置默认值兜底
  */
 function resolveConfig(ctx: WorkerContext): ResolvedConfig {
-  const cfg = ctx.init.taskConfig as FarmTaskConfig | undefined;
+  const cfg = ctx.init.taskConfig as FarmTaskConfig;
   const isFarm = cfg?.type === 'farm';
 
   // 打怪模式:定点打怪(当前实现)/定点识别/移动识别(旧值自动迁移,见 LEGACY_MODE_MAP)
@@ -268,11 +276,10 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     (LEGACY_MODE_MAP[rawMode] as ResolvedConfig['mode'] | undefined) ??
     (rawMode as ResolvedConfig['mode']);
 
-  // 任务级技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD),否则用默认
-  // 旧技能缺 method/castMs/rangePx → 按旧行为 target/400ms/不限距离
-  let skills: MoveAttackSkill[] = DEFAULT_SKILLS;
+  // 任务级技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD)
+  let skills: MoveAttackSkill[] = [];
   if (isFarm && cfg.skills && cfg.skills.some((s) => s.enabled !== false)) {
-    const resolved = cfg.skills
+    skills = cfg.skills
       .filter((s) => s.enabled !== false)
       .filter((s) => VALID_SKILL_KEYS.has(s.key))
       .map((s) => ({
@@ -284,28 +291,18 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
         rangePx: Math.max(0, s.rangePx ?? 0),
         method: (s.method ?? 'target') as MoveAttackSkill['method'],
       }));
-    if (resolved.length > 0) skills = resolved;
   }
 
-  // 路径点:waypoints 非空则用,否则用默认(默认点视为挂机点)
-  // 挂机点按 skillIds 绑定技能;旧路径点无 skillIds → 兼容为"释放全部技能"
-  const waypoints: ResolvedWaypoint[] =
-    isFarm && cfg.waypoints && cfg.waypoints.length > 0
-      ? cfg.waypoints.map((w) => {
-          const type = (w.type ?? 'farm-spot') as ResolvedWaypoint['type'];
-          let wpSkills: MoveAttackSkill[] = [];
-          if (type === 'farm-spot') {
-            const ids = w.skillIds && w.skillIds.length > 0 ? w.skillIds : skills.map((s) => s.id);
-            wpSkills = skills.filter((s) => ids.includes(s.id));
-          }
-          return { x: w.x, y: w.y, type, skills: wpSkills };
-        })
-      : DEFAULT_PATH_POINTS.map((p) => ({
-          x: p.x,
-          y: p.y,
-          type: 'farm-spot' as const,
-          skills,
-        }));
+  // 路径点:waypoints 非空则用
+  const waypoints: ResolvedWaypoint[] = cfg.waypoints.map((w) => {
+    const type = (w.type ?? 'farm-spot') as ResolvedWaypoint['type'];
+    let wpSkills: MoveAttackSkill[] = [];
+    if (type === 'farm-spot') {
+      const ids = w.skillIds && w.skillIds.length > 0 ? w.skillIds : skills.map((s) => s.id);
+      wpSkills = skills.filter((s) => ids.includes(s.id));
+    }
+    return { x: w.x, y: w.y, type, skills: wpSkills };
+  });
 
   // 找怪关键字/颜色
   const monsterKeywords =
@@ -317,7 +314,7 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
       ? cfg.mobFilter.nameColor.trim()
       : DEFAULT_MONSTER_COLOR;
 
-  // 移动步进间隔(角色移动速度)
+  // 到达路径点时停留的时间
   const stepIntervalMs =
     isFarm && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : 800;
 
@@ -426,7 +423,7 @@ export async function runFarmLoop(
   const ctrl = ctx.moveAttack;
   ctrl.running = true; // 每次进入都重置(上次 stop 会置 false)
 
-  // 解析配置:优先用「挂机打怪」弹窗确认后下发的 taskConfig,缺失回退默认值
+  // 解析配置:优先用「挂机打怪」弹窗确认后下发的 taskConfig
   const conf = resolveConfig(ctx);
   const modeLabel =
     conf.mode === 'fixed-detect' ? '定点识别' : conf.mode === 'fixed' ? '定点打怪' : '移动识别';
@@ -497,7 +494,7 @@ export async function runFarmLoop(
     let prev: MapPosition | null = null;
 
     // 主循环:沿路径点移动,每到一个点:站稳 → 扫怪(失败则兜底方向)→ 释放所有 CD 已好的技能
-    while (ctrl.running && loop < conf.maxLoops) {
+    while (ctrl.running && loop < conf?.maxLoops) {
       // 暂停等待(resume 命令会清 paused 并 resolve;stop 命令也会 resolve 并置 running=false)
       if (ctrl.paused) {
         ctx.sendLog('info', `[${label}] 已暂停,等待 resume`);
@@ -525,7 +522,7 @@ export async function runFarmLoop(
           // 精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即「到位」
           arriveTolerance: 1,
           stepIntervalMs: conf.stepIntervalMs, // 移动步进间隔(ms)
-          noMoveTimeoutMs: 10000, //10S没有移动视为卡住
+          noMoveTimeoutMs: 5000, //5S没有移动视为卡住
           // 坐标读数是整数,只要变了(±1)就算在移动,别让「没移动」计时误判卡住
           moveEpsilon: 0.5,
         });
@@ -537,11 +534,11 @@ export async function runFarmLoop(
             'warn',
             `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`,
           );
-          if (stuckCount >= END_CONDITIONS.maxStuckPoints) {
-            const detail = `连续 ${stuckCount} 个路径点卡住,终止`;
-            ctx.sendLog('warn', `[${label}] ${detail}`);
-            return { ok: false, detail };
-          }
+          // if (stuckCount >= END_CONDITIONS.maxStuckPoints) {
+          //   const detail = `连续 ${stuckCount} 个路径点卡住,终止`;
+          //   ctx.sendLog('warn', `[${label}] ${detail}`);
+          //   return { ok: false, detail };
+          // }
           prev = current;
           continue;
         }
