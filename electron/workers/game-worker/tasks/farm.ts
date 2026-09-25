@@ -6,8 +6,9 @@
 //   move-detect  移动识别(尚未实现,UI 未开放):移动途中识别,识别到怪停下打
 //
 // 技能释放方式(按 taskConfig.castMode):
-//   smart  智能施法(默认):到每个挂机点,从全部技能里选一个没进 CD 的技能释放;
-//          多个可释放时选 cooldownMs 最长的;全部冷却中则不释放,留到下一个挂机点
+//   smart  智能施法(默认):到每个挂机点,状态施法(self)技能不占名额——CD 已好的
+//          一次性全部释放;其余技能选一个没进 CD 的释放,多个可释放时选 cooldownMs
+//          最长的;全部冷却中则不释放,留到下一个挂机点
 //   custom 自定义施法:按各挂机点绑定的 skillIds 释放(不选 = 全部),逐个点技能
 // 每个技能按 method 施法:
 //   quick  快捷施法:只按技能键 → 等吟唱时间
@@ -641,14 +642,18 @@ export async function runFarmLoop(
         const now = Date.now();
         // 待释放技能:
         //   自定义施法 = 该点绑定技能里所有 CD 已好的,依次全部释放(当前原有行为)
-        //   智能施法   = 全部技能里 CD 已好的,只取 cooldownMs 最长的一个释放;
-        //                没有可释放的就不释放,留到下一个挂机点
+        //   智能施法   = 状态施法(self,自身 buff)不占"选一个"的名额:所有 CD 已好的一次性全放;
+        //                其余技能里 CD 已好的,只取 cooldownMs 最长的一个释放;
+        //                都没有可释放的就不释放,留到下一个挂机点
         let skillsToCast: MoveAttackSkill[];
         if (conf.castMode === 'smart') {
           const ready = wp.skills.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
-          skillsToCast = ready.length
-            ? [ready.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))]
+          const readySelf = ready.filter((s) => s.method === 'self');
+          const readyOther = ready.filter((s) => s.method !== 'self');
+          const picked = readyOther.length
+            ? [readyOther.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))]
             : [];
+          skillsToCast = [...readySelf, ...picked]; // 先放状态 buff,再放选中的输出技能
           if (skillsToCast.length === 0) {
             ctx.sendLog('info', `[${label}] 无可释放技能(全部冷却中),留到下一个挂机点`);
           }
