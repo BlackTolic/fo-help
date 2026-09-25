@@ -10,6 +10,7 @@
 import {
   getDamoo,
   bindWindow,
+  setDamooRegisterCode,
   DEFAULT_DAMOO_CONFIG,
   dmApi,
   type DamooConfig,
@@ -85,6 +86,13 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
 
   try {
     const tLoad = Date.now();
+    // 设置里填了大漠注册码就先用它覆盖内置注册码(必须在 COM 初始化前调用)
+    if (init.settings?.damooRegisterCode) {
+      setDamooRegisterCode(init.settings.damooRegisterCode, init.settings.damooAttachCode);
+      ctx.sendLog('info', '大漠注册码:使用设置中配置的注册码');
+    } else {
+      ctx.sendLog('info', '大漠注册码:使用程序内置注册码(设置中未配置)');
+    }
     ctx.stepStart('loadDamoo(同步 COM 初始化 + 注册码校验)');
     ctx.dm = getDamoo();
     const ver = dmApi.version();

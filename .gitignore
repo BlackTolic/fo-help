@@ -1,4 +1,4 @@
-﻿# 依赖
+# 依赖
 node_modules/
 
 # 构建产物
@@ -55,6 +55,9 @@ _*
 
 # 运行时数据(每个 hwnd 一个 JSON,本地生成)
 task-configs/
+
+# 应用设置(分辨率/大漠注册码/大模型 API key,含密钥不入库)
+app-settings.json
 
 # Lint & 格式 缓存
 .eslintcache

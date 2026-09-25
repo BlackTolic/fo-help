@@ -460,26 +460,28 @@ onClick → window.fohelp.captureTest(hwnd)
 
 ### 7.1 invoke (Renderer → Main → Renderer)
 
-| Channel                  | Renderer 调用                        | Main handler                        | 主进程服务 |
-| ------------------------ | ------------------------------------ | ----------------------------------- | ---------- |
-| `window:list`            | `listGameWindows()`                  | `window-registry.ts`                | -          |
-| `window:refresh`         | `refreshGameWindows()`               | 同上                                | -          |
-| `window:capture`         | `captureWindow(hwnd)`                | `ThumbnailService.getCached()`      | -          |
-| `thumbnail:recapture`    | `recaptureThumbnail(hwnd)`           | `worker-manager.requestThumbnail()` | -          |
-| `worker:bootstrap`       | `bootstrapWorker(hwnd, name)`        | `worker-manager.bootstrap()`        | -          |
-| `worker:start-task`      | `startTask(hwnd)`                    | `worker-manager.startTask()`        | -          |
-| `worker:stop-by-hwnd`    | `stopWorkerByHwnd(hwnd)`             | `worker-manager.stopByHwnd()`       | -          |
-| `worker:start`           | `startWorker(hwnd, name, type)`      | `worker-manager.start()`            | -          |
-| `worker:stop`            | `stopWorker(workerId)`               | `worker-manager.stop()`             | -          |
-| `worker:pause`           | `pauseWorker(workerId)`              | `worker-manager.pause()`            | -          |
-| `worker:resume`          | `resumeWorker(workerId)`             | `worker-manager.resume()`           | -          |
-| `worker:list`            | `listWorkers()`                      | `worker-manager.list()`             | -          |
-| `worker:capture-test`    | `captureTest(hwnd)`                  | `worker-manager.captureTest()`      | -          |
-| `task:save`              | `saveTaskConfig(hwnd, config, name)` | `task-config-service.saveByName()`  | -          |
-| `task:get`               | `getTaskConfig(hwnd)`                | 返回 null(旧 API)                   | -          |
-| `task:list-all`          | `listAllTaskConfigs()`               | `task-config-service.listAll()`     | -          |
-| `task:load-by-name`      | `loadTaskByName(name)`               | `task-config-service.loadByName()`  | -          |
-| `shell:showItemInFolder` | `showItemInFolder(filePath)`         | `shell.showItemInFolder()`          | -          |
+| Channel                  | Renderer 调用                        | Main handler                        | 主进程服务             |
+| ------------------------ | ------------------------------------ | ----------------------------------- | ---------------------- |
+| `window:list`            | `listGameWindows()`                  | `window-registry.ts`                | -                      |
+| `window:refresh`         | `refreshGameWindows()`               | 同上                                | -                      |
+| `window:capture`         | `captureWindow(hwnd)`                | `ThumbnailService.getCached()`      | -                      |
+| `thumbnail:recapture`    | `recaptureThumbnail(hwnd)`           | `worker-manager.requestThumbnail()` | -                      |
+| `worker:bootstrap`       | `bootstrapWorker(hwnd, name)`        | `worker-manager.bootstrap()`        | -                      |
+| `worker:start-task`      | `startTask(hwnd)`                    | `worker-manager.startTask()`        | -                      |
+| `worker:stop-by-hwnd`    | `stopWorkerByHwnd(hwnd)`             | `worker-manager.stopByHwnd()`       | -                      |
+| `worker:start`           | `startWorker(hwnd, name, type)`      | `worker-manager.start()`            | -                      |
+| `worker:stop`            | `stopWorker(workerId)`               | `worker-manager.stop()`             | -                      |
+| `worker:pause`           | `pauseWorker(workerId)`              | `worker-manager.pause()`            | -                      |
+| `worker:resume`          | `resumeWorker(workerId)`             | `worker-manager.resume()`           | -                      |
+| `worker:list`            | `listWorkers()`                      | `worker-manager.list()`             | -                      |
+| `worker:capture-test`    | `captureTest(hwnd)`                  | `worker-manager.captureTest()`      | -                      |
+| `task:save`              | `saveTaskConfig(hwnd, config, name)` | `task-config-service.saveByName()`  | -                      |
+| `task:get`               | `getTaskConfig(hwnd)`                | 返回 null(旧 API)                   | -                      |
+| `task:list-all`          | `listAllTaskConfigs()`               | `task-config-service.listAll()`     | -                      |
+| `task:load-by-name`      | `loadTaskByName(name)`               | `task-config-service.loadByName()`  | -                      |
+| `shell:showItemInFolder` | `showItemInFolder(filePath)`         | `shell.showItemInFolder()`          | -                      |
+| `settings:get`           | `getAppSettings()`                   | 读 app-settings.json                | `app-settings-service` |
+| `settings:save`          | `saveAppSettings(patch)`             | 合并写 app-settings.json            | 同上                   |
 
 ### 7.2 send (Main → Renderer, push)
 

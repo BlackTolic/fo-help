@@ -24,6 +24,7 @@ import { WorkerContext } from './game-worker/context';
 import { bootstrap } from './game-worker/bootstrap';
 import { registerCommandHandlers, waitForStartCommand } from './game-worker/commands';
 import { runTask } from './game-worker/tasks';
+import { startInterruptWatcher } from './game-worker/interrupts';
 
 // 构造上下文:写 [DEBUG] 启动标记 → 校验 parentPort → 注册兜底异常处理 → 解析 init
 const ctx = new WorkerContext();
@@ -31,6 +32,9 @@ const ctx = new WorkerContext();
 async function main(): Promise<void> {
   // bootstrap 失败(大漠未加载 / 绑定失败)时已 setStatus('alert'),直接结束
   if (!(await bootstrap(ctx))) return;
+  // 大漠已绑窗:启动弹框看门狗(验证码/组队邀请等),与后续任务循环并发,
+  // 覆盖 pending 预览 / 任务运行 / 暂停 全阶段,stop 命令时停
+  startInterruptWatcher(ctx);
   await waitForStartCommand(ctx);
   await runTask(ctx);
   ctx.sendLog('info', 'UtilityWorker 主循环结束');

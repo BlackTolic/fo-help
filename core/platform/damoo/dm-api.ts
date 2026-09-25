@@ -18,6 +18,18 @@ const log = createLogger('dm-api');
 const DAMOO_REGISTER_CODE = 'mh84909b3bf80d45c618136887775ccc90d27d7';
 const DAMOO_ATTACH_CODE = 'mt0plzvti09xyhw7';
 
+/**
+ * 运行时注册码覆盖:worker 从设置(app-settings.json)读到用户填的注册码后调用
+ * setDamooRegisterCode(),此后所有 COM 初始化都用用户的注册码。
+ */
+let _regOverride: { registerCode: string; attachCode: string } | null = null;
+
+/** 用设置里的注册码覆盖内置注册码(注册码为空则保持内置,附加码为空则沿用内置) */
+export function setDamooRegisterCode(registerCode: string, attachCode?: string): void {
+  if (!registerCode) return;
+  _regOverride = { registerCode, attachCode: attachCode || DAMOO_ATTACH_CODE };
+}
+
 // ===== 类型 =====
 export type DisplayMode = 'normal' | 'gdi' | 'gdi2' | 'dx' | 'dx2' | 'dx3' | 'dx.graphic.2d';
 export type MouseMode =
@@ -82,7 +94,9 @@ function getRaw(): any {
           return;
         }
 
-        const regResult = _dm.Reg(DAMOO_REGISTER_CODE, DAMOO_ATTACH_CODE);
+        const regCode = _regOverride?.registerCode ?? DAMOO_REGISTER_CODE;
+        const attachCode = _regOverride?.attachCode ?? DAMOO_ATTACH_CODE;
+        const regResult = _dm.Reg(regCode, attachCode);
         if (regResult === 1) {
           log.info('大漠注册成功');
         } else {
@@ -125,9 +139,11 @@ export const dmApi = {
   version: () => getRaw().Ver(),
   getLastError: () => getRaw().GetLastError?.() ?? 0,
 
-  // ---- 注册(默认用硬编码注册码,也可外部传) ----
-  reg: (registerCode = DAMOO_REGISTER_CODE, attachCode = DAMOO_ATTACH_CODE) =>
-    getRaw().Reg(registerCode, attachCode),
+  // ---- 注册(默认用设置里的注册码,没有则用内置) ----
+  reg: (
+    registerCode = _regOverride?.registerCode ?? DAMOO_REGISTER_CODE,
+    attachCode = _regOverride?.attachCode ?? DAMOO_ATTACH_CODE,
+  ) => getRaw().Reg(registerCode, attachCode),
 
   // ---- 窗口绑定 ----
   /** BindWindow 5 参:(hwnd, display, mouse, keypad, mode) */
@@ -167,6 +183,12 @@ export const dmApi = {
     console.log(`全屏截图,宽度 ${width},高度 ${height}`);
     return getRaw().capturePng(0, 0, width, height, filePath);
   },
+  /** 区域截图存 PNG 文件(返回结果码,1 成功) — 比 Capture(BMP)更适合喂给大模型识图 */
+  capturePng: (x1: number, y1: number, x2: number, y2: number, filePath: string): number =>
+    getRaw().capturePng(x1, y1, x2, y2, filePath),
+  /** 取窗口客户区宽高(byref 填充),返回 1 成功 */
+  getClientSize: (hwnd: number, wRef: any, hRef: any): number =>
+    getRaw().GetClientSize(hwnd, wRef, hRef),
 
   // ---- 字库 ----
   setDict: (index: number, filePath: string): number => getRaw().SetDict(index, filePath),

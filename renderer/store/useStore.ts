@@ -6,6 +6,7 @@ import type {
   TaskConfig,
   TaskType,
   StoredTaskConfig,
+  AppSettings,
 } from '../../shared/types';
 
 interface LogEntry {
@@ -107,6 +108,13 @@ interface AppState {
   damooRegisteredPath: string | null;
   checkDamoo: () => Promise<void>;
   registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
+
+  /** 应用设置(分辨率 / 大漠注册码 / 大模型 API key);null = 还没从主进程读过 */
+  settings: AppSettings | null;
+  /** 从主进程读一次设置(启动时调) */
+  loadSettings: () => Promise<AppSettings | null>;
+  /** 合并保存设置到本地,返回保存后的完整设置 */
+  saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings | null>;
 }
 
 let logIdCounter = 1;
@@ -365,6 +373,30 @@ export const useStore = create<AppState>((set) => ({
     }
     return res;
   },
+
+  // 应用设置
+  settings: null,
+  loadSettings: async () => {
+    if (!window.fohelp) return null;
+    try {
+      const settings = await window.fohelp.getAppSettings();
+      set({ settings });
+      return settings;
+    } catch (e: any) {
+      console.warn('[settings] 读取失败:', e?.message || e);
+      return null;
+    }
+  },
+  saveSettings: async (patch) => {
+    if (!window.fohelp) return null;
+    const res = await window.fohelp.saveAppSettings(patch);
+    if (!res.ok) {
+      console.warn('[settings] 保存失败:', res.error);
+      return null;
+    }
+    set({ settings: res.settings });
+    return res.settings;
+  },
 }));
 
 // 启动时订阅 IPC 事件
@@ -392,6 +424,24 @@ export function subscribeToIpc() {
       level: 'error',
       msg: err.error?.message || JSON.stringify(err.error),
       timestamp: err.timestamp,
+    });
+  });
+
+  // 弹框中断事件(验证码/组队邀请):目前进日志面板,结构化数据留作后续统计 UI
+  window.fohelp.onWorkerInterrupt((event) => {
+    const label =
+      event.popupType === 'verify-code'
+        ? '神医验证码'
+        : event.popupType === 'team-invite'
+          ? '组队邀请'
+          : event.popupType;
+    const action =
+      event.kind === 'detected' ? '检测到' : event.kind === 'handled' ? '已处理' : '处理失败';
+    useStore.getState().appendLog({
+      workerId: event.workerId,
+      level: event.kind === 'failed' ? 'warn' : 'info',
+      msg: `[弹框] ${label}${action}${event.detail ? `: ${event.detail}` : ''}`,
+      timestamp: event.at,
     });
   });
 

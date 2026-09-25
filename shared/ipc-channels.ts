@@ -33,6 +33,10 @@ export enum RequestChannel {
   // 大漠插件注册
   CheckDamoo = 'damoo:check',
   RegisterDamoo = 'damoo:register',
+
+  // 应用设置(分辨率 / 大漠注册码 / 大模型 API key)
+  GetAppSettings = 'settings:get',
+  SaveAppSettings = 'settings:save',
 }
 
 /** Main → Renderer(推送事件) */
@@ -41,5 +45,6 @@ export enum PushChannel {
   WorkerStateChanged = 'worker:state', // Worker 状态变化
   WorkerLog = 'worker:log', // Worker 日志
   WorkerError = 'worker:error', // Worker 错误
+  WorkerInterrupt = 'worker:interrupt', // 弹框中断事件(验证码/组队邀请等)
   ThumbnailUpdate = 'thumbnail:update', // 后台截图推送
 }

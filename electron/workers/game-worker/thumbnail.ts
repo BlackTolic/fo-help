@@ -13,6 +13,7 @@ import {
 } from '../../../core/navigation/MovementController';
 import type { MapCoordConfig, MapPosition } from '../../../core/perception/types';
 import type { WorkerContext } from './context';
+import { resolveWindowSizeKey } from './interrupts';
 import { runMoveAttackTest } from './move-attack';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
 import { COLOR_WHITE } from '../../../core/constant-ocr/color';
@@ -66,14 +67,16 @@ export async function takeAndSendThumbnail(ctx: WorkerContext, hwnd: number): Pr
 }
 
 // ===== 移动测试配置 =====
-// TODO: 按你的游戏实际情况填:
-//   coordRoi    — 坐标文字在屏幕上的区域(大漠绑定后是窗口客户区相对坐标)
-//   coordColor  — 坐标文字颜色 hex(dm 的颜色格式,如 'FFFFFF' 或 'FFFFFF-000000')
-const TEST_MAP_COORD_CONFIG: MapCoordConfig = {
-  coordRoi: DEFAULT_ROLE_POSITION['1280*800'], // TODO: 改成实际坐标区域
-  coordColor: COLOR_WHITE, // TODO: 改成实际文字颜色
-  similarity: DEFAULT_SIM,
-};
+// coordRoi   — 坐标文字在屏幕上的区域(大漠绑定后是窗口客户区相对坐标),按设置里的分辨率取档
+// coordColor — 坐标文字颜色 hex(dm 的颜色格式,如 'FFFFFF' 或 'FFFFFF-000000')
+function testMapCoordConfig(ctx: WorkerContext): MapCoordConfig {
+  return {
+    coordRoi:
+      DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
+    coordColor: COLOR_WHITE,
+    similarity: DEFAULT_SIM,
+  };
+}
 
 /** 移动测试:读当前坐标 → 向东走 20 个坐标单位 → 回报结果 */
 export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<void> {
@@ -92,13 +95,13 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
     vision.bind(hwnd);
     input.bind(hwnd);
 
-    const coordReader = new MapCoordReader(vision, TEST_MAP_COORD_CONFIG);
+    const coordReader = new MapCoordReader(vision, testMapCoordConfig(ctx));
     // const movement = new MovementControllerByDirection8(input, coordReader);
     const movement = new MovementControllerByRandom(input, coordReader, {});
     const current = await movement.readPosition();
 
     if (!current) {
-      report(false, '读不到当前坐标(检查 TEST_MAP_COORD_CONFIG 的 coordRoi/coordColor)');
+      report(false, '读不到当前坐标(检查设置里的分辨率与坐标区域/颜色是否匹配)');
       return;
     }
     ctx.sendLog(

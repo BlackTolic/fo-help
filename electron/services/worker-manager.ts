@@ -17,6 +17,7 @@ import type { WorkerState, TaskName, TaskType, TaskConfig } from '../../shared/t
 import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
 import { ThumbnailService } from './thumbnail-service';
+import { getAppSettings } from './app-settings-service';
 import { getThumbsDir } from '../main';
 
 const log = createLogger('worker-manager');
@@ -81,6 +82,8 @@ export class WorkerManager {
       thumbsDir,
       // app.getAppPath() 只能在主进程调,utilityProcess 里 require('electron') 拿不到 app
       appPath: app.getAppPath(),
+      // 设置(分辨率 / 大漠注册码 / 大模型 API key):每次启动 worker 前新鲜读盘
+      settings: getAppSettings(),
     });
 
     // 32-bit Electron 启动的 utilityProcess 默认也是 32-bit,能加载 32-bit dm.dll
@@ -538,6 +541,13 @@ export class WorkerManager {
         error: msg.error,
         timestamp: Date.now(),
       });
+    } else if (msg.type === 'interrupt') {
+      // 弹框中断事件(看门狗上报):广播给 renderer(日志面板/未来的弹框统计 UI)
+      const event = { workerId, ...(msg.event || {}), at: msg.event?.at || Date.now() };
+      log.info(
+        `[WorkerManager] [w-${m.state.hwnd}] 弹框事件 ${event.kind}: ${event.popupType} ${event.detail || ''}`,
+      );
+      this.broadcast(PushChannel.WorkerInterrupt, event);
     } else if (msg.type === 'thumbnail') {
       // 缩略图:缓存到主进程 ThumbnailService + 推给 renderer
       // (renderer 主要用 onThumbnailUpdate 订阅推送,但 CaptureWindow IPC handler

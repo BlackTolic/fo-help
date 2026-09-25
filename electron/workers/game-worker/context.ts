@@ -8,7 +8,8 @@
 //   暂停/继续/停止统一走下面的运行标志(ctx.skill / ctx.moveAttack)。
 import { createLogger } from '../../../core/logger';
 import { DEFAULT_DAMOO_CONFIG, type DamooConfig } from '../../../core/platform/damoo/dm-api';
-import type { TaskType, ScriptStatus } from '../../../shared/types';
+import type { InterruptWatcher } from '../../../core/interrupt';
+import type { TaskType, ScriptStatus, AppSettings } from '../../../shared/types';
 
 export interface InitData {
   hwnd: number;
@@ -21,6 +22,8 @@ export interface InitData {
   thumbsDir?: string;
   // 主进程算好传进来:utilityProcess 里 require('electron') 拿不到 app
   appPath?: string;
+  /** 应用设置(分辨率 / 大漠注册码 / 大模型 API key),由主进程读盘后随 init 下发 */
+  settings?: AppSettings;
 }
 
 // 从 process.argv 取最后一个参数(JSON 序列化的 initData)
@@ -80,6 +83,9 @@ export class WorkerContext {
 
   currentStep = '(none)';
   mainStart = Date.now();
+
+  /** 弹框看门狗(验证码/组队邀请等),bootstrap 成功后启动,stop 命令时停 */
+  interruptWatcher: InterruptWatcher | null = null;
 
   constructor() {
     // ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行

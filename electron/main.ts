@@ -4,12 +4,13 @@ import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { RequestChannel } from '../shared/ipc-channels';
-import type { GameWindow, TaskType, TaskConfig, WorkerState } from '../shared/types';
+import type { GameWindow, TaskType, TaskConfig, WorkerState, AppSettings } from '../shared/types';
 import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
 import { TaskConfigService } from './services/task-config-service';
 import { ThumbnailService } from './services/thumbnail-service';
 import { DamooRegistrar } from './services/damoo-registrar';
+import { getAppSettings, saveAppSettings } from './services/app-settings-service';
 
 /**
  * 缩略图本地存储方案:
@@ -343,6 +344,19 @@ function setupIpc() {
       return await damooRegistrar.register();
     },
   );
+
+  // ---- 应用设置(分辨率 / 大漠注册码 / 大模型 API key) ----
+  ipcMain.handle(RequestChannel.GetAppSettings, () => {
+    return getAppSettings();
+  });
+
+  ipcMain.handle(RequestChannel.SaveAppSettings, (_e, patch: Partial<AppSettings>) => {
+    try {
+      return { ok: true, settings: saveAppSettings(patch || {}) };
+    } catch (err: any) {
+      return { ok: false, error: err.message, settings: getAppSettings() };
+    }
+  });
 }
 
 // 自定义协议 thumb://<hwnd> 必须在 app ready 之前注册 scheme privilege

@@ -176,6 +176,33 @@ export interface StoredTaskConfig {
   updatedAt: number;
 }
 
+/** 游戏窗口客户区分辨率(坐标常量按此分档) */
+export type GameResolution = '1600*900' | '1280*800';
+
+/** 应用设置(设置面板读写,持久化到本地 JSON) */
+export interface AppSettings {
+  /** 游戏分辨率;null = 未设置(首次启动会弹设置面板让用户选) */
+  resolution: GameResolution | null;
+  /** 大漠插件注册码(留空 = 用项目内置注册码) */
+  damooRegisterCode: string;
+  /** 大漠插件附加码(留空 = 用项目内置附加码) */
+  damooAttachCode: string;
+  /** 识别验证码的大模型 API key(通义千问 DashScope;留空 = 兜底点第一个选项) */
+  dashscopeApiKey: string;
+}
+
+/** 弹框中断事件(看门狗上报:验证码/组队邀请等弹框的检测与处理结果) */
+export interface InterruptEvent {
+  /** detected=检测到弹框 / handled=处理完成 / failed=处理失败 */
+  kind: 'detected' | 'handled' | 'failed';
+  /** 弹框类型:verify-code=神医验证码 / team-invite=组队邀请(可扩展) */
+  popupType: string;
+  /** 人类可读细节(如 anchor 坐标 / 失败原因) */
+  detail: string;
+  /** 事件发生时间戳(ms) */
+  at: number;
+}
+
 /** Worker 状态(上报给主面板) */
 export interface WorkerState {
   workerId: string;

@@ -52,18 +52,33 @@ import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import { CoordinateReader } from '../../../../core/state/CoordinateReader';
-import type { Point } from '../../../../core/platform/vision/IVisionProvider';
-import type { MapPosition } from '../../../../core/perception/types';
+import type { Point, Rect } from '../../../../core/platform/vision/IVisionProvider';
+import type { MapPosition, MapCoordConfig } from '../../../../core/perception/types';
 import type { WorkerContext } from '../context';
-import type { FarmTaskConfig } from '../../../../shared/types';
+import { resolveWindowSizeKey } from '../interrupts';
+import type { FarmTaskConfig, GameResolution } from '../../../../shared/types';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
 
 // ===== 内置默认值(taskConfig 里没配对应字段时用;按你的游戏实际情况改)=====
 
-/** 屏幕中心(角色脚下):1280x800 窗口;分辨率不同则改 */
-const SCREEN_CENTER: Point = { x: 640, y: 400 };
+/**
+ * 游戏画面几何:窗口客户区 + 角色脚下(客户区中心)
+ * 按设置里的分辨率取档(1600*900 / 1280*800),未设置时按 1280x800
+ */
+interface ViewGeometry {
+  /** 画面区域(大漠绑定后是窗口客户区相对坐标) */
+  roi: Rect;
+  /** 角色脚下 = 画面中心 */
+  center: Point;
+}
+
+function viewGeometry(resolution?: GameResolution | null): ViewGeometry {
+  const roi: Rect =
+    resolution === '1600*900' ? { x: 0, y: 0, w: 1600, h: 900 } : { x: 0, y: 0, w: 1280, h: 800 };
+  return { roi, center: { x: Math.round(roi.w / 2), y: Math.round(roi.h / 2) } };
+}
 
 /** 默认路径点(地图坐标):从 A 出发依次经过 B/C/D/E,一圈结束后自动回到 A 再循环 */
 // const DEFAULT_PATH_POINTS = [
@@ -91,10 +106,8 @@ const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 // /** 到达路径点后,站稳多久再扫描/释放 */
 // const SETTLE_MS = 200;
 
-/** 怪物扫描配置(搜索区域/偏移是屏幕几何,留在代码里;关键字/颜色来自 taskConfig) */
+/** 怪物扫描配置(搜索区域 = 画面区域,由 viewGeometry 按分辨率给出;关键字/颜色来自 taskConfig) */
 const MONSTER_SCAN = {
-  /** 搜索区域(游戏画面区,尽量排除 UI) */
-  roi: { x: 0, y: 0, w: 1280, h: 800 },
   similarity: 0.85,
   /** 点击位置 = 找到的字 + 该偏移(点在怪身体而不是名字上) */
   clickOffset: { x: 0, y: 20 },
@@ -133,12 +146,15 @@ const END_CONDITIONS = {
   maxStuckPoints: 3,
 };
 
-/** 地图坐标读取配置 */
-const MAP_COORD_CONFIG = {
-  coordRoi: DEFAULT_ROLE_POSITION['1280*800'],
-  coordColor: COLOR_WHITE,
-  similarity: DEFAULT_SIM,
-};
+/** 地图坐标读取配置(坐标区域按设置里的分辨率取档) */
+function mapCoordConfig(ctx: WorkerContext): MapCoordConfig {
+  return {
+    coordRoi:
+      DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
+    coordColor: COLOR_WHITE,
+    similarity: DEFAULT_SIM,
+  };
+}
 
 /**
  * 地图坐标 → 屏幕坐标 的标定(精确点移动 MovementControllerByPrecisePoint 用)
@@ -150,12 +166,12 @@ const MAP_COORD_CONFIG = {
  *   矩阵 a=39.45 b=-0.84 c=-0.21 d=39.89,锚点反推 ≈(644,396),最大残差 32.7px(0.82 单位)。
  * 结论:两轴比例都 ≈40(水平 39.45 / 竖直 39.89,pxPerUnit 兜底 40 仍然合适),
  * 轴间耦合很小(b/c 都接近 0);残差落在「地图坐标整数读数的量化误差(±1 单位 ≈40px)」内。
+ *
+ * ⚠️ 样本里的 screen 是 1280x800 下实测的。换分辨率时按「画面中心差」整体平移样本
+ *    (见 buildCalibration):角色恒在画面中心,窗口变大时锚点跟着中心走同一段位移。
+ *    位移量 = 该分辨率的画面中心 − CALIBRATION_BASE_CENTER。
  */
-const MAP_CALIBRATION: PrecisePointConfig = {
-  /** 角色脚下 = 当前坐标在屏幕上的位置;1280x800 窗口中心 */
-  selfScreen: SCREEN_CENTER,
-  /** 游戏画面区域(大漠绑定后是窗口客户区相对坐标) */
-  gameRect: MONSTER_SCAN.roi,
+const MAP_CALIBRATION: Omit<PrecisePointConfig, 'selfScreen' | 'gameRect'> = {
   /**
    * 点击点离画面各边的最小边距:路径点换算出的屏幕坐标超出该范围时,
    * 沿「角色 → 目标」方向裁回边距内(避免点到窗口外/上下方游戏 UI 上)
@@ -208,6 +224,28 @@ const MAP_CALIBRATION: PrecisePointConfig = {
     },
   ],
 };
+
+/** 标定样本实测时的画面中心(1280x800):换分辨率时按画面中心差整体平移样本 */
+const CALIBRATION_BASE_CENTER: Point = { x: 640, y: 400 };
+
+/**
+ * 按当前分辨率组装精确点标定:锚点/画面区用该分辨率的几何,
+ * 样本 screen 坐标按「画面中心差」平移(角色恒在画面中心,窗口变大时锚点跟着中心走)。
+ * ⚠️ 假设换分辨率后镜头缩放不变(px/单位 仍 ≈40);若实测点击偏差明显,需在该分辨率下重新采样。
+ */
+function buildCalibration(view: ViewGeometry): PrecisePointConfig {
+  const dx = view.center.x - CALIBRATION_BASE_CENTER.x;
+  const dy = view.center.y - CALIBRATION_BASE_CENTER.y;
+  return {
+    ...MAP_CALIBRATION,
+    selfScreen: view.center,
+    gameRect: view.roi,
+    samples: MAP_CALIBRATION.samples?.map((s) => ({
+      ...s,
+      screen: { x: s.screen.x + dx, y: s.screen.y + dy },
+    })),
+  };
+}
 
 // ===== 运行时配置(由 taskConfig + 默认值合成)=====
 
@@ -364,15 +402,15 @@ function isCharacterDead(): boolean {
 }
 
 /** 扫描怪物,返回屏幕坐标;找不到返回 null */
-function scanMonster(keywords: string[], color: string): Point | null {
+function scanMonster(view: ViewGeometry, keywords: string[], color: string): Point | null {
   for (const keyword of keywords) {
     const x = { value: 0, byref: true } as any;
     const y = { value: 0, byref: true } as any;
     const found = dmApi.findStrE(
-      MONSTER_SCAN.roi.x,
-      MONSTER_SCAN.roi.y,
-      MONSTER_SCAN.roi.x + MONSTER_SCAN.roi.w,
-      MONSTER_SCAN.roi.y + MONSTER_SCAN.roi.h,
+      view.roi.x,
+      view.roi.y,
+      view.roi.x + view.roi.w,
+      view.roi.y + view.roi.h,
       keyword,
       color,
       MONSTER_SCAN.similarity,
@@ -401,37 +439,38 @@ function aimAngle(current: MapPosition, prev: MapPosition | null): number {
   return Math.atan2(current.y - prev.y, current.x - prev.x) + Math.PI; // 移动反方向
 }
 
-/** 角度 + 离自身距离(px)→ 屏幕点(自身 = SCREEN_CENTER) */
-function pointAt(angle: number, distancePx: number): Point {
+/** 角度 + 离自身距离(px)→ 屏幕点(自身 = 画面中心) */
+function pointAt(view: ViewGeometry, angle: number, distancePx: number): Point {
   return {
-    x: Math.round(SCREEN_CENTER.x + distancePx * Math.cos(angle)),
-    y: Math.round(SCREEN_CENTER.y + distancePx * Math.sin(angle)),
+    x: Math.round(view.center.x + distancePx * Math.cos(angle)),
+    y: Math.round(view.center.y + distancePx * Math.sin(angle)),
   };
 }
 
 /**
  * 把"离自身多远"夹到游戏画面内,方向不变。
- * 1280x800 画面中心到上下边只有 400px:竖着走时 600px 会点出窗口
+ * 画面中心到上下边只有半个画面高(1280x800 是 400px):竖着走时 600px 会点出窗口
  * (点可能落到桌面/别的程序上),所以沿该方向取最近的边界作为距离上限。
  * @returns { distance, clamped } clamped=true 表示距离被边界截短过
  */
 function clampDistanceToView(
+  view: ViewGeometry,
   angle: number,
   distancePx: number,
 ): { distance: number; clamped: boolean } {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
-  const { x: minX, y: minY, w, h } = MONSTER_SCAN.roi;
+  const { x: minX, y: minY, w, h } = view.roi;
   const maxX = minX + w;
   const maxY = minY + h;
   let maxDistance = distancePx;
   const EPS = 1e-6;
-  if (dx > EPS) maxDistance = Math.min(maxDistance, (maxX - CLICK_MARGIN - SCREEN_CENTER.x) / dx);
+  if (dx > EPS) maxDistance = Math.min(maxDistance, (maxX - CLICK_MARGIN - view.center.x) / dx);
   else if (dx < -EPS)
-    maxDistance = Math.min(maxDistance, (minX + CLICK_MARGIN - SCREEN_CENTER.x) / dx);
-  if (dy > EPS) maxDistance = Math.min(maxDistance, (maxY - CLICK_MARGIN - SCREEN_CENTER.y) / dy);
+    maxDistance = Math.min(maxDistance, (minX + CLICK_MARGIN - view.center.x) / dx);
+  if (dy > EPS) maxDistance = Math.min(maxDistance, (maxY - CLICK_MARGIN - view.center.y) / dy);
   else if (dy < -EPS)
-    maxDistance = Math.min(maxDistance, (minY + CLICK_MARGIN - SCREEN_CENTER.y) / dy);
+    maxDistance = Math.min(maxDistance, (minY + CLICK_MARGIN - view.center.y) / dy);
   const distance = Math.max(0, maxDistance);
   return { distance, clamped: distance < distancePx };
 }
@@ -482,13 +521,16 @@ export async function runFarmLoop(
     vision.bind(hwnd);
     input.bind(hwnd);
 
-    const coordReader = new MapCoordReader(vision, MAP_COORD_CONFIG);
+    // 画面几何(扫描区/角色脚下)与标定都按设置里的分辨率取档
+    const view = viewGeometry(ctx.init.settings?.resolution);
+    const coordReader = new MapCoordReader(vision, mapCoordConfig(ctx));
     // 移动方式:精确点(目标地图坐标 → 屏幕点单击);标定见 MAP_CALIBRATION
-    const movement = new MovementControllerByPrecisePoint(input, coordReader, MAP_CALIBRATION);
+    const calibration = buildCalibration(view);
+    const movement = new MovementControllerByPrecisePoint(input, coordReader, calibration);
 
     const start = await movement.readPosition();
     if (!start) {
-      const detail = '读不到当前坐标(检查 MAP_COORD_CONFIG 的 coordRoi/coordColor)';
+      const detail = '读不到当前坐标(检查设置里的分辨率与 MAP_COORD_CONFIG 的 coordRoi/coordColor)';
       ctx.sendLog('warn', `[${label}] ${detail}`);
       return { ok: false, detail };
     }
@@ -497,17 +539,17 @@ export async function runFarmLoop(
     // todo
     // if (input) {
     //   const skill = conf.skills.filter((s) => s.key === 'F7')[0];
-    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.moveMouse(view.center, { kind: 'instant' });
     //   await input.delay(300);
     //   await input.click('left');
     //   await input.delay(300);
     //   await input.pressKey(skill.key);
     //   await input.delay(5000);
-    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.moveMouse(view.center, { kind: 'instant' });
     //   await input.click('left');
     //   await input.pressKey(skill.key);
     //   await input.delay(5000);
-    //   await input.moveMouse(SCREEN_CENTER, { kind: 'instant' });
+    //   await input.moveMouse(view.center, { kind: 'instant' });
     //   await input.click('left');
     //   await input.pressKey(skill.key);
     //   // 结束
@@ -614,15 +656,17 @@ export async function runFarmLoop(
         // 定点识别(fixed-detect):扫怪名 → 按每个技能的施法方式释放(没扫到 → 指向性技能跳过)
         const isDetect = conf.mode === 'fixed-detect';
         const angle = aimAngle(current, prev);
-        const monster = isDetect ? scanMonster(conf.monsterKeywords, conf.monsterColor) : null;
+        const monster = isDetect
+          ? scanMonster(view, conf.monsterKeywords, conf.monsterColor)
+          : null;
         // 怪离角色(屏幕中心)的像素距离:target 技能按各自的施法距离过滤
         const monsterDist = monster
-          ? Math.hypot(monster.x - SCREEN_CENTER.x, monster.y - SCREEN_CENTER.y)
+          ? Math.hypot(monster.x - view.center.x, monster.y - view.center.y)
           : null;
 
         // 定点打怪:固定方向的落点(每个技能各自的距离在下面按 rangePx 算)
-        const fixedAim = clampDistanceToView(angle, FIXED_AIM.distance);
-        const fixedPoint = pointAt(angle, fixedAim.distance);
+        const fixedAim = clampDistanceToView(view, angle, FIXED_AIM.distance);
+        const fixedPoint = pointAt(view, angle, fixedAim.distance);
 
         let clickDesc: string;
         if (isDetect) {
@@ -687,16 +731,13 @@ export async function runFarmLoop(
               clickPos = monster;
             } else {
               const dist = skill.rangePx > 0 ? skill.rangePx : FIXED_AIM.distance;
-              clickPos = pointAt(angle, clampDistanceToView(angle, dist).distance);
+              clickPos = pointAt(view, angle, clampDistanceToView(view, angle, dist).distance);
             }
           }
 
           if (skill.method === 'self') {
             // 状态施法:左键点击角色自身(屏幕中心) → 按键 → 等吟唱
-            await input.moveMouse(
-              { x: SCREEN_CENTER.x, y: SCREEN_CENTER.y - 50 },
-              { kind: 'instant' },
-            );
+            await input.moveMouse({ x: view.center.x, y: view.center.y - 50 }, { kind: 'instant' });
             await input.delay(200);
             await input.click('right');
             await input.delay(300);

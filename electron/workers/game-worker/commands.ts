@@ -8,6 +8,7 @@
 import { dmApi } from '../../../core/platform/damoo/dm-api';
 import type { WorkerContext } from './context';
 import { handleScreenshot, takeAndSendThumbnailTest } from './thumbnail';
+import { stopInterruptWatcher } from './interrupts';
 
 export function registerCommandHandlers(ctx: WorkerContext): void {
   process.parentPort!.on('message', (event: any) => {
@@ -46,6 +47,7 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
           break;
         case 'stop':
           ctx.sendLog('info', '收到 stop');
+          stopInterruptWatcher(ctx);
           ctx.running = false;
           if (ctx.startResolve) {
             ctx.startResolve();

@@ -1,6 +1,6 @@
 // 主面板
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   RefreshCw,
   Activity,
@@ -8,9 +8,11 @@ import {
   CheckCircle2,
   Loader2,
   ShieldCheck,
+  Settings,
 } from 'lucide-react';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
+import { SettingsDialog } from './components/SettingsDialog';
 
 function App() {
   const gameWindows = useStore((s) => s.gameWindows);
@@ -38,6 +40,11 @@ function App() {
   const checkDamoo = useStore((s) => s.checkDamoo);
   const registerDamoo = useStore((s) => s.registerDamoo);
 
+  // 设置面板
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // 首次自动弹出(未检测到分辨率设置)时标记,面板里提示必须先选分辨率
+  const [settingsFirstRun, setSettingsFirstRun] = useState(false);
+
   useEffect(() => {
     // 订阅 IPC 事件
     subscribeToIpc();
@@ -47,6 +54,14 @@ function App() {
     loadTaskHistory();
     // 启动体检:大漠注册状态(异步,横幅会自己刷新)
     checkDamoo();
+    // 读设置:没设置过分辨率就自动弹设置面板,让用户先选好
+    (async () => {
+      const settings = await useStore.getState().loadSettings();
+      if (!settings?.resolution) {
+        setSettingsFirstRun(true);
+        setSettingsOpen(true);
+      }
+    })();
     // 每 3 秒刷新窗口列表
     const t = setInterval(refreshWindows, 3000);
     return () => clearInterval(t);
@@ -90,6 +105,16 @@ function App() {
           >
             <RefreshCw size={12} />
             刷新
+          </button>
+          <button
+            className="btn btn-secondary flex items-center gap-1"
+            onClick={() => {
+              setSettingsFirstRun(false);
+              setSettingsOpen(true);
+            }}
+          >
+            <Settings size={12} />
+            设置
           </button>
         </div>
       </header>
@@ -211,6 +236,17 @@ function App() {
         <span>挂机打怪 / 挖矿 / 捕捉宠物 / 装备炼化 / 名誉任务</span>
         <span className="font-mono">大漠 7.2543 · 32-bit Electron</span>
       </footer>
+
+      {/* 设置面板(首次启动未设置分辨率时自动弹出) */}
+      {settingsOpen && (
+        <SettingsDialog
+          firstRun={settingsFirstRun}
+          onClose={() => {
+            setSettingsOpen(false);
+            setSettingsFirstRun(false);
+          }}
+        />
+      )}
     </div>
   );
 }

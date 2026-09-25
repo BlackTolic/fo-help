@@ -15,6 +15,7 @@ import type {
   TaskConfig,
   StoredTaskConfig,
   WorkerState,
+  AppSettings,
 } from '../shared/types';
 
 type Unsubscribe = () => void;
@@ -146,6 +147,16 @@ const api = {
   registerDamoo: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(RequestChannel.RegisterDamoo),
 
+  // ===== 应用设置 =====
+  /** 读取应用设置(分辨率 / 大漠注册码 / 大模型 API key) */
+  getAppSettings: (): Promise<AppSettings> => ipcRenderer.invoke(RequestChannel.GetAppSettings),
+
+  /** 合并保存应用设置,返回保存后的完整设置 */
+  saveAppSettings: (
+    patch: Partial<AppSettings>,
+  ): Promise<{ ok: boolean; settings: AppSettings; error?: string }> =>
+    ipcRenderer.invoke(RequestChannel.SaveAppSettings, patch),
+
   // 任务配置
   /** 保存任务配置(按 name 唯一存储,hwnd 参数保留仅用于兼容) */
   saveTaskConfig: (
@@ -196,6 +207,17 @@ const api = {
   /** 订阅 worker 错误推送；用于 UI 告警或异常上报。 */
   onWorkerError: (cb: (err: WorkerErrorPayload) => void): Unsubscribe =>
     onPush(PushChannel.WorkerError, cb),
+
+  /** 订阅弹框中断事件(验证码/组队邀请等弹框的检测与处理结果)。 */
+  onWorkerInterrupt: (
+    cb: (event: {
+      workerId: string;
+      kind: string;
+      popupType: string;
+      detail: string;
+      at: number;
+    }) => void,
+  ): Unsubscribe => onPush(PushChannel.WorkerInterrupt, cb),
 
   /** 订阅后台缩略图更新。 */
   onThumbnailUpdate: (cb: (data: ThumbnailUpdatePayload) => void): Unsubscribe =>

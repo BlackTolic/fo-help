@@ -6,6 +6,7 @@ import type {
   TaskConfig,
   WorkerState,
   StoredTaskConfig,
+  AppSettings,
 } from '../shared/types';
 
 interface FohelpAPI {
@@ -61,6 +62,12 @@ interface FohelpAPI {
   }>;
   /** 触发 UAC → regsvr32 /s 注册项目自带的 dm.dll(用户需在桌面 UAC 弹窗点"是") */
   registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
+  /** 读取应用设置(分辨率 / 大漠注册码 / 大模型 API key) */
+  getAppSettings: () => Promise<AppSettings>;
+  /** 合并保存应用设置,返回保存后的完整设置 */
+  saveAppSettings: (
+    patch: Partial<AppSettings>,
+  ) => Promise<{ ok: boolean; settings: AppSettings; error?: string }>;
   /** 保存任务配置(按 name 唯一,重名拒绝) */
   saveTaskConfig: (
     hwnd: number,
@@ -86,6 +93,16 @@ interface FohelpAPI {
   ) => () => void;
   onWorkerError: (
     cb: (err: { workerId: string; error: any; timestamp: number }) => void,
+  ) => () => void;
+  /** 弹框中断事件(验证码/组队邀请等):kind=detected/handled/failed */
+  onWorkerInterrupt: (
+    cb: (event: {
+      workerId: string;
+      kind: string;
+      popupType: string;
+      detail: string;
+      at: number;
+    }) => void,
   ) => () => void;
   onThumbnailUpdate: (cb: (data: { hwnd: number; dataUrl: string | null }) => void) => () => void;
 }
