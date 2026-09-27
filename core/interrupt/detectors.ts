@@ -17,15 +17,8 @@ export function createVerifyCodeDetector(sizeKey: WindowSizeKey): PopupDetector 
   const conf = VERIFY_CODE_TITLE[sizeKey];
   return {
     detect(): PopupMatch | null {
-      const result = dmApi.findStrFastE(
-        conf.x1,
-        conf.y1,
-        conf.x2,
-        conf.y2,
-        conf.text,
-        conf.color,
-        conf.sim,
-      );
+      const result = dmApi.findStrFastE(conf.x1, conf.y1, conf.x2, conf.y2, conf.text, conf.color, conf.sim);
+      // 获取神医验证码弹框的坐标
       const anchor = parseTextPos(result);
       if (!anchor) return null;
       return { type: 'verify-code', anchor };

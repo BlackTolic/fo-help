@@ -1,12 +1,33 @@
 {
   // Prettier:配置读仓库根目录的 .prettierrc,忽略规则读 .prettierignore
-  // (扩展会自动解析 node_modules 里的 prettier 3.4.2,而不是它内置的版本)
   // 注意扩展 ID 是 esbenp.prettier-vscode,拼错会导致保存时静默不格式化
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
 
+  // 整份文件格式化,不按「只格式化改动行」,保证结果和 `npm run format`(prettier --write)一致
+  "editor.formatOnSaveMode": "file",
+
+  // 明确指向仓库里的 prettier 3.4.2,而不是扩展自带的版本:
+  // 两者版本不同时,保存的结果会和 `npm run format:check` 对不上
+  "prettier.prettierPath": "./node_modules/prettier",
+
+  // 防止用户级设置里关掉 prettier
+  "prettier.enable": true,
+
   // 只有能解析到 .prettierrc 的文件才格式化,避免回落到默认配置(printWidth 80、双引号)改坏风格
   "prettier.requireConfig": true,
+
+  // 逐语言再声明一次默认格式化器:用户级设置里按语言指定的 defaultFormatter
+  // 优先级高于工作区的全局设置,不逐个声明的话保存时会走内置格式化器而不是 prettier
+  "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[typescriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[javascript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[javascriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[json]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[jsonc]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[css]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[html]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[markdown]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
 
   // 行尾统一 LF,和 .prettierrc 的 endOfLine: "lf"、.gitattributes 的 eol=lf 保持一致
   "files.eol": "\n"

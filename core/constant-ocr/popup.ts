@@ -3,44 +3,22 @@
 // 按窗口客户区分辨率分档,与 DEFAULT_ROLE_POSITION 同风格
 
 import { DEFAULT_SIM } from './position';
+import { COLOR_VERIFY_CODE } from './color';
 
 /** 支持的游戏窗口客户区分辨率 */
 export type WindowSizeKey = '1280*800' | '1600*900';
+
+type DM_OCR = Record<WindowSizeKey, { x1: number; y1: number; x2: number; y2: number; color: string; sim: number }>;
+
+type DM_FIND_STR = Record<WindowSizeKey, { x1: number; y1: number; x2: number; y2: number; text: string; color: string; sim: number }>;
 
 /**
  * 神医验证码弹框标题「神医问题来啦」的搜索区域(找字,红色)
  * findStr 命中即说明验证码弹框出现,命中坐标作为后续截图/点击的锚点
  */
-export const VERIFY_CODE_TITLE: Record<
-  WindowSizeKey,
-  {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    text: string;
-    color: string;
-    sim: number;
-  }
-> = {
-  '1600*900': {
-    x1: 0,
-    y1: 113,
-    x2: 1598,
-    y2: 835,
-    text: '神医问题来啦',
-    color: 'e80000-111111',
-    sim: DEFAULT_SIM,
-  },
-  '1280*800': {
-    x1: 12,
-    y1: 116,
-    x2: 1267,
-    y2: 730,
-    text: '神医问题来啦',
-    color: 'e80000-111111',
-    sim: DEFAULT_SIM,
-  },
+export const VERIFY_CODE_TITLE: DM_FIND_STR = {
+  '1600*900': { x1: 0, y1: 113, x2: 1598, y2: 835, text: '神医问题来啦', color: 'e80000-111111', sim: DEFAULT_SIM },
+  '1280*800': { x1: 12, y1: 116, x2: 1267, y2: 730, text: '神医问题来啦', color: 'e80000-111111', sim: DEFAULT_SIM },
 };
 
 /**
@@ -52,45 +30,44 @@ export const VERIFY_CODE_CAPTURE = {
   question: { dx1: 0, dy1: 60, dx2: 100, dy2: 130 },
   /** 选项区(相对锚点) */
   options: { dx1: 200, dy1: 30, dx2: 250, dy2: 110 },
+  /** 选项区I(相对锚点) */
+  optionI: { dx1: 205, dy1: 38, dx2: 230, dy2: 55 },
+  /** 选项区II(相对锚点) */
+  optionII: { dx1: 205, dy1: 55, dx2: 230, dy2: 75 },
+  /** 选项区III(相对锚点) */
+  optionIII: { dx1: 205, dy1: 75, dx2: 230, dy2: 95 },
 };
 
 /** 三个选项(I/II/III,从上到下)的点击位置(相对标题锚点的偏移) */
-export const VERIFY_CODE_OPTION_CLICK_OFFSET: Record<'I' | 'II' | 'III', { x: number; y: number }> =
-  {
-    I: { x: 182, y: 45 },
-    II: { x: 182, y: 65 },
-    III: { x: 182, y: 85 },
-  };
+export const VERIFY_CODE_OPTION_CLICK_OFFSET: Record<'I' | 'II' | 'III', { x: number; y: number }> = {
+  I: { x: 182, y: 45 },
+  II: { x: 182, y: 65 },
+  III: { x: 182, y: 85 },
+};
+
+// 选项I位置(识别选项I的OCR区域)
+export const VERIFY_CODE_OPTION_ROI_I: DM_OCR = {
+  '1600*900': { x1: 726, y1: 343, x2: 856, y2: 366, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+  '1280*800': { x1: 205, y1: 38, x2: 230, y2: 55, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+};
+
+// 选项II位置(识别选项II的OCR区域)
+export const VERIFY_CODE_OPTION_ROI_II: DM_OCR = {
+  '1600*900': { x1: 726, y1: 343, x2: 856, y2: 366, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+  '1280*800': { x1: 205, y1: 55, x2: 230, y2: 75, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+};
+
+// 选项III位置(识别选项III的OCR区域)
+export const VERIFY_CODE_OPTION_ROI_III: DM_OCR = {
+  '1600*900': { x1: 726, y1: 343, x2: 856, y2: 366, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+  '1280*800': { x1: 205, y1: 75, x2: 230, y2: 95, color: COLOR_VERIFY_CODE, sim: DEFAULT_SIM },
+};
 
 /** 队伍邀请弹框的 OCR 区域(识别「邀请组队」类文案) */
-export const INVITE_TEAM_ROI: Record<
-  WindowSizeKey,
-  {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    color: string;
-    sim: number;
-  }
-> = {
-  '1600*900': {
-    x1: 726,
-    y1: 343,
-    x2: 856,
-    y2: 366,
-    color: 'b89868-111111|806430-111111|a08040-111111',
-    sim: DEFAULT_SIM,
-  },
+export const INVITE_TEAM_ROI: DM_OCR = {
+  '1600*900': { x1: 726, y1: 343, x2: 856, y2: 366, color: 'b89868-111111|806430-111111|a08040-111111', sim: DEFAULT_SIM },
   // 参考工程两个分辨率用的是同一组坐标(弹框位置不随窗口尺寸变化),先用同一组;不对再实测改
-  '1280*800': {
-    x1: 726,
-    y1: 343,
-    x2: 856,
-    y2: 366,
-    color: 'b89868-111111|806430-111111|a08040-111111',
-    sim: DEFAULT_SIM,
-  },
+  '1280*800': { x1: 726, y1: 343, x2: 856, y2: 366, color: 'b89868-111111|806430-111111|a08040-111111', sim: DEFAULT_SIM }, //
 };
 
 /** 邀请组队弹框的「拒绝」按钮位置(绝对屏幕坐标,关闭弹框用) */
