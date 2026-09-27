@@ -85,7 +85,7 @@ export class WorkerManager {
       verifyCodeDir: getVerifyCodesDir(),
       // app.getAppPath() 只能在主进程调,utilityProcess 里 require('electron') 拿不到 app
       appPath: app.getAppPath(),
-      // 设置(分辨率 / 大漠注册码 / 大模型 API key):每次启动 worker 前新鲜读盘
+      // 设置(分辨率 / 大漠注册码 / 图鉴账号):每次启动 worker 前新鲜读盘
       settings: getAppSettings(),
     });
 

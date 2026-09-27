@@ -62,7 +62,7 @@ interface FohelpAPI {
   }>;
   /** 触发 UAC → regsvr32 /s 注册项目自带的 dm.dll(用户需在桌面 UAC 弹窗点"是") */
   registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
-  /** 读取应用设置(分辨率 / 大漠注册码 / 大模型 API key) */
+  /** 读取应用设置(分辨率 / 大漠注册码 / 图鉴账号) */
   getAppSettings: () => Promise<AppSettings>;
   /** 合并保存应用设置,返回保存后的完整设置 */
   saveAppSettings: (

@@ -358,7 +358,7 @@ function setupIpc() {
     },
   );
 
-  // ---- 应用设置(分辨率 / 大漠注册码 / 大模型 API key) ----
+  // ---- 应用设置(分辨率 / 大漠注册码 / 图鉴账号) ----
   ipcMain.handle(RequestChannel.GetAppSettings, () => {
     return getAppSettings();
   });

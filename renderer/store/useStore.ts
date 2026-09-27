@@ -109,7 +109,7 @@ interface AppState {
   checkDamoo: () => Promise<void>;
   registerDamoo: () => Promise<{ ok: boolean; error?: string }>;
 
-  /** 应用设置(分辨率 / 大漠注册码 / 大模型 API key);null = 还没从主进程读过 */
+  /** 应用设置(分辨率 / 大漠注册码 / 图鉴账号);null = 还没从主进程读过 */
   settings: AppSettings | null;
   /** 从主进程读一次设置(启动时调) */
   loadSettings: () => Promise<AppSettings | null>;

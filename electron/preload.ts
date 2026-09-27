@@ -148,7 +148,7 @@ const api = {
     ipcRenderer.invoke(RequestChannel.RegisterDamoo),
 
   // ===== 应用设置 =====
-  /** 读取应用设置(分辨率 / 大漠注册码 / 大模型 API key) */
+  /** 读取应用设置(分辨率 / 大漠注册码 / 图鉴账号) */
   getAppSettings: (): Promise<AppSettings> => ipcRenderer.invoke(RequestChannel.GetAppSettings),
 
   /** 合并保存应用设置,返回保存后的完整设置 */

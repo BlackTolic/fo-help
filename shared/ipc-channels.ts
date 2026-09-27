@@ -34,7 +34,7 @@ export enum RequestChannel {
   CheckDamoo = 'damoo:check',
   RegisterDamoo = 'damoo:register',
 
-  // 应用设置(分辨率 / 大漠注册码 / 大模型 API key)
+  // 应用设置(分辨率 / 大漠注册码 / 图鉴账号)
   GetAppSettings = 'settings:get',
   SaveAppSettings = 'settings:save',
 }

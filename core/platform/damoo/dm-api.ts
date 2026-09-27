@@ -183,7 +183,7 @@ export const dmApi = {
     console.log(`全屏截图,宽度 ${width},高度 ${height}`);
     return getRaw().capturePng(0, 0, width, height, filePath);
   },
-  /** 区域截图存 PNG 文件(返回结果码,1 成功) — 比 Capture(BMP)更适合喂给大模型识图 */
+  /** 区域截图存 PNG 文件(返回结果码,1 成功) — 比 Capture(BMP)更适合喂给图鉴等外部识别接口 */
   capturePng: (x1: number, y1: number, x2: number, y2: number, filePath: string): number =>
     getRaw().capturePng(x1, y1, x2, y2, filePath),
   /** 取窗口客户区宽高(byref 填充),返回 1 成功 */

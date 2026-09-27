@@ -187,8 +187,10 @@ export interface AppSettings {
   damooRegisterCode: string;
   /** 大漠插件附加码(留空 = 用项目内置附加码) */
   damooAttachCode: string;
-  /** 识别验证码的大模型 API key(通义千问 DashScope;留空 = 兜底点第一个选项) */
-  dashscopeApiKey: string;
+  /** 图鉴(ttshitu)账号:识别神医验证码的问题截图;账号或密码留空 = 兜底点第一个选项 */
+  tuJianAccount: string;
+  /** 图鉴(ttshitu)密码 */
+  tuJianPassword: string;
 }
 
 /** 弹框中断事件(看门狗上报:验证码/组队邀请等弹框的检测与处理结果) */

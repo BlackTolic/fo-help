@@ -19,7 +19,12 @@ export interface PopupMatch {
   anchor: Point;
 }
 
-/** 弹框检测器:同步调用大漠,快(单次数十 ms),返回 null = 没弹框 */
+/**
+ * 弹框检测器:同步调用大漠,快(单次数十 ms)。
+ * 每次轮询调用一次,返回 null = 本次没有可处理的弹框
+ * (可能是真没弹框,也可能是弹框还在动、检测器在等它稳定,见 createVerifyCodeDetector)。
+ * 需要跨轮询记住状态的检测器把状态存在自己的闭包里 —— 每个检测器实例只有一个调用方(看门狗)。
+ */
 export interface PopupDetector {
   detect(): PopupMatch | null;
 }

@@ -1,4 +1,4 @@
-// 设置面板:分辨率 + 大漠注册码 + 验证码大模型 API key
+// 设置面板:分辨率 + 大漠注册码 + 图鉴账号
 // - 分辨率决定坐标常量取哪一档(core/constant-ocr/*),未设置时首页会自动弹出本面板
 // - 保存走主进程 settings:save,落到本地 JSON;下次启动不再提醒
 
@@ -26,7 +26,8 @@ export function SettingsDialog({ firstRun = false, onClose }: Props) {
   const [resolution, setResolution] = useState<GameResolution | null>(settings?.resolution ?? null);
   const [damooRegisterCode, setDamooRegisterCode] = useState(settings?.damooRegisterCode ?? '');
   const [damooAttachCode, setDamooAttachCode] = useState(settings?.damooAttachCode ?? '');
-  const [dashscopeApiKey, setDashscopeApiKey] = useState(settings?.dashscopeApiKey ?? '');
+  const [tuJianAccount, setTuJianAccount] = useState(settings?.tuJianAccount ?? '');
+  const [tuJianPassword, setTuJianPassword] = useState(settings?.tuJianPassword ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,7 +37,8 @@ export function SettingsDialog({ firstRun = false, onClose }: Props) {
     setResolution(settings.resolution);
     setDamooRegisterCode(settings.damooRegisterCode);
     setDamooAttachCode(settings.damooAttachCode);
-    setDashscopeApiKey(settings.dashscopeApiKey);
+    setTuJianAccount(settings.tuJianAccount);
+    setTuJianPassword(settings.tuJianPassword);
   }, [settings]);
 
   const handleSave = async () => {
@@ -50,7 +52,8 @@ export function SettingsDialog({ firstRun = false, onClose }: Props) {
       resolution,
       damooRegisterCode: damooRegisterCode.trim(),
       damooAttachCode: damooAttachCode.trim(),
-      dashscopeApiKey: dashscopeApiKey.trim(),
+      tuJianAccount: tuJianAccount.trim(),
+      tuJianPassword: tuJianPassword.trim(),
     });
     setSaving(false);
     if (!saved) {
@@ -130,21 +133,28 @@ export function SettingsDialog({ firstRun = false, onClose }: Props) {
             />
           </section>
 
-          {/* 验证码大模型 */}
+          {/* 图鉴(验证码识别) */}
           <section className="space-y-2">
             <div className="flex items-center gap-1.5 text-sm font-medium">
               <Bot size={14} className="text-text-secondary" />
-              验证码识别大模型 API key
+              图鉴账号
             </div>
             <p className="text-[11px] text-text-muted leading-relaxed">
-              通义千问 DashScope(多模态)API key,用于神医验证码弹框自动作答。留空则兜底点第一个选项。
+              图鉴(ttshitu)账号密码,用于识别神医验证码弹框的问题截图,再与大漠识别的三个选项逐位匹配。
+              账号或密码留空则兜底点第一个选项。
             </p>
+            <input
+              className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono"
+              placeholder="图鉴账号"
+              value={tuJianAccount}
+              onChange={(e) => setTuJianAccount(e.target.value)}
+            />
             <input
               type="password"
               className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono"
-              placeholder="sk-..."
-              value={dashscopeApiKey}
-              onChange={(e) => setDashscopeApiKey(e.target.value)}
+              placeholder="图鉴密码"
+              value={tuJianPassword}
+              onChange={(e) => setTuJianPassword(e.target.value)}
             />
           </section>
 

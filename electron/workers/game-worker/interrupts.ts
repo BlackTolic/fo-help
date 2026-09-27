@@ -21,11 +21,8 @@ import {
   createVerifyCodeHandler,
   type PopupRule,
 } from '../../../core/interrupt';
-import {
-  DashScopeCaptchaSolver,
-  StaticCaptchaSolver,
-  type CaptchaSolver,
-} from '../../../core/ai/captcha-solver';
+import { StaticCaptchaSolver, type CaptchaSolver } from '../../../core/ai/captcha-solver';
+import { TuJianSolver } from '../../../core/ai/tu-jian';
 import type { WorkerContext } from './context';
 
 /**
@@ -33,10 +30,7 @@ import type { WorkerContext } from './context';
  * 优先级:设置里选的档位(用户在设置面板显式指定)> hwnd 客户区实测尺寸 > '1280*800' 兜底
  * 用户在设置里指定档位是权威值:窗口客户区可能被缩放/带边框,实测尺寸未必等于坐标常量所依据的档位
  */
-export function resolveWindowSizeKey(
-  hwnd: number,
-  preferred?: GameResolution | null,
-): WindowSizeKey {
+export function resolveWindowSizeKey(hwnd: number, preferred?: GameResolution | null): WindowSizeKey {
   if (preferred) return preferred;
   try {
     const w = { value: 0, byref: true } as any;
@@ -51,26 +45,27 @@ export function resolveWindowSizeKey(
 }
 
 /**
- * 创建验证码求解器:
- *   设置里的 dashscopeApiKey > profile.interrupt.dashscopeApiKey > 环境变量 DASHSCOPE_API_KEY
- *   > Mock(兜底点 I)
- * 没配 key 不打断流程,只是每次都走兜底策略,日志里会提示。
+ * 创建验证码求解器(图鉴):
+ *   账号密码取设置面板(app-settings.json 的 tuJianAccount / tuJianPassword,
+ *   每次启动 worker 前由主进程新鲜读盘下发)
+ * 没配账号不打断流程,只是每次都走兜底策略(点第一个选项),日志里会提示。
  */
 function createSolver(ctx: WorkerContext): CaptchaSolver {
-  const apiKey =
-    ctx.init.settings?.dashscopeApiKey ||
-    ctx.profile?.interrupt?.dashscopeApiKey ||
-    process.env.DASHSCOPE_API_KEY ||
-    '';
-  if (!apiKey) {
+  const account = (ctx.init.settings?.tuJianAccount || '').trim();
+  const password = (ctx.init.settings?.tuJianPassword || '').trim();
+  if (!account || !password) {
     ctx.sendLog(
       'warn',
-      '[弹框看门狗] 未配置大模型 API key(设置面板 / profile.interrupt.dashscopeApiKey / DASHSCOPE_API_KEY),' +
-        '验证码将兜底点第一个选项',
+      '[弹框看门狗] 未配置图鉴账号/密码(设置面板 → 图鉴账号),验证码将兜底点第一个选项',
     );
     return new StaticCaptchaSolver('I');
   }
-  return new DashScopeCaptchaSolver({ apiKey });
+  return new TuJianSolver({
+    account,
+    password,
+    // 识别结果 / 匹配得分记进 worker 日志,方便核对识别是否准确
+    log: (level, msg) => ctx.sendLog(level, `[图鉴] ${msg}`),
+  });
 }
 
 /** 组装全部弹框规则(新增弹框类型在这里加) */
@@ -81,9 +76,9 @@ function buildPopupRules(ctx: WorkerContext, sizeKey: WindowSizeKey): PopupRule[
       type: 'verify-code',
       detector: createVerifyCodeDetector(sizeKey),
       handler: createVerifyCodeHandler(sizeKey, solver, ctx.init.verifyCodeDir),
-      // 验证码处理含 LLM 调用(数秒),single-flight 期间不会重复触发;
+      // 验证码处理含一次图鉴识别请求(数秒),single-flight 期间不会重复触发;
       // cooldown 兜底防处理失败后立即重试把接口打爆
-      cooldownMs: 10000,
+      cooldownMs: 15000,
     },
     {
       type: 'team-invite',

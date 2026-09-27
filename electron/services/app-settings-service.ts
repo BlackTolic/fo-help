@@ -1,4 +1,4 @@
-// 应用设置服务:设置面板(分辨率 / 大漠注册码 / 大模型 API key)的本地持久化
+// 应用设置服务:设置面板(分辨率 / 大漠注册码 / 图鉴账号)的本地持久化
 // 存储为单个 JSON 文件:
 //   - dev:      <项目根>/app-settings.json
 //   - packaged: %APPDATA%/QQ幻想助手/app-settings.json
@@ -17,7 +17,8 @@ const DEFAULTS: AppSettings = {
   resolution: null,
   damooRegisterCode: '',
   damooAttachCode: '',
-  dashscopeApiKey: '',
+  tuJianAccount: '',
+  tuJianPassword: '',
 };
 
 function read(): AppSettings {
