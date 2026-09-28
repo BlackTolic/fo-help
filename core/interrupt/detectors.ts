@@ -116,7 +116,6 @@ export function createBloodStatusDetector(sizeKey: WindowSizeKey, isHealReady?: 
       // 找到黄/绿色 = 血量安全(findColor 返回 'x|y',没找到返回空串)
       const found = dmApi.findColorE(conf.x1, conf.y1, conf.x2, conf.y2, conf.color, conf.sim);
       const pos = parseFindColor(found);
-      console.log(pos, isHealReady?.(), 99999);
       // pos有值，代表血量安全
       if (pos) return null;
       // 没有CD就绪的回血物品
