@@ -11,12 +11,15 @@ import {
   VERIFY_CODE_CAPTURE,
   VERIFY_CODE_OPTION_CLICK_OFFSET,
   INVITE_TEAM_REJECT_POS,
+  INVITE_TEAM_AGREE_POS,
   type WindowSizeKey,
   VERIFY_CODE_OPTION_ROI_II,
   VERIFY_CODE_OPTION_ROI_I,
   VERIFY_CODE_OPTION_ROI_III,
 } from '../constant-ocr/popup';
 import type { CaptchaSolver, VerifyAnswer } from '../ai/captcha-solver';
+import type { TeamInviteAction } from '../../shared/types';
+import type { KeyCode } from '../platform/input/IInputProvider';
 import type { PopupHandler, PopupMatch, PopupHandlerContext } from './types';
 
 /** 点击某个绝对屏幕坐标(瞬移 + 左键) */
@@ -33,16 +36,78 @@ async function clickVerifyOption(answer: VerifyAnswer, anchor: { x: number; y: n
 }
 
 /**
- * 组队邀请 → 点「拒绝」关掉弹框
- * 行为与参考工程一致:不自动进队(避免被陌生人拉走)
+ * 组队邀请 → 按用户配置点「同意」或「拒绝」
+ * 默认拒绝(与参考工程一致:不自动进队,避免被陌生人拉走);
+ * 用户显式选「同意」时才进队
  */
-export function createTeamInviteRejectHandler(sizeKey: WindowSizeKey): PopupHandler {
-  const reject = INVITE_TEAM_REJECT_POS[sizeKey];
+export function createTeamInviteHandler(sizeKey: WindowSizeKey, action: TeamInviteAction): PopupHandler {
+  const pos = action === 'agree' ? INVITE_TEAM_AGREE_POS[sizeKey] : INVITE_TEAM_REJECT_POS[sizeKey];
+  const label = action === 'agree' ? '同意' : '拒绝';
   return {
     async handle(_match: PopupMatch, ctx: PopupHandlerContext): Promise<void> {
-      ctx.log('info', `关闭组队邀请弹框(拒绝 @ ${reject.x},${reject.y})`);
-      await clickAt(ctx, reject.x, reject.y);
+      ctx.log('info', `处理组队邀请弹框(${label} @ ${pos.x},${pos.y})`);
+      await clickAt(ctx, pos.x, pos.y);
       await ctx.input.delay(300);
+    },
+  };
+}
+
+/** 生命回复可用的物品:来自任务技能里 method='item' 的条目(与「物品使用」共用同一份配置) */
+export interface HealItem {
+  /** 技能配置 id(冷却记录按 id,键位可能重复配置) */
+  id: string;
+  /** 快捷栏键位 */
+  key: KeyCode;
+  /** 物品名称(日志展示用) */
+  name?: string;
+  /** 物品冷却/使用间隔(毫秒) */
+  cooldownMs: number;
+}
+
+/** 物品 CD 记录:技能 id → 上次使用时间戳(看门狗与打怪循环共享同一份,保证 CD 生效) */
+export type ItemUseLog = Map<string, number>;
+
+/** 选出一个 CD 就绪的物品(按配置顺序取第一个,顺序即 UI 里的优先级) */
+function pickReadyItem(items: HealItem[], lastUsed: ItemUseLog, now: number): HealItem | null {
+  return items.find((it) => now - (lastUsed.get(it.id) || 0) >= it.cooldownMs) ?? null;
+}
+
+/** 是否还有 CD 就绪的物品(供检测器提前过滤,避免空触发) */
+export function hasReadyItem(items: HealItem[], lastUsed: ItemUseLog): boolean {
+  return pickReadyItem(items, lastUsed, Date.now()) !== null;
+}
+
+/**
+ * 生命回复 → 血量危险时按快捷键使用回血物品
+ * 物品来自「技能设置」里 method='item' 的条目(用户勾选其中若干个作为回血药用);
+ * 使用前检查 CD,全部冷却中则本次不动作,等规则 cooldown 后再试
+ */
+export function createHealHandler(items: HealItem[], lastUsed: ItemUseLog): PopupHandler {
+  return {
+    async handle(_match: PopupMatch, ctx: PopupHandlerContext): Promise<void> {
+      const now = Date.now();
+      const item = pickReadyItem(items, lastUsed, now);
+      if (!item) {
+        ctx.log('warn', '血量危险,但回血物品都在冷却中,本次跳过');
+        return;
+      }
+      await ctx.input.pressKey(item.key);
+      lastUsed.set(item.id, Date.now());
+      ctx.log('info', `血量危险,使用物品 ${item.key}${item.name ? `·${item.name}` : ''}`);
+    },
+  };
+}
+
+/**
+ * 角色停级 → 经验条快满时停止自动打怪
+ * 停止动作由调用方(onStop)实现:看门狗不认识任务循环,只负责把事件交出去
+ */
+export function createStopFarmHandler(onStop: (reason: string) => void): PopupHandler {
+  return {
+    async handle(_match: PopupMatch, ctx: PopupHandlerContext): Promise<void> {
+      const reason = '角色停级:经验条快满,停止自动打怪(避免升级)';
+      ctx.log('warn', reason);
+      onStop(reason);
     },
   };
 }

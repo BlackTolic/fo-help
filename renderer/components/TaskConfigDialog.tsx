@@ -20,7 +20,9 @@ import type {
   FarmSkillConfig,
   FarmMode,
   FarmCastMode,
+  FarmWatchdogConfig,
   SkillCastMethod,
+  TeamInviteAction,
   Waypoint,
   StoredTaskConfig,
   DefaultSkillTaskConfig,
@@ -166,6 +168,8 @@ export function TaskConfigDialog({
   const [mobNameColor, setMobNameColor] = useState('FFFFFF-FFFFFF');
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
   const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
+  // 看门狗:组队申请 / 神医验证码 / 生命回复 / 角色停级;全空 = worker 不启动看门狗
+  const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
   const [note, setNote] = useState('');
 
   // 缺省技能配置
@@ -212,6 +216,8 @@ export function TaskConfigDialog({
         })),
       );
       setMoveStepIntervalMs(farm.movementSpeed ?? 800);
+      // 旧配置没有 watchdog 字段:按「只开验证码」回显,与 worker 的兼容行为一致
+      setWatchdog(farm.watchdog ?? DEFAULT_WATCHDOG);
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -292,6 +298,22 @@ export function TaskConfigDialog({
             note: s.note,
           })),
         movementSpeed: Math.max(100, moveStepIntervalMs | 0),
+        // 看门狗只保存"已开启"的项;全关时是空对象(worker 据此不启动看门狗,不做额外轮询)
+        watchdog: {
+          ...(watchdog.teamInvite ? { teamInvite: { action: watchdog.teamInvite.action } } : {}),
+          ...(watchdog.verifyCode ? { verifyCode: true } : {}),
+          ...(watchdog.autoHeal
+            ? {
+                autoHeal: {
+                  // 只保留仍然存在、仍启用且仍是「物品使用」的技能 id,避免留下失效引用
+                  itemIds: (watchdog.autoHeal.itemIds || []).filter((id) =>
+                    skills.some((s) => s.id === id && s.enabled !== false && s.method === 'item'),
+                  ),
+                },
+              }
+            : {}),
+          ...(watchdog.stopLevelUp ? { stopLevelUp: true } : {}),
+        },
         note: note || undefined,
       };
     }
@@ -550,6 +572,8 @@ export function TaskConfigDialog({
               setSkills={setSkills}
               moveStepIntervalMs={moveStepIntervalMs}
               setMoveStepIntervalMs={setMoveStepIntervalMs}
+              watchdog={watchdog}
+              setWatchdog={setWatchdog}
               note={note}
               setNote={setNote}
             />
@@ -731,7 +755,11 @@ const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string
   { value: 'quick', label: '快捷施法', desc: '只按技能键' },
   { value: 'target', label: '缺省施法', desc: '按键 + 左键点击目标坐标' },
   { value: 'self', label: '状态施法', desc: '点击角色自身 + 按键' },
+  { value: 'item', label: '物品使用', desc: '只按快捷键使用快捷栏物品(可由「生命回复」按血量自动使用)' },
 ];
+
+/** 新建任务时的看门狗默认值:只开验证码(与升级前行为一致,其余项按需勾选) */
+const DEFAULT_WATCHDOG: FarmWatchdogConfig = { verifyCode: true };
 
 interface FarmConfigProps {
   readOnly?: boolean;
@@ -758,6 +786,9 @@ interface FarmConfigProps {
   setSkills: (v: FarmSkillConfig[] | ((prev: FarmSkillConfig[]) => FarmSkillConfig[])) => void;
   moveStepIntervalMs: number;
   setMoveStepIntervalMs: (v: number) => void;
+  /** 看门狗配置(组队申请/验证码/生命回复/角色停级) */
+  watchdog: FarmWatchdogConfig;
+  setWatchdog: (v: FarmWatchdogConfig | ((prev: FarmWatchdogConfig) => FarmWatchdogConfig)) => void;
   note: string;
   setNote: (v: string) => void;
 }
@@ -787,11 +818,25 @@ function FarmConfig(props: FarmConfigProps) {
     setSkills,
     moveStepIntervalMs,
     setMoveStepIntervalMs,
+    watchdog,
+    setWatchdog,
     note,
     setNote,
   } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
+
+  /** 「物品使用」技能 = 生命回复可选的药品池(与技能设置共用同一份快捷栏配置) */
+  const itemSkills = skills.filter((s) => s.method === 'item' && s.enabled !== false);
+  const autoHealIds = watchdog.autoHeal?.itemIds ?? [];
+  /** 把某个技能 id 从生命回复的药品选择里摘掉(技能被删/改成别的施法方式时) */
+  const dropHealItem = (id: string) => {
+    setWatchdog((w) => {
+      if (!w.autoHeal) return w;
+      const itemIds = (w.autoHeal.itemIds || []).filter((x) => x !== id);
+      return { ...w, autoHeal: { itemIds } };
+    });
+  };
 
   // ---- 任务级技能列表编辑 ----
   const addSkill = () => {
@@ -818,6 +863,8 @@ function FarmConfig(props: FarmConfigProps) {
     setWaypoints((ws) =>
       ws.map((w) => (w.skillIds ? { ...w, skillIds: w.skillIds.filter((sid) => sid !== id) } : w)),
     );
+    // 同时从生命回复的药品选择里摘掉
+    dropHealItem(id);
   };
 
   const moveSkill = (id: string, dir: -1 | 1) => {
@@ -1002,9 +1049,12 @@ function FarmConfig(props: FarmConfigProps) {
                     />
                     <select
                       value={method}
-                      onChange={(e) =>
-                        updateSkill(skill.id, { method: e.target.value as SkillCastMethod })
-                      }
+                      onChange={(e) => {
+                        const next = e.target.value as SkillCastMethod;
+                        updateSkill(skill.id, { method: next });
+                        // 改成非「物品使用」后,不能再作为生命回复的药品
+                        if (next !== 'item') dropHealItem(skill.id);
+                      }}
                       disabled={readOnly}
                       className={`w-24 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
                       title={CAST_METHOD_OPTIONS.find((o) => o.value === method)?.desc}
@@ -1096,7 +1146,9 @@ function FarmConfig(props: FarmConfigProps) {
                       <span className="text-[10px] text-text-muted">
                         {method === 'quick'
                           ? '只按键,不需要吟唱/施法距离'
-                          : '点角色自身 + 按键,不需要吟唱/施法距离'}
+                          : method === 'item'
+                            ? '只按快捷键使用物品,不需要吟唱/施法距离(可在下方「生命回复」里选用)'
+                            : '点角色自身 + 按键,不需要吟唱/施法距离'}
                       </span>
                     )}
                   </div>
@@ -1107,8 +1159,8 @@ function FarmConfig(props: FarmConfigProps) {
         )}
         <div className="text-[10px] text-text-muted mt-1">
           施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、
-          施法距离处」);状态施法 = 点击角色自身 +
-          按键。配好技能后,
+          施法距离处」);状态施法 = 点击角色自身 + 按键;物品使用 =
+          只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选)。配好技能后,
           {castMode === 'smart'
             ? '智能施法会在每个挂机点自动释放所有就绪的状态施法技能,并从其余技能里选一个可释放的'
             : '在下方"挂机点"类型的路径点上选择要释放的技能'}
@@ -1165,8 +1217,8 @@ function FarmConfig(props: FarmConfigProps) {
           ))}
           <span className="text-text-muted text-[10px]">
             {castMode === 'smart'
-              ? '到每个挂机点,状态施法技能(CD 已好)一次性全部释放;其余技能自动选一个未冷却的释放(多个可释放时选 CD 最长的;都在冷却则跳过)'
-              : '在下方每个挂机点上勾选要释放的技能(不选 = 释放全部)'}
+              ? '到每个挂机点,状态施法技能(CD 已好)一次性全部释放;其余技能自动选一个未冷却的释放(多个可释放时选 CD 最长的;都在冷却则跳过);物品使用技能不参与自动挑选(交给看门狗的「生命回复」)'
+              : '在下方每个挂机点上勾选要释放的技能(不选 = 释放全部;物品使用需在此显式绑定)'}
           </span>
         </div>
 
@@ -1353,6 +1405,188 @@ function FarmConfig(props: FarmConfigProps) {
         />
         <div className="text-[10px] text-text-muted mt-1">
           每走一步后等多久再读坐标纠偏;移速快的角色可以调小(如 500),慢的角色调大(如 1000)
+        </div>
+      </div>
+
+      {/* 看门狗:挂机期间并发执行的检查(四项全不勾 = worker 不启动看门狗,不产生额外开销) */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          看门狗{' '}
+          <span className="text-text-muted text-[11px]">
+            (组队申请 / 神医验证码 / 生命回复 / 角色停级;全不勾 = 不启动)
+          </span>
+        </label>
+        <div className="space-y-2.5 bg-bg-input/40 border border-border-base rounded p-2.5">
+          {/* 组队申请:勾选后再选 同意 / 拒绝 */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                className="accent-accent-cyan"
+                disabled={readOnly}
+                checked={!!watchdog.teamInvite}
+                onChange={(e) =>
+                  setWatchdog((w) => ({
+                    ...w,
+                    teamInvite: e.target.checked
+                      ? { action: w.teamInvite?.action ?? 'reject' }
+                      : undefined,
+                  }))
+                }
+              />
+              <span>组队申请</span>
+            </label>
+            {watchdog.teamInvite && (
+              <>
+                {(
+                  [
+                    { value: 'agree', label: '同意' },
+                    { value: 'reject', label: '拒绝' },
+                  ] as { value: TeamInviteAction; label: string }[]
+                ).map((o) => (
+                  <label
+                    key={o.value}
+                    className="inline-flex items-center gap-1 text-[11px] cursor-pointer"
+                  >
+                    <input
+                      type="radio"
+                      name="team-invite-action"
+                      className="accent-accent-cyan"
+                      disabled={readOnly}
+                      checked={watchdog.teamInvite?.action === o.value}
+                      onChange={() =>
+                        setWatchdog((w) => ({ ...w, teamInvite: { action: o.value } }))
+                      }
+                    />
+                    <span
+                      className={
+                        watchdog.teamInvite?.action === o.value
+                          ? 'text-text-primary'
+                          : 'text-text-secondary'
+                      }
+                    >
+                      {o.label}
+                    </span>
+                  </label>
+                ))}
+                <span className="text-text-muted text-[10px]">收到邀请弹框时自动点击</span>
+              </>
+            )}
+          </div>
+
+          {/* 神医验证码 */}
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={watchdog.verifyCode === true}
+              onChange={(e) => setWatchdog((w) => ({ ...w, verifyCode: e.target.checked }))}
+            />
+            <span>神医验证码验证</span>
+            <span className="text-text-muted text-[10px]">
+              弹出「神医问题来啦」时自动识别作答(需在设置里配图鉴账号)
+            </span>
+          </label>
+
+          {/* 生命回复:药品来自「技能设置」里「物品使用」的条目 */}
+          <div className="space-y-1">
+            <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                className="accent-accent-cyan"
+                disabled={readOnly}
+                checked={!!watchdog.autoHeal}
+                onChange={(e) =>
+                  setWatchdog((w) => ({
+                    ...w,
+                    autoHeal: e.target.checked ? { itemIds: w.autoHeal?.itemIds ?? [] } : undefined,
+                  }))
+                }
+              />
+              <span>生命回复</span>
+              <span className="text-text-muted text-[10px]">血条见底时自动使用下列药品</span>
+            </label>
+            {watchdog.autoHeal && (
+              <div className="pl-6 space-y-1">
+                {itemSkills.length === 0 ? (
+                  <div className="text-[10px] text-text-muted">
+                    先在上方「技能设置」里添加施法方式为「物品使用」的药品(与它共用快捷栏配置)
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
+                      <span className="text-text-muted text-[10px] shrink-0">回血药品</span>
+                      {itemSkills.map((s) => {
+                        const checked = autoHealIds.includes(s.id);
+                        return (
+                          <label
+                            key={s.id}
+                            title={`${s.key}${s.name ? ` ${s.name}` : ''} 间隔 ${s.cooldownMs}ms`}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
+                              checked
+                                ? 'border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan'
+                                : 'border-border-base text-text-secondary hover:border-border-active cursor-pointer'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="accent-accent-cyan"
+                              disabled={readOnly}
+                              checked={checked}
+                              onChange={(e) =>
+                                setWatchdog((w) => {
+                                  const cur = w.autoHeal?.itemIds ?? [];
+                                  return {
+                                    ...w,
+                                    autoHeal: {
+                                      itemIds: e.target.checked
+                                        ? [...cur, s.id]
+                                        : cur.filter((x) => x !== s.id),
+                                    },
+                                  };
+                                })
+                              }
+                            />
+                            <span>
+                              {s.key}
+                              {s.name ? `·${s.name}` : ''}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {autoHealIds.length === 0 && (
+                      <div className="text-[10px] text-accent-yellow/80">
+                        未选择药品 = 生命回复不生效
+                      </div>
+                    )}
+                    <div className="text-[10px] text-text-muted">
+                      按勾选顺序依次尝试,使用第一个 CD 已好的药品(CD 用技能设置里的「间隔」,
+                      与打怪循环共用同一份冷却记录)
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 角色停级 */}
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={watchdog.stopLevelUp === true}
+              onChange={(e) => setWatchdog((w) => ({ ...w, stopLevelUp: e.target.checked }))}
+            />
+            <span>角色停级</span>
+            <span className="text-text-muted text-[10px]">经验条快满时停止自动打怪,避免角色升级</span>
+          </label>
+
+          <div className="text-[10px] text-text-muted">
+            看门狗与打怪循环并发运行;四项全部不勾选时 worker 不会启动看门狗
+          </div>
         </div>
       </div>
 

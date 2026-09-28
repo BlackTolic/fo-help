@@ -76,7 +76,7 @@ export const INVITE_TEAM_REJECT_POS: Record<WindowSizeKey, { x: number; y: numbe
   '1280*800': { x: 870, y: 573 },
 };
 
-/** 邀请组队弹框的「同意」按钮位置(绝对屏幕坐标,预留:以后要自动进队时直接用) */
+/** 邀请组队弹框的「同意」按钮位置(绝对屏幕坐标,看门狗按用户配置的「同意」时用) */
 export const INVITE_TEAM_AGREE_POS: Record<WindowSizeKey, { x: number; y: number }> = {
   '1600*900': { x: 738, y: 573 },
   '1280*800': { x: 738, y: 573 },

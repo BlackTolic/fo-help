@@ -51,7 +51,8 @@ export interface Waypoint {
 export type SkillCastMethod =
   | 'quick' // 快捷施法:只按键
   | 'target' // 缺省施法:按键 + 鼠标左键点击目标坐标
-  | 'self'; // 状态施法:点击角色自身 + 按键(自身 buff 类)
+  | 'self' // 状态施法:点击角色自身 + 按键(自身 buff 类)
+  | 'item'; // 物品使用:只按快捷键消耗快捷栏物品(药品等)
 
 /** 挂机打怪技能配置(任务级;路径点通过 skillIds 引用其中若干个) */
 export interface FarmSkillConfig {
@@ -81,6 +82,27 @@ export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
 /** 挂机打怪施法方式: smart=智能施法(每个挂机点自动选一个可释放技能) / custom=自定义施法(按路径点绑定的技能) */
 export type FarmCastMode = 'smart' | 'custom';
 
+/** 组队申请处理方式:agree=点同意进队 / reject=点拒绝关闭弹框 */
+export type TeamInviteAction = 'agree' | 'reject';
+
+/**
+ * 挂机看门狗配置(挂机打怪期间与主循环并发执行的检查项)
+ * 四项全不勾选 = 不启动看门狗(不影响性能);勾选任意一项才启用
+ */
+export interface FarmWatchdogConfig {
+  /** 组队申请:收到邀请弹框时自动点「同意」/「拒绝」 */
+  teamInvite?: { action: TeamInviteAction };
+  /** 神医验证码:弹出验证码时自动识别并作答(不勾 = 不处理) */
+  verifyCode?: boolean;
+  /**
+   * 生命回复:血条见底时自动使用物品
+   * itemIds 引用 skills 里 method='item' 的技能 id(与「物品使用」共用同一份快捷栏配置)
+   */
+  autoHeal?: { itemIds: string[] };
+  /** 角色停级:经验条快满时停止自动打怪,避免角色升级 */
+  stopLevelUp?: boolean;
+}
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -106,6 +128,8 @@ export interface FarmTaskConfig {
   skills?: FarmSkillConfig[];
   /** 角色移动间隔(毫秒):移动一步后等多久再读坐标,越小走位越频繁(worker 的 stepIntervalMs) */
   movementSpeed?: number;
+  /** 挂机看门狗(组队申请/神医验证码/生命回复/角色停级);不配 = 旧配置,只开验证码 */
+  watchdog?: FarmWatchdogConfig;
   /** 自定义备注 */
   note?: string;
 }
@@ -193,11 +217,11 @@ export interface AppSettings {
   tuJianPassword: string;
 }
 
-/** 弹框中断事件(看门狗上报:验证码/组队邀请等弹框的检测与处理结果) */
+/** 看门狗中断事件(检测命中与处理结果) */
 export interface InterruptEvent {
-  /** detected=检测到弹框 / handled=处理完成 / failed=处理失败 */
+  /** detected=检测命中 / handled=处理完成 / failed=处理失败 */
   kind: 'detected' | 'handled' | 'failed';
-  /** 弹框类型:verify-code=神医验证码 / team-invite=组队邀请(可扩展) */
+  /** 检查项类型:verify-code=神医验证码 / team-invite=组队申请 / heal=生命回复 / stop-level-up=角色停级 */
   popupType: string;
   /** 人类可读细节(如 anchor 坐标 / 失败原因) */
   detail: string;

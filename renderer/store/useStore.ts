@@ -427,20 +427,24 @@ export function subscribeToIpc() {
     });
   });
 
-  // 弹框中断事件(验证码/组队邀请):目前进日志面板,结构化数据留作后续统计 UI
+  // 看门狗事件(验证码/组队申请/生命回复/角色停级):目前进日志面板,结构化数据留作后续统计 UI
   window.fohelp.onWorkerInterrupt((event) => {
     const label =
       event.popupType === 'verify-code'
         ? '神医验证码'
         : event.popupType === 'team-invite'
-          ? '组队邀请'
-          : event.popupType;
+          ? '组队申请'
+          : event.popupType === 'heal'
+            ? '生命回复'
+            : event.popupType === 'stop-level-up'
+              ? '角色停级'
+              : event.popupType;
     const action =
       event.kind === 'detected' ? '检测到' : event.kind === 'handled' ? '已处理' : '处理失败';
     useStore.getState().appendLog({
       workerId: event.workerId,
       level: event.kind === 'failed' ? 'warn' : 'info',
-      msg: `[弹框] ${label}${action}${event.detail ? `: ${event.detail}` : ''}`,
+      msg: `[看门狗] ${label}${action}${event.detail ? `: ${event.detail}` : ''}`,
       timestamp: event.at,
     });
   });

@@ -1,14 +1,7 @@
 // 大漠视觉识别 Provider
 // 用 dm-api.ts 统一封装,实现 IVisionProvider
 
-import type {
-  IVisionProvider,
-  Point,
-  Rect,
-  FindOpts,
-  OcrOpts,
-  OcrResult,
-} from '../IVisionProvider';
+import type { IVisionProvider, Point, Rect, FindOpts, OcrOpts, OcrResult } from '../IVisionProvider';
 import { dmApi, getDamoo } from '../../damoo/dm-api';
 import { createLogger } from '../../../logger';
 
@@ -68,10 +61,9 @@ export class DamooVisionProvider implements IVisionProvider {
       .filter((p): p is Point => p !== null && !isNaN(p.x) && !isNaN(p.y));
   }
 
-  async findColor(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null> {
+  async findColorE(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null> {
     const sim = opts?.similarity ?? 0.9;
-    const dir = opts?.direction ?? 'leftTop';
-    const ret = dmApi.findColor(roi.x, roi.y, roi.w, roi.h, color, sim, dir);
+    const ret = dmApi.findColorE(roi.x, roi.y, roi.w, roi.h, color, sim);
     if (!ret) return null;
     const parts = ret.split('|');
     if (parts.length !== 2) return null;

@@ -81,13 +81,23 @@ export class WorkerContext {
     running: true,
     paused: false,
     resumeResolve: null as (() => void) | null,
+    /** 非用户操作导致的停止原因(如看门狗的角色停级),供任务结束时展示 */
+    stopReason: null as string | null,
   };
 
   currentStep = '(none)';
   mainStart = Date.now();
 
-  /** 弹框看门狗(验证码/组队邀请等),bootstrap 成功后启动,stop 命令时停 */
+  /** 弹框看门狗(验证码/组队邀请/生命回复/角色停级),按任务配置装配,stop 命令时停 */
   interruptWatcher: InterruptWatcher | null = null;
+  /** 当前看门狗配置指纹:start-task 覆盖配置后据此判断要不要重建 */
+  interruptSignature: string | null = null;
+
+  /**
+   * 技能/物品上次使用时间戳(技能配置 id → 毫秒)
+   * 打怪主循环与看门狗共用同一份:生命回复据此判断物品 CD,避免和打怪循环抢用同一个物品
+   */
+  readonly lastCast = new Map<string, number>();
 
   constructor() {
     // ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行

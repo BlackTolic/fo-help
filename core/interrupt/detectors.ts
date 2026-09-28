@@ -1,13 +1,15 @@
-// 内置弹框检测器(大漠找字/OCR,同步快调用)
-// 坐标常量见 core/constant-ocr/popup.ts(移植自 ffo-auto-tool 实测值)
+// 内置检测器(大漠找字/找色/OCR,同步快调用)
+// 坐标常量:弹框见 core/constant-ocr/popup.ts,血条/经验条见 core/constant-ocr/status.ts
+// (均移植自 ffo-auto-tool 实测值)
 
 import { dmApi } from '../platform/damoo/dm-api';
 import type { Point } from '../platform/vision/IVisionProvider';
 import { VERIFY_CODE_TITLE, INVITE_TEAM_ROI, type WindowSizeKey } from '../constant-ocr/popup';
+import { BLOOD_STATUS_ROI, EXP_BAR_ROI, FIND_COLOR_DIR } from '../constant-ocr/status';
 import type { PopupDetector, PopupMatch } from './types';
 // ⚠️ 必须用相对路径:worker/core 是 tsc 直出 CommonJS,没有打包器改写别名,
 //   写成 '@core/utils/parse' 会在 worker require 阶段直接 MODULE_NOT_FOUND 崩掉(code=1)
-import { parseTextPos } from '../utils/parse';
+import { parseFindColor, parseTextPos } from '../utils/parse';
 
 /**
  * 验证码弹框出现后等待动画结束的时间(毫秒)
@@ -91,6 +93,55 @@ export function createTeamInviteDetector(sizeKey: WindowSizeKey): PopupDetector 
         type: 'team-invite',
         anchor: { x: Math.round((conf.x1 + conf.x2) / 2), y: Math.round((conf.y1 + conf.y2) / 2) },
       };
+    },
+  };
+}
+
+/** 找色区域的中心(作为 match 锚点;血条/经验条不点击弹框,锚点只用于日志) */
+function roiCenter(x1: number, y1: number, x2: number, y2: number): Point {
+  return { x: Math.round((x1 + x2) / 2), y: Math.round((y1 + y2) / 2) };
+}
+
+/**
+ * 血条见底检测(生命回复用)
+ * 区域内找不到黄/绿色 = 血量进入危险状态 → 返回匹配
+ *
+ * @param isHealReady 可选:判断"是否还有 CD 就绪的回血物品";返回 false 时本次不触发,
+ *   避免物品全在冷却中还反复触发 handler(handler 里仍会再判断一次)
+ */
+export function createBloodStatusDetector(sizeKey: WindowSizeKey, isHealReady?: () => boolean): PopupDetector {
+  const conf = BLOOD_STATUS_ROI[sizeKey];
+  return {
+    detect(): PopupMatch | null {
+      // 找到黄/绿色 = 血量安全(findColor 返回 'x|y',没找到返回空串)
+      const found = dmApi.findColorE(conf.x1, conf.y1, conf.x2, conf.y2, conf.color, conf.sim);
+      const pos = parseFindColor(found);
+      console.log(pos, isHealReady?.(), 99999);
+      // pos有值，代表血量安全
+      if (pos) return null;
+      // 没有CD就绪的回血物品
+      if (isHealReady && !isHealReady()) return null;
+      // 有CD就绪的回血物品且血量不安全
+      return {
+        type: 'heal',
+        anchor: roiCenter(conf.x1, conf.y1, conf.x2, conf.y2),
+      };
+    },
+  };
+}
+
+/**
+ * 经验条快满检测(角色停级用)
+ * 区域内找到绿色 = 经验条快满(即将升级)→ 返回匹配,由 handler 停止自动打怪
+ */
+export function createExpBarDetector(sizeKey: WindowSizeKey): PopupDetector {
+  const conf = EXP_BAR_ROI[sizeKey];
+  return {
+    detect(): PopupMatch | null {
+      const found = dmApi.findColorE(conf.x1, conf.y1, conf.x2, conf.y2, conf.color, conf.sim);
+      const pos = parseFindColor(found);
+      if (!pos) return null;
+      return { type: 'stop-level-up', anchor: pos };
     },
   };
 }

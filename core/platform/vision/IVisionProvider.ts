@@ -44,7 +44,7 @@ export interface IVisionProvider {
   findImages(roi: Rect, template: Buffer, opts?: FindOpts): Promise<Point[]>;
 
   /** 在 ROI 中查找颜色 */
-  findColor(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null>;
+  findColorE(roi: Rect, color: string, opts?: FindOpts): Promise<Point | null>;
 
   /** OCR 文字识别 */
   ocr(roi: Rect, opts?: OcrOpts): Promise<OcrResult>;

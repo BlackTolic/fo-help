@@ -8,7 +8,7 @@
 import { dmApi } from '../../../core/platform/damoo/dm-api';
 import type { WorkerContext } from './context';
 import { handleScreenshot, takeAndSendThumbnailTest } from './thumbnail';
-import { stopInterruptWatcher } from './interrupts';
+import { stopInterruptWatcher, syncInterruptWatcher } from './interrupts';
 
 export function registerCommandHandlers(ctx: WorkerContext): void {
   process.parentPort!.on('message', (event: any) => {
@@ -34,6 +34,8 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
             ctx.init.taskConfig = msg.taskConfig;
             ctx.sendLog('info', `覆盖 init.taskConfig = type=${ctx.init.taskConfig?.type}`);
           }
+          // 配置(看门狗开关)以 start-task 下发的为准:重新同步一次看门狗
+          syncInterruptWatcher(ctx);
           if (ctx.startResolve) {
             // 正常路径: startResolve 已注册, 直接 resolve 让 main() 走完
             ctx.startResolve();

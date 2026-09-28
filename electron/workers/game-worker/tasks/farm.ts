@@ -16,7 +16,11 @@
 //                   (定点打怪=移动反方向「施法距离」处,未配则默认 300px,并夹到画面内;
 //                    定点识别=识别到的怪,没识别到则跳过)
 //   self   状态施法:左键点击角色自身(屏幕中心)→ 按技能键 → 等吟唱时间
+//   item   物品使用:只按技能键(快捷栏物品/药品),由「生命回复」看门狗按血量自动使用
 // 技能字段:cooldownMs(技能时间间隔)/ castMs(吟唱时间)/ rangePx(施法距离,0=见上默认)
+// 技能 CD(含物品)统一记在 ctx.lastCast,与看门狗的生命回复共用,避免两边抢用同一个物品
+// 智能施法不会把 item 技能当成"输出技能"放出去(否则药品会被每个挂机点白白吃掉);
+//   自定义施法下用户显式绑定到挂机点的 item 技能照常使用
 // 路径点:farm-spot 挂机点(绑定 skillIds,空=释放全部技能)/ rest 休息点 / path 路径中间点(后两种不放技能)
 //
 // 结束条件:stop 命令 / 跑满最大圈数 / 检测到角色死亡(isCharacterDead)
@@ -55,7 +59,7 @@ import { CoordinateReader } from '../../../../core/state/CoordinateReader';
 import type { Point, Rect } from '../../../../core/platform/vision/IVisionProvider';
 import type { MapPosition, MapCoordConfig } from '../../../../core/perception/types';
 import type { WorkerContext } from '../context';
-import { resolveWindowSizeKey } from '../interrupts';
+import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from '../interrupts';
 import type { FarmTaskConfig, GameResolution } from '../../../../shared/types';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE } from '../../../../core/constant-ocr/color';
@@ -138,7 +142,7 @@ const CLICK_MARGIN = 4;
 /** 结束条件(taskConfig 未配时用) */
 const END_CONDITIONS = {
   /** 最多跑多少圈 */
-  maxLoops: 20,
+  maxLoops: null,
   /** 血量低于该值结束;0 = 不检查(需要 profile.regions.selfHp 已配置) */
   minSelfHpPercent: 0,
   /** 连续多少个路径点未到达(卡住)就结束 */
@@ -259,8 +263,8 @@ interface MoveAttackSkill {
   castMs: number;
   /** 施法距离(屏幕像素,以角色为圆心);target 技能:怪超出距离则跳过;0 = 不限制 */
   rangePx: number;
-  /** 施法方式:quick=只按键 / target=按键+左键点目标 / self=点自己+按键 */
-  method: 'quick' | 'target' | 'self';
+  /** 施法方式:quick=只按键 / target=按键+左键点目标 / self=点自己+按键 / item=按键使用快捷栏物品 */
+  method: 'quick' | 'target' | 'self' | 'item';
 }
 
 /** 解析后的路径点 */
@@ -284,7 +288,7 @@ interface ResolvedConfig {
   monsterColor: string; // 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
   /** 移动步进间隔(ms),来自 taskConfig.movementSpeed */
   stepIntervalMs: number;
-  maxLoops: number;
+  maxLoops: number | null;
 }
 
 /** runFarmLoop 的运行结果(任务 start() 与 screenshot-test 测试路径共用) */
@@ -471,6 +475,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
   const label = opts?.label ?? '挂机打怪';
   const ctrl = ctx.moveAttack;
   ctrl.running = true; // 每次进入都重置(上次 stop 会置 false)
+  ctrl.stopReason = null; // 清掉上一轮的停止原因(如看门狗的角色停级)
 
   // 解析配置:优先用「挂机打怪」弹窗确认后下发的 taskConfig
   const conf = resolveConfig(ctx);
@@ -533,7 +538,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     //   return { ok: true, detail: '成功' };
     // }
 
-    const lastCast = new Map<string, number>(); // 每个技能的上次释放时间戳
+    const lastCast = ctx.lastCast; // 技能/物品上次使用时间戳(与看门狗的生命回复共用)
     let loop = 0;
     let stuckCount = 0;
     /**
@@ -544,7 +549,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     let prev: MapPosition | null = null;
 
     // 主循环:沿路径点移动,每到一个点:站稳 → 扫怪(失败则兜底方向)→ 释放所有 CD 已好的技能
-    while (ctrl.running && loop < conf?.maxLoops) {
+    while (conf.maxLoops === null || (ctrl.running && loop < conf.maxLoops)) {
       // 暂停等待(resume 命令会清 paused 并 resolve;stop 命令也会 resolve 并置 running=false)
       if (ctrl.paused) {
         ctx.sendLog('info', `[${label}] 已暂停,等待 resume`);
@@ -559,8 +564,13 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       }
 
       loop++;
-      ctx.setStatus('moving', `${label} 第 ${loop}/${conf.maxLoops} 圈`);
-      ctx.sendLog('info', `[${label}] 第 ${loop}/${conf.maxLoops} 圈开始`);
+      if (conf.maxLoops !== null) {
+        ctx.setStatus('moving', `${label} 第 ${loop}/${conf.maxLoops} 圈`);
+        ctx.sendLog('info', `[${label}] 第 ${loop}/${conf.maxLoops} 圈开始`);
+      } else {
+        ctx.setStatus('moving', `${label} 第 ${loop} 圈`);
+        ctx.sendLog('info', `[${label}] 第 ${loop} 圈开始`);
+      }
 
       // 角色死亡也退出打怪循环(判断逻辑见 isCharacterDead)
       if (isCharacterDead()) {
@@ -651,11 +661,12 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
         //   智能施法   = 状态施法(self,自身 buff)不占"选一个"的名额:所有 CD 已好的一次性全放;
         //                其余技能里 CD 已好的,只取 cooldownMs 最长的一个释放;
         //                都没有可释放的就不释放,留到下一个挂机点
+        //                物品(item)不参与自动挑选:回血药交给看门的「生命回复」
         let skillsToCast: MoveAttackSkill[];
         if (conf.castMode === 'smart') {
           const ready = wp.skills.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
           const readySelf = ready.filter((s) => s.method === 'self');
-          const readyOther = ready.filter((s) => s.method !== 'self');
+          const readyOther = ready.filter((s) => s.method !== 'self' && s.method !== 'item');
           const picked = readyOther.length ? [readyOther.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))] : [];
           skillsToCast = [...readySelf, ...picked]; // 先放状态 buff,再放选中的输出技能
           if (skillsToCast.length === 0) {
@@ -706,6 +717,10 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
             await input.pressKey(skill.key);
             if (skill.castMs > 0) await sleep(skill.castMs);
             ctx.sendLog('info', `[${label}] 释放 ${skillLabel}(快捷施法)`);
+          } else if (skill.method === 'item') {
+            // 物品使用:只按快捷栏键(自定义施法下用户显式绑定的药品)
+            await input.pressKey(skill.key);
+            ctx.sendLog('info', `[${label}] 使用物品 ${skillLabel}(物品使用)`);
           } else {
             await input.moveMouse(clickPos!, { kind: 'instant' });
             // 缺省施法:按键 → 等吟唱 → 左键点击落点
@@ -724,7 +739,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       }
     }
 
-    const detail = `结束:共 ${loop} 圈,running=${ctrl.running}`;
+    const detail = ctrl.stopReason ? `结束:共 ${loop} 圈,${ctrl.stopReason}` : `结束:共 ${loop} 圈,running=${ctrl.running}`;
     ctx.sendLog('info', `[${label}] ${detail}`);
     return { ok: true, detail };
   } catch (e: any) {
@@ -737,9 +752,17 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
 export function createFarmTask(fc: TaskFactoryContext): TaskController {
   return {
     async start() {
-      const r = await runFarmLoop(fc.ctx, fc.init.hwnd);
-      // 自然跑完才走到这里(stop 命令直接杀进程);回到 idle 让卡片状态复位
-      fc.ctx.setStatus('idle', r.detail);
+      // 按任务配置同步看门狗(组队申请/验证码/生命回复/角色停级);
+      // 一项都没勾 = 不启动,不产生额外轮询开销
+      syncInterruptWatcher(fc.ctx);
+      try {
+        const r = await runFarmLoop(fc.ctx, fc.init.hwnd);
+        // 自然跑完才走到这里(stop 命令直接杀进程);回到 idle 让卡片状态复位
+        fc.ctx.setStatus('idle', r.detail);
+      } finally {
+        // 打怪结束(跑满圈数 / 角色停级)后不再需要看门狗
+        stopInterruptWatcher(fc.ctx);
+      }
     },
   };
 }
