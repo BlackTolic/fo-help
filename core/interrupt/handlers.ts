@@ -70,12 +70,12 @@ export function createVerifyCodeHandler(sizeKey: WindowSizeKey, solver: CaptchaS
   return {
     async handle(match: PopupMatch, ctx: PopupHandlerContext): Promise<void> {
       const { anchor } = match;
-      const ts = Date.now();
-      const questionPath = path.join(dir, `fo-verify-q-${pid}-${ts}.png`);
+      // const ts = Date.now();
+      const questionPath = path.join(dir, `fo-verify-q-${pid}.png`);
       // const optionsPath = path.join(dir, `fo-verify-o-${pid}-${ts}.png`);
-      const optionsPath1 = path.join(dir, `fo-verify-o1-${pid}-${ts}.png`);
-      const optionsPath2 = path.join(dir, `fo-verify-o2-${pid}-${ts}.png`);
-      const optionsPath3 = path.join(dir, `fo-verify-o3-${pid}-${ts}.png`);
+      // const optionsPath1 = path.join(dir, `fo-verify-o1-${pid}-${ts}.png`);
+      // const optionsPath2 = path.join(dir, `fo-verify-o2-${pid}-${ts}.png`);
+      // const optionsPath3 = path.join(dir, `fo-verify-o3-${pid}-${ts}.png`);
       const oI = VERIFY_CODE_OPTION_ROI_I[sizeKey];
       const oII = VERIFY_CODE_OPTION_ROI_II[sizeKey];
       const oIII = VERIFY_CODE_OPTION_ROI_III[sizeKey];
@@ -86,9 +86,9 @@ export function createVerifyCodeHandler(sizeKey: WindowSizeKey, solver: CaptchaS
       // 1. 截取问题区 + 选项区
       const q = VERIFY_CODE_CAPTURE.question;
       // const o = VERIFY_CODE_CAPTURE.options;
-      const o1 = VERIFY_CODE_CAPTURE.optionI;
-      const o2 = VERIFY_CODE_CAPTURE.optionII;
-      const o3 = VERIFY_CODE_CAPTURE.optionIII;
+      // const o1 = VERIFY_CODE_CAPTURE.optionI;
+      // const o2 = VERIFY_CODE_CAPTURE.optionII;
+      // const o3 = VERIFY_CODE_CAPTURE.optionIII;
 
       const rq = dmApi.capturePng(anchor.x + q.dx1, anchor.y + q.dy1, anchor.x + q.dx2, anchor.y + q.dy2, questionPath);
       // const ro = dmApi.capturePng(anchor.x + o.dx1, anchor.y + o.dy1, anchor.x + o.dx2, anchor.y + o.dy2, optionsPath);

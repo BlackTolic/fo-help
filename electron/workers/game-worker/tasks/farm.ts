@@ -75,8 +75,7 @@ interface ViewGeometry {
 }
 
 function viewGeometry(resolution?: GameResolution | null): ViewGeometry {
-  const roi: Rect =
-    resolution === '1600*900' ? { x: 0, y: 0, w: 1600, h: 900 } : { x: 0, y: 0, w: 1280, h: 800 };
+  const roi: Rect = resolution === '1600*900' ? { x: 0, y: 0, w: 1600, h: 900 } : { x: 0, y: 0, w: 1280, h: 800 };
   return { roi, center: { x: Math.round(roi.w / 2), y: Math.round(roi.h / 2) } };
 }
 
@@ -149,8 +148,7 @@ const END_CONDITIONS = {
 /** 地图坐标读取配置(坐标区域按设置里的分辨率取档) */
 function mapCoordConfig(ctx: WorkerContext): MapCoordConfig {
   return {
-    coordRoi:
-      DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
+    coordRoi: DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
     coordColor: COLOR_WHITE,
     similarity: DEFAULT_SIM,
   };
@@ -322,12 +320,10 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   // 打怪模式:定点打怪(当前实现)/定点识别/移动识别(旧值自动迁移,见 LEGACY_MODE_MAP)
   const rawMode = isFarm && cfg.mode ? cfg.mode : 'fixed';
   const mode: ResolvedConfig['mode'] =
-    (LEGACY_MODE_MAP[rawMode] as ResolvedConfig['mode'] | undefined) ??
-    (rawMode as ResolvedConfig['mode']);
+    (LEGACY_MODE_MAP[rawMode] as ResolvedConfig['mode'] | undefined) ?? (rawMode as ResolvedConfig['mode']);
 
   // 施法方式:缺省 = 智能施法
-  const castMode: ResolvedConfig['castMode'] =
-    isFarm && cfg.castMode === 'custom' ? 'custom' : 'smart';
+  const castMode: ResolvedConfig['castMode'] = isFarm && cfg.castMode === 'custom' ? 'custom' : 'smart';
 
   // 任务级技能:配置了至少 1 个启用技能则用(过滤非法键/负 CD)
   let skills: MoveAttackSkill[] = [];
@@ -364,17 +360,11 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
 
   // 找怪关键字/颜色
   const monsterKeywords =
-    isFarm && cfg.mobFilter?.nameKeywords && cfg.mobFilter.nameKeywords.length > 0
-      ? cfg.mobFilter.nameKeywords
-      : DEFAULT_MONSTER_KEYWORDS;
-  const monsterColor =
-    isFarm && cfg.mobFilter?.nameColor?.trim()
-      ? cfg.mobFilter.nameColor.trim()
-      : DEFAULT_MONSTER_COLOR;
+    isFarm && cfg.mobFilter?.nameKeywords && cfg.mobFilter.nameKeywords.length > 0 ? cfg.mobFilter.nameKeywords : DEFAULT_MONSTER_KEYWORDS;
+  const monsterColor = isFarm && cfg.mobFilter?.nameColor?.trim() ? cfg.mobFilter.nameColor.trim() : DEFAULT_MONSTER_COLOR;
 
   // 到达路径点时停留的时间
-  const stepIntervalMs =
-    isFarm && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : 800;
+  const stepIntervalMs = isFarm && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : 800;
 
   const maxLoops = END_CONDITIONS.maxLoops;
 
@@ -453,11 +443,7 @@ function pointAt(view: ViewGeometry, angle: number, distancePx: number): Point {
  * (点可能落到桌面/别的程序上),所以沿该方向取最近的边界作为距离上限。
  * @returns { distance, clamped } clamped=true 表示距离被边界截短过
  */
-function clampDistanceToView(
-  view: ViewGeometry,
-  angle: number,
-  distancePx: number,
-): { distance: number; clamped: boolean } {
+function clampDistanceToView(view: ViewGeometry, angle: number, distancePx: number): { distance: number; clamped: boolean } {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
   const { x: minX, y: minY, w, h } = view.roi;
@@ -466,11 +452,9 @@ function clampDistanceToView(
   let maxDistance = distancePx;
   const EPS = 1e-6;
   if (dx > EPS) maxDistance = Math.min(maxDistance, (maxX - CLICK_MARGIN - view.center.x) / dx);
-  else if (dx < -EPS)
-    maxDistance = Math.min(maxDistance, (minX + CLICK_MARGIN - view.center.x) / dx);
+  else if (dx < -EPS) maxDistance = Math.min(maxDistance, (minX + CLICK_MARGIN - view.center.x) / dx);
   if (dy > EPS) maxDistance = Math.min(maxDistance, (maxY - CLICK_MARGIN - view.center.y) / dy);
-  else if (dy < -EPS)
-    maxDistance = Math.min(maxDistance, (minY + CLICK_MARGIN - view.center.y) / dy);
+  else if (dy < -EPS) maxDistance = Math.min(maxDistance, (minY + CLICK_MARGIN - view.center.y) / dy);
   const distance = Math.max(0, maxDistance);
   return { distance, clamped: distance < distancePx };
 }
@@ -483,19 +467,14 @@ function clampDistanceToView(
  * 只认 ctx.moveAttack 标志(pause/resume/stop 由 commands.ts 维护);
  * 自然跑完/异常返回结果,由调用方(任务 start() 或测试路径)决定如何上报。
  */
-export async function runFarmLoop(
-  ctx: WorkerContext,
-  hwnd: number,
-  opts?: FarmLoopOptions,
-): Promise<FarmLoopResult> {
+export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmLoopOptions): Promise<FarmLoopResult> {
   const label = opts?.label ?? '挂机打怪';
   const ctrl = ctx.moveAttack;
   ctrl.running = true; // 每次进入都重置(上次 stop 会置 false)
 
   // 解析配置:优先用「挂机打怪」弹窗确认后下发的 taskConfig
   const conf = resolveConfig(ctx);
-  const modeLabel =
-    conf.mode === 'fixed-detect' ? '定点识别' : conf.mode === 'fixed' ? '定点打怪' : '移动识别';
+  const modeLabel = conf.mode === 'fixed-detect' ? '定点识别' : conf.mode === 'fixed' ? '定点打怪' : '移动识别';
   const farmSpotCount = conf.waypoints.filter((w) => w.type === 'farm-spot').length;
   ctx.sendLog(
     'info',
@@ -506,9 +485,7 @@ export async function runFarmLoop(
             s.rangePx === 0 ? '未配' : `${s.rangePx}px`
           }/${s.method}`,
       )
-      .join(
-        ', ',
-      )}] 关键字=[${conf.monsterKeywords.join(',')}] 颜色=${conf.monsterColor} 移动间隔=${conf.stepIntervalMs}ms` +
+      .join(', ')}] 关键字=[${conf.monsterKeywords.join(',')}] 颜色=${conf.monsterColor} 移动间隔=${conf.stepIntervalMs}ms` +
       ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}` +
       ` 最大圈数=${conf.maxLoops}` +
       (conf.mode === 'move-detect' ? '(移动识别尚未实现,按定点打怪执行)' : '') +
@@ -609,7 +586,7 @@ export async function runFarmLoop(
           // 精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即「到位」
           arriveTolerance: 1,
           stepIntervalMs: conf.stepIntervalMs, // 移动步进间隔(ms)
-          noMoveTimeoutMs: 5000, //5S没有移动视为卡住
+          noMoveTimeoutMs: 3000, //3S没有移动视为卡住
           // 坐标读数是整数,只要变了(±1)就算在移动,别让「没移动」计时误判卡住
           moveEpsilon: 0.5,
         });
@@ -617,10 +594,7 @@ export async function runFarmLoop(
         const current: MapPosition | null = (await movement.readPosition()) ?? prev;
         if (!arrived) {
           stuckCount++;
-          ctx.sendLog(
-            'warn',
-            `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`,
-          );
+          ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`);
           // if (stuckCount >= END_CONDITIONS.maxStuckPoints) {
           //   const detail = `连续 ${stuckCount} 个路径点卡住,终止`;
           //   ctx.sendLog('warn', `[${label}] ${detail}`);
@@ -638,10 +612,7 @@ export async function runFarmLoop(
 
         // 休息点 / 路径中间点:只路过,不放技能
         if (wp.type !== 'farm-spot') {
-          ctx.sendLog(
-            'info',
-            `[${label}] 到达 (${current.x},${current.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`,
-          );
+          ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
           prev = current;
           continue;
         }
@@ -656,13 +627,9 @@ export async function runFarmLoop(
         // 定点识别(fixed-detect):扫怪名 → 按每个技能的施法方式释放(没扫到 → 指向性技能跳过)
         const isDetect = conf.mode === 'fixed-detect';
         const angle = aimAngle(current, prev);
-        const monster = isDetect
-          ? scanMonster(view, conf.monsterKeywords, conf.monsterColor)
-          : null;
+        const monster = isDetect ? scanMonster(view, conf.monsterKeywords, conf.monsterColor) : null;
         // 怪离角色(屏幕中心)的像素距离:target 技能按各自的施法距离过滤
-        const monsterDist = monster
-          ? Math.hypot(monster.x - view.center.x, monster.y - view.center.y)
-          : null;
+        const monsterDist = monster ? Math.hypot(monster.x - view.center.x, monster.y - view.center.y) : null;
 
         // 定点打怪:固定方向的落点(每个技能各自的距离在下面按 rangePx 算)
         const fixedAim = clampDistanceToView(view, angle, FIXED_AIM.distance);
@@ -670,18 +637,13 @@ export async function runFarmLoop(
 
         let clickDesc: string;
         if (isDetect) {
-          clickDesc = monster
-            ? `发现怪物 @(${monster.x},${monster.y}) 距离=${Math.round(monsterDist!)}px`
-            : '未发现怪物';
+          clickDesc = monster ? `发现怪物 @(${monster.x},${monster.y}) 距离=${Math.round(monsterDist!)}px` : '未发现怪物';
         } else {
           clickDesc =
             `定点打怪:移动反方向落点 (${fixedPoint.x},${fixedPoint.y}) 默认距离=${fixedAim.distance}px` +
             (fixedAim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : '');
         }
-        ctx.sendLog(
-          'info',
-          `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ${clickDesc}`,
-        );
+        ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ${clickDesc}`);
 
         const now = Date.now();
         // 待释放技能:
@@ -694,9 +656,7 @@ export async function runFarmLoop(
           const ready = wp.skills.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
           const readySelf = ready.filter((s) => s.method === 'self');
           const readyOther = ready.filter((s) => s.method !== 'self');
-          const picked = readyOther.length
-            ? [readyOther.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))]
-            : [];
+          const picked = readyOther.length ? [readyOther.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))] : [];
           skillsToCast = [...readySelf, ...picked]; // 先放状态 buff,再放选中的输出技能
           if (skillsToCast.length === 0) {
             ctx.sendLog('info', `[${label}] 无可释放技能(全部冷却中),留到下一个挂机点`);
@@ -722,10 +682,7 @@ export async function runFarmLoop(
             if (isDetect) {
               if (!monster) continue; // 定点识别没扫到怪,指向性技能跳过
               if (skill.rangePx > 0 && monsterDist !== null && monsterDist > skill.rangePx) {
-                ctx.sendLog(
-                  'info',
-                  `[${label}] ${skillLabel} 跳过:怪距离 ${Math.round(monsterDist)}px 超出施法距离 ${skill.rangePx}px`,
-                );
+                ctx.sendLog('info', `[${label}] ${skillLabel} 跳过:怪距离 ${Math.round(monsterDist)}px 超出施法距离 ${skill.rangePx}px`);
                 continue;
               }
               clickPos = monster;
