@@ -115,6 +115,48 @@ export interface FarmWatchdogConfig {
   stopLevelUp?: boolean;
 }
 
+/**
+ * 一条物品拾取规则:颜色(可多选)+ 物品名(可空),两个条件同时满足才算命中
+ *   - 只选颜色、名称留空 = 这个颜色的所有物品都要(找色定位,不读文字)
+ *   - 选颜色 + 填名称   = 只捡这些颜色的文字里叫这些名字的(找字定位)
+ *   - 不选颜色 + 填名称 = 不限颜色,按名称找
+ * 多条规则之间是「或」:任一条命中就捡,按规则顺序找
+ *   例:所有紫色装备 + 蓝色里只要无极剑 = [{colors:[紫]}, {colors:[蓝], nameKeywords:[无极剑]}]
+ */
+export interface FarmPickupRule {
+  /** 这条规则的颜色(大漠颜色格式,可多选;空 = 不限颜色) */
+  colors?: string[];
+  /** 这条规则的物品名(空 = 这个颜色的所有物品都要) */
+  nameKeywords?: string[];
+}
+
+/**
+ * 物品拾取(挂机打怪期间捡地上的掉落物)
+ *
+ * 时机:拾取优先 —— 定点识别里每轮循环先捡一次(正在打的怪也先放下),
+ * 走到路径点、准备移动前也捡一次;一轮会把范围内能找到的物品都捡完才继续下一个动作。
+ * 不打断"正在释放的那一个技能",只在技能之间插;单件点了 maxClicks 次仍未消失就放弃这件。
+ *
+ * 筛选方式见 FarmPickupRule(rules 之间是「或」)。
+ * rules 为空(或每条规则的颜色和名称都空)= 没有可筛条件,worker 按「未开启」处理(UI 也会提示)
+ */
+export interface FarmPickupConfig {
+  /** 是否开启物品拾取 */
+  enabled: boolean;
+  /** 拾取范围:default = 游戏画面去掉上下 UI 边距(默认)/ custom = 用 range 自定义 */
+  rangeMode?: 'default' | 'custom';
+  /** 自定义拾取范围(窗口客户区相对坐标;rangeMode='custom' 时用) */
+  range?: ScreenRect;
+  /** 拾取规则(任一条命中就捡) */
+  rules?: FarmPickupRule[];
+  /** @deprecated 旧的扁平写法:等价于单条规则 rules=[{ colors, nameKeywords }];读取时自动迁移 */
+  colors?: string[];
+  /** @deprecated 同上 */
+  nameKeywords?: string[];
+  /** 点击物品名时的偏移(像素;默认 0,0 = 点在物品名上,和怪名的 clickOffset 同理) */
+  clickOffset?: { x: number; y: number };
+}
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -138,7 +180,12 @@ export interface FarmTaskConfig {
     nameKeywords: string[];
     minLevel?: number;
     maxLevel?: number;
-    /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';可选值见 core/constant-ocr/color.ts) */
+    /**
+     * 怪名字颜色(可多选;大漠颜色格式,如 'FFFFFF-FFFFFF';可选值见 core/constant-ocr/color.ts)
+     * 多选时 worker 用 '|' 拼成一个颜色串(找字支持多色)
+     */
+    nameColors?: string[];
+    /** @deprecated 旧的单值怪名颜色;新配置写 nameColors,worker 读不到 nameColors 时才回退读它 */
     nameColor?: string;
     /** 定点识别的 OCR 识别范围(客户区相对坐标;不配 = 整个游戏画面) */
     ocrRange?: ScreenRect;
@@ -156,6 +203,8 @@ export interface FarmTaskConfig {
   movementSpeed?: number;
   /** 挂机看门狗(组队申请/神医验证码/生命回复/角色停级);不配 = 旧配置,只开验证码 */
   watchdog?: FarmWatchdogConfig;
+  /** 物品拾取(打怪间隙捡掉落物);不配 = 不开启 */
+  pickup?: FarmPickupConfig;
   /** 自定义备注 */
   note?: string;
 }

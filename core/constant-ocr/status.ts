@@ -16,7 +16,7 @@ export const FIND_COLOR_DIR = 0;
  */
 export const BLOOD_STATUS_ROI: DM_FIND_COLOR = {
   '1600*900': { x1: 124, y1: 26, x2: 168, y2: 36, color: '20ac00-111111|e89828-111111', sim: DEFAULT_SIM },
-  '1280*800': { x1: 116, y1: 12, x2: 139, y2: 39, color: '20ac00-111111|e89828-111111', sim: DEFAULT_SIM },
+  '1280*800': { x1: 100, y1: 12, x2: 113, y2: 39, color: '20ac00-111111|e89828-111111', sim: DEFAULT_SIM },
 };
 
 /**

@@ -88,7 +88,6 @@ function createWindow() {
   // 加载页面
   if (isDev) {
     mainWindow.loadURL('http://localhost:5174');
-    mainWindow.webContents.openDevTools({ mode: 'bottom' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'));
   }

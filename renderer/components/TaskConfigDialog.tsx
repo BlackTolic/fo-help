@@ -2,17 +2,7 @@
 // 两步:1.选任务类型(可从历史任务加载) 2.配置参数(挂机打怪详细,其他留白)
 
 import { useState, useEffect } from 'react';
-import {
-  X,
-  ChevronRight,
-  Plus,
-  Trash2,
-  ArrowUp,
-  ArrowDown,
-  Check,
-  History,
-  Keyboard,
-} from 'lucide-react';
+import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from 'lucide-react';
 import type {
   TaskType,
   TaskConfig,
@@ -21,6 +11,7 @@ import type {
   FarmMode,
   FarmCastMode,
   FarmWatchdogConfig,
+  FarmPickupConfig,
   SkillCastMethod,
   TeamInviteAction,
   Waypoint,
@@ -30,25 +21,33 @@ import type {
   ScreenRect,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
-import { COLOR_WHITE, COLOR_RED, COLOR_YELLOW, COLOR_GREEN } from '../../core/constant-ocr/color';
+import {
+  COLOR_WHITE,
+  COLOR_RED,
+  COLOR_YELLOW,
+  COLOR_GREEN,
+  COLOR_BLUE,
+  COLOR_PURPLE,
+  COLOR_YELLOW_WHITE,
+  COLOR_GREY_WHITE,
+} from '../../core/constant-ocr/color';
 import { useStore } from '../store/useStore';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
 
-const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] =
-  [
-    { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
-    {
-      type: 'default-skill',
-      name: '缺省技能',
-      icon: '🎹',
-      desc: '按键编排(F1-F12/Alt/Shift),纯按键循环',
-      ready: true,
-    },
-    { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
-    { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
-    { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
-    { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
-  ];
+const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; ready: boolean }[] = [
+  { type: 'farm', name: '挂机打怪', icon: '⚔', desc: '自动找怪 + 战斗 + 拾取', ready: true },
+  {
+    type: 'default-skill',
+    name: '缺省技能',
+    icon: '🎹',
+    desc: '按键编排(F1-F12/Alt/Shift),纯按键循环',
+    ready: true,
+  },
+  { type: 'mine', name: '挖矿', icon: '⛏', desc: '寻找矿点 + 持续点击', ready: false },
+  { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
+  { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
+  { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
+];
 
 const FARM_MAPS = [
   { id: 'chang-an', name: '长安城周边' },
@@ -60,13 +59,86 @@ const FARM_MAPS = [
   { id: 'custom', name: '自定义...' },
 ];
 
-/** 定点识别的怪名颜色可选值(取自 core/constant-ocr/color.ts) */
+/** 定点识别的怪名颜色可选值(取自 core/constant-ocr/color.ts;可多选) */
 const MONSTER_COLOR_OPTIONS: { value: string; label: string }[] = [
-  { value: COLOR_WHITE, label: '白色' },
+  { value: COLOR_GREY_WHITE, label: '灰白色' },
   { value: COLOR_RED, label: '红色' },
   { value: COLOR_YELLOW, label: '黄色' },
   { value: COLOR_GREEN, label: '绿色' },
 ];
+
+/**
+ * 物品拾取的颜色可选值(物品品质色,可多选;取自 core/constant-ocr/color.ts)
+ * ⚠️ 蓝/紫两个色值还是占位值,要在游戏里取色后替换(见 color.ts 里的 TODO)
+ */
+const PICKUP_COLOR_OPTIONS: { value: string; label: string }[] = [
+  { value: COLOR_YELLOW_WHITE, label: '黄白色' },
+  { value: COLOR_GREEN, label: '绿色' },
+  { value: COLOR_BLUE, label: '蓝色' },
+  { value: COLOR_YELLOW, label: '黄色' },
+  { value: COLOR_PURPLE, label: '紫色' },
+];
+
+/**
+ * 界面里的一条拾取规则:名称用逗号分隔的文本编辑
+ * (和「找怪关键字」同一个输入方式 —— 直接编辑数组会让逗号在打字时被吃掉)
+ */
+interface PickupRuleUi {
+  /** 这条规则的颜色(可多选) */
+  colors: string[];
+  /** 这条规则的物品名(逗号分隔文本;空 = 这个颜色的所有物品都要) */
+  nameKeywords: string;
+}
+
+/**
+ * 拾取配置在界面里的形态。
+ * rules 之间是「或」:每条规则 = 颜色(可多选)+ 名称(可空),任一条命中就捡
+ *   例:所有紫色装备 + 蓝色里只要无极剑 = [{紫, 名称空}, {蓝, "无极剑"}]
+ */
+interface PickupUiState {
+  enabled: boolean;
+  rangeMode: 'default' | 'custom';
+  range: ScreenRect;
+  rules: PickupRuleUi[];
+  clickOffset: { x: number; y: number };
+}
+
+/** 新建任务时的拾取默认值:不开启,给一条空规则让用户看清"规则"长什么样 */
+const DEFAULT_PICKUP: PickupUiState = {
+  enabled: false,
+  rangeMode: 'default',
+  range: { x: 0, y: 0, w: 0, h: 0 },
+  rules: [{ colors: [], nameKeywords: '' }],
+  clickOffset: { x: 0, y: 0 },
+};
+
+/**
+ * 回填拾取规则:
+ *   新配置读 rules;旧配置(扁平的 colors + nameKeywords)当成一条规则(升级兼容)
+ *   一条都没有 = 给一条空规则,方便直接开始填
+ */
+function toPickupRulesUi(pickup?: FarmPickupConfig): PickupRuleUi[] {
+  const raw =
+    pickup?.rules && pickup.rules.length > 0
+      ? pickup.rules
+      : [{ colors: pickup?.colors, nameKeywords: pickup?.nameKeywords }];
+  const rules = raw.map((r) => ({
+    colors: (r?.colors ?? []).map((c) => String(c ?? '').trim()).filter(Boolean),
+    nameKeywords: (r?.nameKeywords ?? []).join(','),
+  }));
+  return rules.length > 0 ? rules : [{ colors: [], nameKeywords: '' }];
+}
+
+/**
+ * 回填怪名颜色:优先读多选的 nameColors;
+ * 旧配置只有单值 nameColor,当成"只选了一个"处理;都没有 = 默认白色
+ */
+function resolveNameColors(mobFilter?: FarmTaskConfig['mobFilter']): string[] {
+  const colors = (mobFilter?.nameColors ?? []).map((c) => String(c ?? '').trim()).filter(Boolean);
+  if (colors.length > 0) return colors;
+  const legacy = mobFilter?.nameColor?.trim();
+  return legacy ? [legacy] : [COLOR_WHITE];
+}
 
 /** 把 worker.status 映射成短标签(右上角状态徽章) */
 function statusLabel(status?: string): string {
@@ -151,9 +223,7 @@ export function TaskConfigDialog({
   onSaved,
   onConfirm,
 }: Props) {
-  const [step, setStep] = useState<'select' | 'config' | 'name'>(
-    initialConfig ? 'config' : 'select',
-  );
+  const [step, setStep] = useState<'select' | 'config' | 'name'>(initialConfig ? 'config' : 'select');
   const [taskName, setTaskName] = useState(initialTaskName ?? '');
   const [nameError, setNameError] = useState<string | null>(null);
   // config 步骤直接保存(编辑模式)的错误显示 — name 步骤走的是 nameError,这里独立
@@ -175,14 +245,16 @@ export function TaskConfigDialog({
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   // 找怪关键字:定点识别下留空 = 纯 OCR(范围内任意文字都算怪名),不强制默认值
   const [nameKeywords, setNameKeywords] = useState('');
-  // 找怪相关:怪名颜色 / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 角色移动间隔
-  const [mobNameColor, setMobNameColor] = useState(COLOR_WHITE);
+  // 找怪相关:怪名颜色(多选) / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 角色移动间隔
+  const [mobNameColors, setMobNameColors] = useState<string[]>([COLOR_WHITE]);
   const [ocrRange, setOcrRange] = useState<ScreenRect>({ x: 0, y: 0, w: 0, h: 0 });
   const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
   const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
   // 看门狗:组队申请 / 神医验证码 / 生命回复 / 角色停级;全空 = worker 不启动看门狗
   const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
+  // 物品拾取:打怪间隙捡掉落物(范围/颜色/名称;关掉 = worker 不产生任何扫描开销)
+  const [pickup, setPickup] = useState<PickupUiState>(DEFAULT_PICKUP);
   const [note, setNote] = useState('');
 
   // 缺省技能配置
@@ -216,7 +288,7 @@ export function TaskConfigDialog({
       setCastMode(farm.castMode ?? 'smart');
       setWaypoints(farm.waypoints || []);
       setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '');
-      setMobNameColor(farm.mobFilter?.nameColor || COLOR_WHITE);
+      setMobNameColors(resolveNameColors(farm.mobFilter));
       setOcrRange(farm.mobFilter?.ocrRange ?? { x: 0, y: 0, w: 0, h: 0 });
       setClickOffset(farm.mobFilter?.clickOffset ?? { x: 0, y: 0 });
       // 旧技能没有施法方式/吟唱/距离字段,按旧行为(target + 400ms 吟唱 + 不限距离)补默认值
@@ -232,6 +304,14 @@ export function TaskConfigDialog({
       setMoveStepIntervalMs(farm.movementSpeed ?? 800);
       // 旧配置没有 watchdog 字段:按「只开验证码」回显,与 worker 的兼容行为一致
       setWatchdog(farm.watchdog ?? DEFAULT_WATCHDOG);
+      // 旧配置没有 pickup 字段:回显成"不开启"
+      setPickup({
+        enabled: farm.pickup?.enabled === true,
+        rangeMode: farm.pickup?.rangeMode === 'custom' ? 'custom' : 'default',
+        range: farm.pickup?.range ?? { x: 0, y: 0, w: 0, h: 0 },
+        rules: toPickupRulesUi(farm.pickup),
+        clickOffset: farm.pickup?.clickOffset ?? { x: 0, y: 0 },
+      });
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -295,7 +375,7 @@ export function TaskConfigDialog({
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean),
-          nameColor: mobNameColor.trim() || undefined,
+          nameColors: mobNameColors.length > 0 ? mobNameColors : undefined,
           // OCR 范围:x/y 允许为 0,w/h 必须为正才有意义(全 0 = 不配,worker 回退整个画面)
           ocrRange:
             ocrRange.w > 0 && ocrRange.h > 0
@@ -338,6 +418,34 @@ export function TaskConfigDialog({
               }
             : {}),
           ...(watchdog.stopLevelUp ? { stopLevelUp: true } : {}),
+        },
+        // 物品拾取:整份保存(开关关掉也留着范围/颜色/名称,下次打开不用重填)
+        pickup: {
+          enabled: !!pickup.enabled,
+          rangeMode: pickup.rangeMode === 'custom' ? 'custom' : 'default',
+          range:
+            pickup.rangeMode === 'custom' && (pickup.range?.w ?? 0) > 0 && (pickup.range?.h ?? 0) > 0
+              ? {
+                  x: Math.max(0, pickup.range?.x ?? 0),
+                  y: Math.max(0, pickup.range?.y ?? 0),
+                  w: Math.max(0, pickup.range?.w ?? 0),
+                  h: Math.max(0, pickup.range?.h ?? 0),
+                }
+              : undefined,
+          // 规则:颜色 / 名称全空的那条丢掉(worker 也会丢,存下来的配置保持干净)
+          rules: pickup.rules
+            .map((r) => ({
+              colors: r.colors,
+              nameKeywords: r.nameKeywords
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean),
+            }))
+            .filter((r) => r.colors.length > 0 || r.nameKeywords.length > 0),
+          clickOffset:
+            (pickup.clickOffset?.x ?? 0) !== 0 || (pickup.clickOffset?.y ?? 0) !== 0
+              ? { x: pickup.clickOffset?.x ?? 0, y: pickup.clickOffset?.y ?? 0 }
+              : undefined,
         },
         note: note || undefined,
       };
@@ -411,9 +519,7 @@ export function TaskConfigDialog({
     // 校验:缺省技能必须至少 1 个启用的步骤(空配置启动会被 worker 直接结束,UI 提前拦截)
     if (taskType === 'default-skill') {
       const cfg = buildConfig();
-      const enabledSteps = (cfg.type === 'default-skill' ? cfg.steps : []).filter(
-        (s) => s.enabled !== false,
-      );
+      const enabledSteps = (cfg.type === 'default-skill' ? cfg.steps : []).filter((s) => s.enabled !== false);
       if (enabledSteps.length === 0) {
         // 自动跳回 config 步骤 + 顶部红色 banner
         setStep('config');
@@ -463,17 +569,13 @@ export function TaskConfigDialog({
             {taskType && (
               <>
                 <ChevronRight size={14} className="text-text-muted" />
-                <span className="text-accent-cyan">
-                  {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
-                </span>
+                <span className="text-accent-cyan">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</span>
               </>
             )}
             {/* 当前任务运行状态回显 */}
             {workerState && step === 'config' && (
               <span className="ml-2 inline-flex items-center gap-2 text-[11px] text-text-muted">
-                <span
-                  className={`px-1.5 py-0.5 rounded font-medium ${statusBg(workerState.status)}`}
-                >
+                <span className={`px-1.5 py-0.5 rounded font-medium ${statusBg(workerState.status)}`}>
                   {statusLabel(workerState.status)}
                 </span>
                 {workerState.stats && (
@@ -524,9 +626,7 @@ export function TaskConfigDialog({
                 >
                   <History size={14} className="text-accent-cyan" />
                   <span className="font-medium">从历史任务中选择</span>
-                  <span className="ml-auto text-[11px] text-text-muted">
-                    {taskHistory.length} 条
-                  </span>
+                  <span className="ml-auto text-[11px] text-text-muted">{taskHistory.length} 条</span>
                 </button>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -553,9 +653,7 @@ export function TaskConfigDialog({
                       <span className="text-2xl">{opt.icon}</span>
                       <span className="text-base font-medium">{opt.name}</span>
                       {!opt.ready && (
-                        <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-text-muted/20 text-text-muted">
-                          即将推出
-                        </span>
+                        <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-text-muted/20 text-text-muted">即将推出</span>
                       )}
                     </div>
                     <div className="text-xs text-text-secondary">{opt.desc}</div>
@@ -591,8 +689,8 @@ export function TaskConfigDialog({
               setWaypoints={setWaypoints}
               nameKeywords={nameKeywords}
               setNameKeywords={setNameKeywords}
-              mobNameColor={mobNameColor}
-              setMobNameColor={setMobNameColor}
+              mobNameColors={mobNameColors}
+              setMobNameColors={setMobNameColors}
               ocrRange={ocrRange}
               setOcrRange={setOcrRange}
               clickOffset={clickOffset}
@@ -603,6 +701,8 @@ export function TaskConfigDialog({
               setMoveStepIntervalMs={setMoveStepIntervalMs}
               watchdog={watchdog}
               setWatchdog={setWatchdog}
+              pickup={pickup}
+              setPickup={setPickup}
               note={note}
               setNote={setNote}
             />
@@ -624,12 +724,8 @@ export function TaskConfigDialog({
 
           {step === 'config' && taskType && taskType !== 'farm' && taskType !== 'default-skill' && (
             <div className="text-center py-12 text-text-secondary">
-              <div className="text-4xl mb-3 opacity-30">
-                {TASK_OPTIONS.find((o) => o.type === taskType)?.icon}
-              </div>
-              <div className="text-base mb-1">
-                {TASK_OPTIONS.find((o) => o.type === taskType)?.name}
-              </div>
+              <div className="text-4xl mb-3 opacity-30">{TASK_OPTIONS.find((o) => o.type === taskType)?.icon}</div>
+              <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
               <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
             </div>
           )}
@@ -663,14 +759,8 @@ export function TaskConfigDialog({
                   title={initialTaskName ? '编辑模式下任务名锁定' : ''}
                   className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
                 />
-                {nameError && (
-                  <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">
-                    {nameError}
-                  </div>
-                )}
-                <div className="text-[11px] text-text-muted">
-                  💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口
-                </div>
+                {nameError && <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">{nameError}</div>}
+                <div className="text-[11px] text-text-muted">💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口</div>
                 {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-accent-cyan/20">
                   <button
@@ -682,10 +772,7 @@ export function TaskConfigDialog({
                   >
                     返回配置
                   </button>
-                  <button
-                    onClick={() => void handleConfirmName()}
-                    className="btn btn-primary flex items-center gap-1"
-                  >
+                  <button onClick={() => void handleConfirmName()} className="btn btn-primary flex items-center gap-1">
                     <Check size={14} />
                     确认保存
                   </button>
@@ -697,12 +784,7 @@ export function TaskConfigDialog({
 
         {/* 内嵌历史任务 dialog */}
         {historyOpen && (
-          <HistoryTaskDialog
-            history={taskHistory}
-            currentHwnd={hwnd}
-            onClose={() => setHistoryOpen(false)}
-            onApply={handleHistoryApply}
-          />
+          <HistoryTaskDialog history={taskHistory} currentHwnd={hwnd} onClose={() => setHistoryOpen(false)} onApply={handleHistoryApply} />
         )}
 
         {/* 底部 */}
@@ -741,11 +823,7 @@ export function TaskConfigDialog({
                     onClick={() => void handleSave()}
                     disabled={saving}
                     className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
-                    title={
-                      initialTaskName
-                        ? '保存修改后的历史任务(不启动 worker)'
-                        : '执行并保存当前任务，以便下次直接在“历史任务”中使用'
-                    }
+                    title={initialTaskName ? '保存修改后的历史任务(不启动 worker)' : '执行并保存当前任务，以便下次直接在“历史任务”中使用'}
                   >
                     {initialTaskName ? (saving ? '保存中...' : '确定') : '存为记忆'}
                   </button>
@@ -761,11 +839,7 @@ export function TaskConfigDialog({
                   )}
                 </div>
               )}
-              {step === 'name' && (
-                <span className="text-[11px] text-text-muted">
-                  按 Enter 或点 panel 内"确认保存"
-                </span>
-              )}
+              {step === 'name' && <span className="text-[11px] text-text-muted">按 Enter 或点 panel 内"确认保存"</span>}
             </>
           )}
         </footer>
@@ -790,6 +864,96 @@ const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string
 /** 新建任务时的看门狗默认值:只开验证码(与升级前行为一致,其余项按需勾选) */
 const DEFAULT_WATCHDOG: FarmWatchdogConfig = { verifyCode: true };
 
+interface ColorTagPickerProps {
+  /** 预设颜色标签 */
+  options: { value: string; label: string }[];
+  /** 已选颜色(大漠颜色描述符) */
+  value: string[];
+  onChange: (v: string[]) => void;
+  readOnly?: boolean;
+}
+
+/**
+ * 颜色多选(tag 标签 + 自定义色值)
+ * 值是「主色-偏色」格式的大漠颜色描述符(见 core/constant-ocr/color.ts);
+ * 不在预设里的值(旧配置 / 自定义)也渲染成标签,可以单独删掉。
+ * 怪名颜色与物品拾取颜色共用这一个控件,只是传入的预设列表不同。
+ */
+function ColorTagPicker({ options, value, onChange, readOnly = false }: ColorTagPickerProps) {
+  const [custom, setCustom] = useState('');
+
+  const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
+  const addCustom = () => {
+    const v = custom.trim();
+    if (!v || value.includes(v)) return;
+    onChange([...value, v]);
+    setCustom('');
+  };
+  const extras = value.filter((v) => !options.some((o) => o.value === v));
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
+        {options.map((o) => {
+          const checked = value.includes(o.value);
+          return (
+            <label
+              key={o.value}
+              title={o.value}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
+                checked
+                  ? 'border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan'
+                  : 'border-border-base text-text-secondary hover:border-border-active cursor-pointer'
+              } ${readOnly ? 'cursor-default' : ''}`}
+            >
+              <input
+                type="checkbox"
+                className="accent-accent-cyan"
+                disabled={readOnly}
+                checked={checked}
+                onChange={() => toggle(o.value)}
+              />
+              <span>{o.label}</span>
+            </label>
+          );
+        })}
+        {extras.map((v) => (
+          <span
+            key={v}
+            title={v}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan text-[11px] font-mono"
+          >
+            {v}
+            {!readOnly && (
+              <button onClick={() => onChange(value.filter((x) => x !== v))} title="移除" className="hover:text-accent-red">
+                <X size={10} />
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addCustom();
+            }}
+            placeholder="自定义色值(主色-偏色,如 e85048-111111)"
+            className="w-64 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan font-mono"
+          />
+          <button onClick={addCustom} className="text-xs btn btn-secondary flex items-center gap-1">
+            <Plus size={12} />
+            添加
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface FarmConfigProps {
   readOnly?: boolean;
   mapId: string;
@@ -809,8 +973,9 @@ interface FarmConfigProps {
   setWaypoints: (v: Waypoint[] | ((prev: Waypoint[]) => Waypoint[])) => void;
   nameKeywords: string;
   setNameKeywords: (v: string) => void;
-  mobNameColor: string;
-  setMobNameColor: (v: string) => void;
+  /** 怪名颜色(多选;大漠颜色格式的数组) */
+  mobNameColors: string[];
+  setMobNameColors: (v: string[]) => void;
   /** 定点识别的 OCR 识别范围(客户区相对坐标;w/h=0 表示不配 = 整个画面) */
   ocrRange: ScreenRect;
   setOcrRange: (v: ScreenRect) => void;
@@ -824,6 +989,9 @@ interface FarmConfigProps {
   /** 看门狗配置(组队申请/验证码/生命回复/角色停级) */
   watchdog: FarmWatchdogConfig;
   setWatchdog: (v: FarmWatchdogConfig | ((prev: FarmWatchdogConfig) => FarmWatchdogConfig)) => void;
+  /** 物品拾取配置(nameKeywords 在界面里是逗号分隔文本) */
+  pickup: PickupUiState;
+  setPickup: (v: PickupUiState | ((prev: PickupUiState) => PickupUiState)) => void;
   note: string;
   setNote: (v: string) => void;
 }
@@ -847,8 +1015,8 @@ function FarmConfig(props: FarmConfigProps) {
     setWaypoints,
     nameKeywords,
     setNameKeywords,
-    mobNameColor,
-    setMobNameColor,
+    mobNameColors,
+    setMobNameColors,
     ocrRange,
     setOcrRange,
     clickOffset,
@@ -859,6 +1027,8 @@ function FarmConfig(props: FarmConfigProps) {
     setMoveStepIntervalMs,
     watchdog,
     setWatchdog,
+    pickup,
+    setPickup,
     note,
     setNote,
   } = props;
@@ -876,6 +1046,28 @@ function FarmConfig(props: FarmConfigProps) {
       return { ...w, autoHeal: { itemIds } };
     });
   };
+
+  /** 改自定义拾取范围的某一项 */
+  const setPickupRange = (key: keyof ScreenRect, v: number) =>
+    setPickup((p) => ({ ...p, range: { ...p.range, [key]: v } }));
+
+  // ---- 拾取规则编辑(每条 = 颜色 + 名称;规则之间是「或」)----
+  const addPickupRule = () => {
+    if (readOnly) return;
+    setPickup((p) => ({ ...p, rules: [...p.rules, { colors: [], nameKeywords: '' }] }));
+  };
+
+  /** 删掉一条规则;只剩一条时不清空(留着让用户改,避免界面变空没处下手) */
+  const removePickupRule = (idx: number) => {
+    if (readOnly) return;
+    setPickup((p) => (p.rules.length > 1 ? { ...p, rules: p.rules.filter((_, i) => i !== idx) } : p));
+  };
+
+  const updatePickupRule = (idx: number, patch: Partial<PickupRuleUi>) =>
+    setPickup((p) => ({ ...p, rules: p.rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)) }));
+
+  /** 每条都既没颜色也没名称 = 拾取不生效(存的时候也会被丢掉) */
+  const pickupRuleEmpty = pickup.rules.every((r) => r.colors.length === 0 && !r.nameKeywords.trim());
 
   // ---- 任务级技能列表编辑 ----
   const addSkill = () => {
@@ -899,9 +1091,7 @@ function FarmConfig(props: FarmConfigProps) {
     if (readOnly) return;
     setSkills((ss) => ss.filter((s) => s.id !== id));
     // 清掉路径点上对该技能的引用,避免留下失效 id
-    setWaypoints((ws) =>
-      ws.map((w) => (w.skillIds ? { ...w, skillIds: w.skillIds.filter((sid) => sid !== id) } : w)),
-    );
+    setWaypoints((ws) => ws.map((w) => (w.skillIds ? { ...w, skillIds: w.skillIds.filter((sid) => sid !== id) } : w)));
     // 同时从生命回复的药品选择里摘掉
     dropHealItem(id);
   };
@@ -999,17 +1189,14 @@ function FarmConfig(props: FarmConfigProps) {
               >
                 <span>{m.label}</span>
                 {!m.ready && (
-                  <span className="absolute -top-2 -right-1 text-[9px] px-1 rounded bg-text-muted/30 text-text-muted">
-                    即将推出
-                  </span>
+                  <span className="absolute -top-2 -right-1 text-[9px] px-1 rounded bg-text-muted/30 text-text-muted">即将推出</span>
                 )}
               </button>
             );
           })}
         </div>
         <div className="text-[11px] text-text-muted mt-1.5">
-          {mode === 'fixed' &&
-            '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
+          {mode === 'fixed' && '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
           {mode === 'fixed-detect' &&
             '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,左键点击怪名锁定后再攻击;不配技能 = 识别到怪就普通攻击(左键点一下);识别不到怪后原地再等约 3 秒,仍没有怪才前往下一个点'}
           {mode === 'move-detect' && '移动途中识别到怪物名称,优先停下打怪,打完再继续前往路径点'}
@@ -1020,16 +1207,10 @@ function FarmConfig(props: FarmConfigProps) {
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            技能设置{' '}
-            <span className="text-text-muted text-[11px]">
-              (F1-F10;路径点从这里选择要释放的技能)
-            </span>
+            技能设置 <span className="text-text-muted text-[11px]">(F1-F10;路径点从这里选择要释放的技能)</span>
           </label>
           {!readOnly && (
-            <button
-              onClick={addSkill}
-              className="text-xs btn btn-secondary flex items-center gap-1"
-            >
+            <button onClick={addSkill} className="text-xs btn btn-secondary flex items-center gap-1">
               <Plus size={12} />
               添加技能
             </button>
@@ -1046,12 +1227,7 @@ function FarmConfig(props: FarmConfigProps) {
               const method = skill.method ?? 'target';
               const isTarget = method === 'target';
               return (
-                <div
-                  key={skill.id}
-                  className={`bg-bg-input p-2 rounded space-y-2 ${
-                    skill.enabled === false ? 'opacity-50' : ''
-                  }`}
-                >
+                <div key={skill.id} className={`bg-bg-input p-2 rounded space-y-2 ${skill.enabled === false ? 'opacity-50' : ''}`}>
                   {/* 第一行:序号 / 启用 / 键位 / 名称 / 施法方式 / 操作 */}
                   <div className="flex items-center gap-2">
                     <span className="text-text-muted text-[11px] w-5 text-center">#{i + 1}</span>
@@ -1142,9 +1318,7 @@ function FarmConfig(props: FarmConfigProps) {
                       min={0}
                       step={500}
                       value={skill.cooldownMs}
-                      onChange={(e) =>
-                        updateSkill(skill.id, { cooldownMs: parseInt(e.target.value) || 0 })
-                      }
+                      onChange={(e) => updateSkill(skill.id, { cooldownMs: parseInt(e.target.value) || 0 })}
                       disabled={readOnly}
                       className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                       title="技能时间间隔(毫秒,两次释放之间的最短间隔)"
@@ -1158,9 +1332,7 @@ function FarmConfig(props: FarmConfigProps) {
                           min={0}
                           step={100}
                           value={skill.castMs ?? 400}
-                          onChange={(e) =>
-                            updateSkill(skill.id, { castMs: parseInt(e.target.value) || 0 })
-                          }
+                          onChange={(e) => updateSkill(skill.id, { castMs: parseInt(e.target.value) || 0 })}
                           disabled={readOnly}
                           className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                           title="吟唱时间(毫秒):按键后等多久再点鼠标"
@@ -1172,9 +1344,7 @@ function FarmConfig(props: FarmConfigProps) {
                           min={0}
                           step={50}
                           value={skill.rangePx ?? 0}
-                          onChange={(e) =>
-                            updateSkill(skill.id, { rangePx: parseInt(e.target.value) || 0 })
-                          }
+                          onChange={(e) => updateSkill(skill.id, { rangePx: parseInt(e.target.value) || 0 })}
                           disabled={readOnly}
                           className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                           title="施法距离(屏幕像素,以角色为圆心):落点离自身的距离(0=用默认300px)"
@@ -1197,9 +1367,8 @@ function FarmConfig(props: FarmConfigProps) {
           </div>
         )}
         <div className="text-[10px] text-text-muted mt-1">
-          施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、
-          施法距离处」,定点识别时点识别到的怪);状态施法 = 点击角色自身 + 按键;物品使用 =
-          只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选)。配好技能后,
+          施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、 施法距离处」,定点识别时点识别到的怪);状态施法
+          = 点击角色自身 + 按键;物品使用 = 只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选)。配好技能后,
           {castMode === 'smart'
             ? mode === 'fixed-detect'
               ? '定点识别 + 智能施法会在每个挂机点循环释放全部已配置技能,直到锁定的怪名消失,再重新识别'
@@ -1213,16 +1382,10 @@ function FarmConfig(props: FarmConfigProps) {
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            路径点{' '}
-            <span className="text-text-muted text-[11px]">
-              {castMode === 'custom' ? '(挂机点可选择释放的技能)' : ''}
-            </span>
+            路径点 <span className="text-text-muted text-[11px]">{castMode === 'custom' ? '(挂机点可选择释放的技能)' : ''}</span>
           </label>
           {!readOnly && (
-            <button
-              onClick={addWaypoint}
-              className="text-xs btn btn-secondary flex items-center gap-1"
-            >
+            <button onClick={addWaypoint} className="text-xs btn btn-secondary flex items-center gap-1">
               <Plus size={12} />
               添加点
             </button>
@@ -1240,9 +1403,7 @@ function FarmConfig(props: FarmConfigProps) {
           ).map((o) => (
             <label
               key={o.value}
-              className={`inline-flex items-center gap-1.5 text-xs ${
-                readOnly ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
-              }`}
+              className={`inline-flex items-center gap-1.5 text-xs ${readOnly ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
             >
               <input
                 type="radio"
@@ -1252,9 +1413,7 @@ function FarmConfig(props: FarmConfigProps) {
                 checked={castMode === o.value}
                 onChange={() => setCastMode(o.value)}
               />
-              <span className={castMode === o.value ? 'text-text-primary' : 'text-text-secondary'}>
-                {o.label}
-              </span>
+              <span className={castMode === o.value ? 'text-text-primary' : 'text-text-secondary'}>{o.label}</span>
             </label>
           ))}
           <span className="text-text-muted text-[10px]">
@@ -1267,9 +1426,7 @@ function FarmConfig(props: FarmConfigProps) {
         </div>
 
         {waypoints.length === 0 ? (
-          <div className="text-center py-6 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无路径点
-          </div>
+          <div className="text-center py-6 text-text-muted text-xs border border-dashed border-border-base rounded">暂无路径点</div>
         ) : (
           <div className="space-y-2">
             {waypoints.map((wp, i) => (
@@ -1324,10 +1481,7 @@ function FarmConfig(props: FarmConfigProps) {
                       >
                         <ArrowDown size={12} />
                       </button>
-                      <button
-                        onClick={() => removeWaypoint(wp.id)}
-                        className="text-accent-red/70 hover:text-accent-red"
-                      >
+                      <button onClick={() => removeWaypoint(wp.id)} className="text-accent-red/70 hover:text-accent-red">
                         <Trash2 size={12} />
                       </button>
                     </>
@@ -1339,9 +1493,7 @@ function FarmConfig(props: FarmConfigProps) {
                   <div className="flex items-center gap-x-1.5 gap-y-1 pl-7 flex-wrap">
                     <span className="text-text-muted text-[10px] shrink-0 mr-0.5">释放技能</span>
                     {skills.length === 0 ? (
-                      <span className="text-[10px] text-text-muted">
-                        先在上方"技能设置"里添加技能(不选 = 到点释放全部技能)
-                      </span>
+                      <span className="text-[10px] text-text-muted">先在上方"技能设置"里添加技能(不选 = 到点释放全部技能)</span>
                     ) : (
                       <>
                         {skills.map((s) => {
@@ -1351,9 +1503,7 @@ function FarmConfig(props: FarmConfigProps) {
                           return (
                             <label
                               key={s.id}
-                              title={`${s.key}${s.name ? ` ${s.name}` : ''}(${
-                                CAST_METHOD_OPTIONS.find((o) => o.value === method)?.label
-                              })`}
+                              title={`${s.key}${s.name ? ` ${s.name}` : ''}(${CAST_METHOD_OPTIONS.find((o) => o.value === method)?.label})`}
                               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
                                 unavailable
                                   ? 'border-border-base/50 text-text-muted/50 cursor-not-allowed'
@@ -1369,9 +1519,7 @@ function FarmConfig(props: FarmConfigProps) {
                                 checked={checked}
                                 onChange={(e) => {
                                   const cur = wp.skillIds ?? [];
-                                  const next = e.target.checked
-                                    ? [...cur, s.id]
-                                    : cur.filter((sid) => sid !== s.id);
+                                  const next = e.target.checked ? [...cur, s.id] : cur.filter((sid) => sid !== s.id);
                                   updateWaypoint(wp.id, 'skillIds', next);
                                 }}
                               />
@@ -1382,9 +1530,7 @@ function FarmConfig(props: FarmConfigProps) {
                             </label>
                           );
                         })}
-                        {(wp.skillIds ?? []).length === 0 && (
-                          <span className="text-[10px] text-text-muted">(不选 = 释放全部技能)</span>
-                        )}
+                        {(wp.skillIds ?? []).length === 0 && <span className="text-[10px] text-text-muted">(不选 = 释放全部技能)</span>}
                       </>
                     )}
                   </div>
@@ -1462,38 +1608,15 @@ function FarmConfig(props: FarmConfigProps) {
             </div>
           )}
 
-          {/* 怪名颜色(OCR / 找字用):4 种预设 + 自定义 */}
+          {/* 怪名颜色(OCR / 找字用):多选 tag + 自定义色值 */}
           <div>
             <label className="text-sm text-text-secondary mb-1.5 block">
-              怪名颜色 <span className="text-text-muted text-[11px]">(OCR / 找字按这个颜色识别)</span>
+              怪名颜色 <span className="text-text-muted text-[11px]">(可多选;OCR / 找字按这些颜色识别)</span>
             </label>
-            <div className="flex items-center gap-2">
-              <select
-                value={MONSTER_COLOR_OPTIONS.some((o) => o.value === mobNameColor) ? mobNameColor : '__custom__'}
-                onChange={(e) => setMobNameColor(e.target.value === '__custom__' ? '' : e.target.value)}
-                disabled={readOnly}
-                className={`w-28 bg-bg-input border border-border-base rounded px-2 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
-              >
-                {MONSTER_COLOR_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-                <option value="__custom__">自定义...</option>
-              </select>
-              {!MONSTER_COLOR_OPTIONS.some((o) => o.value === mobNameColor) && (
-                <input
-                  type="text"
-                  value={mobNameColor}
-                  onChange={(e) => setMobNameColor(e.target.value)}
-                  placeholder="e85048-111111"
-                  disabled={readOnly}
-                  className={`flex-1 bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
-                />
-              )}
-            </div>
+            <ColorTagPicker options={MONSTER_COLOR_OPTIONS} value={mobNameColors} onChange={setMobNameColors} readOnly={readOnly} />
             <div className="text-[10px] text-text-muted mt-1">
-              对应 core/constant-ocr/color.ts;不确定就先用「白色」,识别不到再换别的颜色
+              对应 core/constant-ocr/color.ts;多选时拼成一个颜色串(任一颜色命中即算),颜色越多识别越慢。
+              不确定就先选「白色」,识别不到再换/再加别的颜色
             </div>
           </div>
 
@@ -1536,13 +1659,197 @@ function FarmConfig(props: FarmConfigProps) {
         </div>
       </div>
 
+      {/* 物品拾取:挂机期间在打怪间隙捡地上的掉落物(不打断施法) */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          物品拾取 <span className="text-text-muted text-[11px]">(捡掉落物优先;正在打的怪也会先放下)</span>
+        </label>
+        <div className="space-y-2.5 bg-bg-input/40 border border-border-base rounded p-2.5">
+          <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={!!pickup.enabled}
+              onChange={(e) => setPickup((p) => ({ ...p, enabled: e.target.checked }))}
+            />
+            <span>开启物品拾取</span>
+            <span className="text-text-muted text-[10px]">识别到可拾取物品时左键点击拾取,直到物品名字消失</span>
+          </label>
+
+          {pickup.enabled && (
+            <>
+              {/* 拾取范围:默认 / 自定义 */}
+              <div>
+                <div className="flex items-center gap-3 mb-1">
+                  <span className="text-xs text-text-secondary">拾取范围</span>
+                  {(
+                    [
+                      { value: 'default', label: '默认' },
+                      { value: 'custom', label: '自定义' },
+                    ] as { value: 'default' | 'custom'; label: string }[]
+                  ).map((o) => (
+                    <label key={o.value} className="inline-flex items-center gap-1 text-[11px] cursor-pointer">
+                      <input
+                        type="radio"
+                        name="pickup-range-mode"
+                        className="accent-accent-cyan"
+                        disabled={readOnly}
+                        checked={(pickup.rangeMode ?? 'default') === o.value}
+                        onChange={() => setPickup((p) => ({ ...p, rangeMode: o.value }))}
+                      />
+                      <span className={(pickup.rangeMode ?? 'default') === o.value ? 'text-text-primary' : 'text-text-secondary'}>
+                        {o.label}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {(pickup.rangeMode ?? 'default') === 'custom' ? (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {(
+                      [
+                        ['x', 'X'],
+                        ['y', 'Y'],
+                        ['w', '宽 W'],
+                        ['h', '高 H'],
+                      ] as [keyof ScreenRect, string][]
+                    ).map(([key, label]) => (
+                      <div key={key} className="flex items-center gap-1">
+                        <span className="text-text-muted text-[10px] shrink-0">{label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={pickup.range?.[key] ?? 0}
+                          onChange={(e) => setPickupRange(key, Math.max(0, parseInt(e.target.value) || 0))}
+                          disabled={readOnly}
+                          className={`w-20 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-text-muted">默认 = 整个游戏画面去掉上下 UI 边距(顶部头像/血条、底部技能栏)</div>
+                )}
+              </div>
+
+              {/* 拾取规则:每条 = 颜色(可多选)+ 名称(可空),规则之间是「或」 */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-xs text-text-secondary">
+                    拾取规则{' '}
+                    <span className="text-text-muted text-[10px]">
+                      (每条规则 = 颜色 + 名称,满足任一条就捡;名称留空 = 这个颜色的所有物品)
+                    </span>
+                  </div>
+                  {!readOnly && (
+                    <button onClick={addPickupRule} className="text-xs btn btn-secondary flex items-center gap-1">
+                      <Plus size={12} />
+                      添加规则
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  {pickup.rules.map((rule, i) => (
+                    <div key={i} className="bg-bg-input/60 border border-border-base rounded p-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-text-muted">规则 {i + 1}</span>
+                        {!readOnly && pickup.rules.length > 1 && (
+                          <button
+                            onClick={() => removePickupRule(i)}
+                            title="删除这条规则"
+                            className="text-text-muted hover:text-accent-red"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div>
+                        <div className="text-[11px] text-text-secondary mb-1">
+                          颜色 <span className="text-text-muted text-[10px]">(可多选;不选 = 不限颜色)</span>
+                        </div>
+                        <ColorTagPicker
+                          options={PICKUP_COLOR_OPTIONS}
+                          value={rule.colors}
+                          onChange={(v) => updatePickupRule(i, { colors: v })}
+                          readOnly={readOnly}
+                        />
+                      </div>
+
+                      <div>
+                        <div className="text-[11px] text-text-secondary mb-1">
+                          物品名称 <span className="text-text-muted text-[10px]">(可选,逗号分隔)</span>
+                        </div>
+                        <input
+                          type="text"
+                          value={rule.nameKeywords}
+                          onChange={(e) => updatePickupRule(i, { nameKeywords: e.target.value })}
+                          placeholder="留空 = 这个颜色的所有物品都要;填了 = 只捡这些名字"
+                          disabled={readOnly}
+                          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="text-[10px] text-text-muted mt-1">
+                  颜色值对应 core/constant-ocr/color.ts 的品质色。名称填了就用「找字」定位(依赖字库收录这些字),
+                  留空就用「找色」只认颜色。
+                  <br />
+                  例:要捡「所有紫色装备 + 蓝色装备里只捡无极剑」→ 配两条规则:
+                  规则1 只勾紫色、名称留空;规则2 只勾蓝色、名称填「无极剑」
+                </div>
+              </div>
+
+              {/* 点击偏移 */}
+              <div>
+                <div className="text-xs text-text-secondary mb-1">
+                  点击偏移 <span className="text-text-muted text-[10px]">(像素;默认 0,0 = 点在物品名上)</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {(['x', 'y'] as const).map((key) => (
+                    <div key={key} className="flex items-center gap-1">
+                      <span className="text-text-muted text-[10px] shrink-0">{key.toUpperCase()}</span>
+                      <input
+                        type="number"
+                        value={pickup.clickOffset[key] ?? 0}
+                        onChange={(e) =>
+                          setPickup((p) => ({
+                            ...p,
+                            clickOffset: { ...p.clickOffset, [key]: parseInt(e.target.value) || 0 },
+                          }))
+                        }
+                        disabled={readOnly}
+                        className={`w-20 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[10px] text-text-muted mt-1">点物品名字捡不动时再调(和「怪名点击偏移」同理)</div>
+              </div>
+
+              {pickupRuleEmpty && (
+                <div className="text-[10px] text-accent-yellow/80">
+                  所有规则都既没选颜色也没填名称 = 物品拾取不生效,请至少给一条规则配点东西
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="text-[10px] text-text-muted">
+            拾取优先:定点识别里每轮先捡一次,正在打的怪也会先放下(捡东西要走位,会丢掉锁定,
+            下一轮重新识别);走在路径点之间也会捡。一轮把能捡的都捡完再继续下一个动作;
+            不打断正在释放的那一个技能;单件点 2 次仍没捡起来就跳过这件,不会卡死
+          </div>
+        </div>
+      </div>
+
       {/* 看门狗:挂机期间并发执行的检查(四项全不勾 = worker 不启动看门狗,不产生额外开销) */}
       <div>
         <label className="text-sm text-text-secondary mb-1.5 block">
-          看门狗{' '}
-          <span className="text-text-muted text-[11px]">
-            (组队申请 / 神医验证码 / 生命回复 / 角色停级;全不勾 = 不启动)
-          </span>
+          看门狗 <span className="text-text-muted text-[11px]">(组队申请 / 神医验证码 / 生命回复 / 角色停级;全不勾 = 不启动)</span>
         </label>
         <div className="space-y-2.5 bg-bg-input/40 border border-border-base rounded p-2.5">
           {/* 组队申请:勾选后再选 同意 / 拒绝 */}
@@ -1556,9 +1863,7 @@ function FarmConfig(props: FarmConfigProps) {
                 onChange={(e) =>
                   setWatchdog((w) => ({
                     ...w,
-                    teamInvite: e.target.checked
-                      ? { action: w.teamInvite?.action ?? 'reject' }
-                      : undefined,
+                    teamInvite: e.target.checked ? { action: w.teamInvite?.action ?? 'reject' } : undefined,
                   }))
                 }
               />
@@ -1572,29 +1877,16 @@ function FarmConfig(props: FarmConfigProps) {
                     { value: 'reject', label: '拒绝' },
                   ] as { value: TeamInviteAction; label: string }[]
                 ).map((o) => (
-                  <label
-                    key={o.value}
-                    className="inline-flex items-center gap-1 text-[11px] cursor-pointer"
-                  >
+                  <label key={o.value} className="inline-flex items-center gap-1 text-[11px] cursor-pointer">
                     <input
                       type="radio"
                       name="team-invite-action"
                       className="accent-accent-cyan"
                       disabled={readOnly}
                       checked={watchdog.teamInvite?.action === o.value}
-                      onChange={() =>
-                        setWatchdog((w) => ({ ...w, teamInvite: { action: o.value } }))
-                      }
+                      onChange={() => setWatchdog((w) => ({ ...w, teamInvite: { action: o.value } }))}
                     />
-                    <span
-                      className={
-                        watchdog.teamInvite?.action === o.value
-                          ? 'text-text-primary'
-                          : 'text-text-secondary'
-                      }
-                    >
-                      {o.label}
-                    </span>
+                    <span className={watchdog.teamInvite?.action === o.value ? 'text-text-primary' : 'text-text-secondary'}>{o.label}</span>
                   </label>
                 ))}
                 <span className="text-text-muted text-[10px]">收到邀请弹框时自动点击</span>
@@ -1612,9 +1904,7 @@ function FarmConfig(props: FarmConfigProps) {
               onChange={(e) => setWatchdog((w) => ({ ...w, verifyCode: e.target.checked }))}
             />
             <span>神医验证码验证</span>
-            <span className="text-text-muted text-[10px]">
-              弹出「神医问题来啦」时自动识别作答(需在设置里配图鉴账号)
-            </span>
+            <span className="text-text-muted text-[10px]">弹出「神医问题来啦」时自动识别作答(需在设置里配图鉴账号)</span>
           </label>
 
           {/* 生命回复:药品来自「技能设置」里「物品使用」的条目 */}
@@ -1668,9 +1958,7 @@ function FarmConfig(props: FarmConfigProps) {
                                   return {
                                     ...w,
                                     autoHeal: {
-                                      itemIds: e.target.checked
-                                        ? [...cur, s.id]
-                                        : cur.filter((x) => x !== s.id),
+                                      itemIds: e.target.checked ? [...cur, s.id] : cur.filter((x) => x !== s.id),
                                     },
                                   };
                                 })
@@ -1684,14 +1972,9 @@ function FarmConfig(props: FarmConfigProps) {
                         );
                       })}
                     </div>
-                    {autoHealIds.length === 0 && (
-                      <div className="text-[10px] text-accent-yellow/80">
-                        未选择药品 = 生命回复不生效
-                      </div>
-                    )}
+                    {autoHealIds.length === 0 && <div className="text-[10px] text-accent-yellow/80">未选择药品 = 生命回复不生效</div>}
                     <div className="text-[10px] text-text-muted">
-                      按勾选顺序依次尝试,使用第一个 CD 已好的药品(CD 用技能设置里的「间隔」,
-                      与打怪循环共用同一份冷却记录)
+                      按勾选顺序依次尝试,使用第一个 CD 已好的药品(CD 用技能设置里的「间隔」, 与打怪循环共用同一份冷却记录)
                     </div>
                   </>
                 )}
@@ -1712,9 +1995,7 @@ function FarmConfig(props: FarmConfigProps) {
             <span className="text-text-muted text-[10px]">经验条快满时停止自动打怪,避免角色升级</span>
           </label>
 
-          <div className="text-[10px] text-text-muted">
-            看门狗与打怪循环并发运行;四项全部不勾选时 worker 不会启动看门狗
-          </div>
+          <div className="text-[10px] text-text-muted">看门狗与打怪循环并发运行;四项全部不勾选时 worker 不会启动看门狗</div>
         </div>
       </div>
 
@@ -1749,17 +2030,7 @@ interface DefaultSkillConfigProps {
 }
 
 function DefaultSkillConfig(props: DefaultSkillConfigProps) {
-  const {
-    readOnly = false,
-    steps,
-    setSteps,
-    loopCount,
-    setLoopCount,
-    loopIntervalMs,
-    setLoopIntervalMs,
-    note,
-    setNote,
-  } = props;
+  const { readOnly = false, steps, setSteps, loopCount, setLoopCount, loopIntervalMs, setLoopIntervalMs, note, setNote } = props;
 
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
 
@@ -1798,10 +2069,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
   };
 
   // 单轮估算:每个 step 的 (holdMs + intervalMs)
-  const totalMsPerLoop = steps.reduce(
-    (sum, s) => sum + (s.holdMs ?? 50) + (s.enabled === false ? 0 : s.intervalMs),
-    0,
-  );
+  const totalMsPerLoop = steps.reduce((sum, s) => sum + (s.holdMs ?? 50) + (s.enabled === false ? 0 : s.intervalMs), 0);
 
   return (
     <div className="space-y-5">
@@ -1813,8 +2081,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
         </div>
         <div>按数组顺序执行,跑完一轮后等待轮间间隔再开始下一轮。可临时禁用某步骤而不删除。</div>
         <div className="text-text-muted">
-          支持 <span className="font-mono text-accent-cyan">F1-F12</span>、
-          <span className="font-mono text-accent-cyan"> Alt+F1-F12</span>、
+          支持 <span className="font-mono text-accent-cyan">F1-F12</span>、<span className="font-mono text-accent-cyan"> Alt+F1-F12</span>、
           <span className="font-mono text-accent-cyan"> Shift+F1-F10</span>
         </div>
       </div>
@@ -1844,9 +2111,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
               return (
                 <div
                   key={step.id}
-                  className={`flex items-center gap-1.5 bg-bg-input p-1.5 rounded ${
-                    step.enabled === false ? 'opacity-50' : ''
-                  }`}
+                  className={`flex items-center gap-1.5 bg-bg-input p-1.5 rounded ${step.enabled === false ? 'opacity-50' : ''}`}
                 >
                   <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
                   {!readOnly && (
@@ -1884,9 +2149,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
                     min={0}
                     step={50}
                     value={step.intervalMs}
-                    onChange={(e) =>
-                      updateStep(step.id, { intervalMs: parseInt(e.target.value) || 0 })
-                    }
+                    onChange={(e) => updateStep(step.id, { intervalMs: parseInt(e.target.value) || 0 })}
                     disabled={readOnly}
                     className={`w-20 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                     title="抬起主键后到下一次按键的间隔(毫秒)"
@@ -1898,9 +2161,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
                     min={10}
                     step={10}
                     value={step.holdMs ?? 50}
-                    onChange={(e) =>
-                      updateStep(step.id, { holdMs: parseInt(e.target.value) || 50 })
-                    }
+                    onChange={(e) => updateStep(step.id, { holdMs: parseInt(e.target.value) || 50 })}
                     disabled={readOnly}
                     className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                     title="按键按住的时长(毫秒,默认 50ms)"
@@ -1932,11 +2193,7 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
                       >
                         <ArrowDown size={12} />
                       </button>
-                      <button
-                        onClick={() => removeStep(step.id)}
-                        className="text-accent-red/70 hover:text-accent-red"
-                        title="删除该步骤"
-                      >
+                      <button onClick={() => removeStep(step.id)} className="text-accent-red/70 hover:text-accent-red" title="删除该步骤">
                         <Trash2 size={12} />
                       </button>
                     </>
@@ -1983,12 +2240,9 @@ function DefaultSkillConfig(props: DefaultSkillConfigProps) {
       {steps.length > 0 && (
         <div className="text-[11px] text-text-muted bg-bg-input/50 rounded px-3 py-1.5">
           估算单轮时长:
-          <span className="font-mono text-accent-cyan ml-1">
-            {(totalMsPerLoop / 1000).toFixed(2)}s
-          </span>
+          <span className="font-mono text-accent-cyan ml-1">{(totalMsPerLoop / 1000).toFixed(2)}s</span>
           <span className="ml-2">
-            ({steps.length} 步 × 平均{' '}
-            {steps.length > 0 ? Math.round(totalMsPerLoop / steps.length) : 0}ms)
+            ({steps.length} 步 × 平均 {steps.length > 0 ? Math.round(totalMsPerLoop / steps.length) : 0}ms)
           </span>
         </div>
       )}

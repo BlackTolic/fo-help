@@ -116,9 +116,7 @@ export class MovementController {
 
         // 退出判断:坐标超过 noMoveTimeoutMs 没有变化,视为卡住
         if (Date.now() - lastMovedAt >= noMoveTimeoutMs) {
-          log.warn(
-            `移动到 (${target.x}, ${target.y}) 失败:${Math.round(noMoveTimeoutMs / 60000)} 分钟没有移动`,
-          );
+          log.warn(`移动到 (${target.x}, ${target.y}) 失败:${Math.round(noMoveTimeoutMs / 60000)} 分钟没有移动`);
           return false;
         }
       }
@@ -144,11 +142,7 @@ export class MovementController {
    *   - input.moveMouse(目标在屏幕上的位置) + input.click('left')
    *   - 或按方向键:keyDown → holdMs → keyUp
    */
-  protected async stepTowards(
-    current: MapPosition,
-    target: MapPosition,
-    direction: Direction8,
-  ): Promise<void> {
+  protected async stepTowards(current: MapPosition, target: MapPosition, direction: Direction8): Promise<void> {
     void this.input;
     log.debug('MovementController.stepTowards 待实现');
   }
@@ -178,11 +172,7 @@ const DIR_VECTOR: Record<Direction8, { x: number; y: number }> = {
 
 // 通过点击八个方向进行移动的控制器实现
 export class MovementControllerByDirection8 extends MovementController {
-  protected async stepTowards(
-    _current: MapPosition,
-    _target: MapPosition,
-    direction: Direction8,
-  ): Promise<void> {
+  protected async stepTowards(_current: MapPosition, _target: MapPosition, direction: Direction8): Promise<void> {
     const v = DIR_VECTOR[direction];
     const len = Math.hypot(v.x, v.y) || 1;
     const clickPos = {
@@ -362,17 +352,16 @@ export class MovementControllerByPrecisePoint extends MovementController {
     await this.input.delay(this.pressDelayMs);
     await this.input.click('left');
 
-    const { dist } = this.deltaTo(current, target);
+    // const { dist } = this.deltaTo(current, target);
+
     log.info(
-      `精确点移动: 当前坐标 (${current.x},${current.y})，目标坐标 (${target.x},${target.y})`,
+      `精确点移动: 当前坐标 (${current.x},${current.y})，目标坐标 (${target.x},${target.y},${clamped ? '(超出画面,已裁到边界)' : ''})`,
     );
-    log.debug(
-      `精确点移动: 落点 (${point.x},${point.y}) 距目标 ${dist.toFixed(1)} 单位` +
-        (clamped ? '(超出画面,已裁到边界)' : '') +
-        (this.stepGain.x !== 1 || this.stepGain.y !== 1
-          ? ` 步长比例=(${this.stepGain.x},${this.stepGain.y})`
-          : ''),
-    );
+    // log.debug(
+    //   `精确点移动: 落点 (${point.x},${point.y}) 距目标 ${dist.toFixed(1)} 单位` +
+    //     (clamped ? '(超出画面,已裁到边界)' : '') +
+    //     (this.stepGain.x !== 1 || this.stepGain.y !== 1 ? ` 步长比例=(${this.stepGain.x},${this.stepGain.y})` : ''),
+    // );
   }
 
   /** 每个路径点(每次 moveTo)重新开始:过冲自适应只在本次 moveTo 内累计 */
@@ -410,9 +399,7 @@ export class MovementControllerByPrecisePoint extends MovementController {
           );
           return;
         }
-        log.warn(
-          `精确点移动:${label}方向过冲,步长比例减半到 ${this.stepGain[name]}(比例可能估大了)`,
-        );
+        log.warn(`精确点移动:${label}方向过冲,步长比例减半到 ${this.stepGain[name]}(比例可能估大了)`);
       }
       this.lastSign[name] = sign;
     }

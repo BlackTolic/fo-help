@@ -22,7 +22,10 @@ import type { Point, Rect } from '../platform/vision/IVisionProvider';
 export interface MonsterNameDetectorConfig {
   /** OCR / 找字范围(客户区相对坐标,见 shared/types.ts 的 ScreenRect) */
   roi: Rect;
-  /** 怪名颜色(大漠颜色格式,如 'e85048-111111';可选值见 core/constant-ocr/color.ts) */
+  /**
+   * 怪名颜色(大漠颜色格式,如 'e85048-111111';可选值见 core/constant-ocr/color.ts)。
+   * UI 上可多选,多色时是 '|' 拼成的一个颜色串(找一个就算命中)
+   */
   color: string;
   /** 相似度 0-1 */
   similarity: number;
@@ -118,6 +121,24 @@ export class MonsterNameDetector {
 
   /** OCR 指定区域的文字 */
   private ocrRoi(roi: Rect, color: string): string {
+    const text = this.ocrOnce(roi, color);
+    if (text) return text;
+    // 怪名颜色可以多选,多选时 color 是用 '|' 拼的。
+    // 大漠的找字支持多色,但 Ocr 是否支持多色没实测过:拼串读不到东西时逐色再试一遍。
+    // 单色配置(含所有旧配置)colors.length ≤ 1,走不到这里,不会有额外开销。
+    const colors = color
+      .split('|')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    if (colors.length <= 1) return text;
+    for (const c of colors) {
+      const one = this.ocrOnce(roi, c);
+      if (one) return one;
+    }
+    return '';
+  }
+
+  private ocrOnce(roi: Rect, color: string): string {
     return String(dmApi.ocr(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, color, this.cfg.similarity) || '').trim();
   }
 
