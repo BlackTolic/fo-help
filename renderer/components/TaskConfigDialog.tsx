@@ -118,10 +118,7 @@ const DEFAULT_PICKUP: PickupUiState = {
  *   一条都没有 = 给一条空规则,方便直接开始填
  */
 function toPickupRulesUi(pickup?: FarmPickupConfig): PickupRuleUi[] {
-  const raw =
-    pickup?.rules && pickup.rules.length > 0
-      ? pickup.rules
-      : [{ colors: pickup?.colors, nameKeywords: pickup?.nameKeywords }];
+  const raw = pickup?.rules && pickup.rules.length > 0 ? pickup.rules : [{ colors: pickup?.colors, nameKeywords: pickup?.nameKeywords }];
   const rules = raw.map((r) => ({
     colors: (r?.colors ?? []).map((c) => String(c ?? '').trim()).filter(Boolean),
     nameKeywords: (r?.nameKeywords ?? []).join(','),
@@ -250,7 +247,7 @@ export function TaskConfigDialog({
   const [ocrRange, setOcrRange] = useState<ScreenRect>({ x: 0, y: 0, w: 0, h: 0 });
   const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
-  const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
+  const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(400);
   // 看门狗:组队申请 / 神医验证码 / 生命回复 / 角色停级;全空 = worker 不启动看门狗
   const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
   // 物品拾取:打怪间隙捡掉落物(范围/颜色/名称;关掉 = worker 不产生任何扫描开销)
@@ -1048,8 +1045,7 @@ function FarmConfig(props: FarmConfigProps) {
   };
 
   /** 改自定义拾取范围的某一项 */
-  const setPickupRange = (key: keyof ScreenRect, v: number) =>
-    setPickup((p) => ({ ...p, range: { ...p.range, [key]: v } }));
+  const setPickupRange = (key: keyof ScreenRect, v: number) => setPickup((p) => ({ ...p, range: { ...p.range, [key]: v } }));
 
   // ---- 拾取规则编辑(每条 = 颜色 + 名称;规则之间是「或」)----
   const addPickupRule = () => {
@@ -1795,11 +1791,9 @@ function FarmConfig(props: FarmConfigProps) {
                 </div>
 
                 <div className="text-[10px] text-text-muted mt-1">
-                  颜色值对应 core/constant-ocr/color.ts 的品质色。名称填了就用「找字」定位(依赖字库收录这些字),
-                  留空就用「找色」只认颜色。
+                  颜色值对应 core/constant-ocr/color.ts 的品质色。名称填了就用「找字」定位(依赖字库收录这些字), 留空就用「找色」只认颜色。
                   <br />
-                  例:要捡「所有紫色装备 + 蓝色装备里只捡无极剑」→ 配两条规则:
-                  规则1 只勾紫色、名称留空;规则2 只勾蓝色、名称填「无极剑」
+                  例:要捡「所有紫色装备 + 蓝色装备里只捡无极剑」→ 配两条规则: 规则1 只勾紫色、名称留空;规则2 只勾蓝色、名称填「无极剑」
                 </div>
               </div>
 
@@ -1840,8 +1834,8 @@ function FarmConfig(props: FarmConfigProps) {
 
           <div className="text-[10px] text-text-muted">
             拾取优先:定点识别里每轮先捡一次,正在打的怪也会先放下(捡东西要走位,会丢掉锁定,
-            下一轮重新识别);走在路径点之间也会捡。一轮把能捡的都捡完再继续下一个动作;
-            不打断正在释放的那一个技能;单件点 2 次仍没捡起来就跳过这件,不会卡死
+            下一轮重新识别);走在路径点之间也会捡。一轮把能捡的都捡完再继续下一个动作; 不打断正在释放的那一个技能;单件点 2
+            次仍没捡起来就跳过这件,不会卡死
           </div>
         </div>
       </div>

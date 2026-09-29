@@ -8,13 +8,14 @@
 //   1. MovementControllerByDirection8  — 点击「画面中心 + 八方向 × 固定距离」的地面
 //   2. MovementControllerByRandom      — 画面中心外的圆上随机落点,按住左键持续走
 //   3. MovementControllerByPrecisePoint — MapCalibration 把目标地图坐标换算成屏幕点后单击
-//      (点地移动的游戏用这个:落点就是目标坐标对应的屏幕位置,能精确停在目标坐标上)
+//      (点地移动的游戏用这个:落点就是目标坐标对应的屏幕位置,能精确停在目标坐标上;
+//       落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects)
 // 到达/退出时的收尾(如释放按住的鼠标键)用 onArrived()/onMoveEnd() 钩子,不要覆写 moveTo。
 //
 // 坐标系假设:x 向东递增,y 向南递增(2D 游戏惯例;不对就改 directionTo)
 
 import type { IInputProvider } from '../platform/input/IInputProvider';
-import type { Point } from '../platform/vision/IVisionProvider';
+import type { Point, Rect } from '../platform/vision/IVisionProvider';
 import type { MapCoordReader } from '../perception/MapCoordReader';
 import type { MapPosition } from '../perception/types';
 import { MapCalibration } from './MapCalibration';
@@ -90,7 +91,7 @@ export class MovementController {
             log.warn(`当前在「${current.map}」,目标在「${target.map}」,需要先过图`);
             return false;
           }
-
+          // 到达判断:与目标的曼哈顿距离 ≤ arriveTolerance,视为到达
           const { dist } = this.deltaTo(current, target);
           if (dist <= arriveTolerance) {
             log.info(`已到达 (${target.x}, ${target.y})`);
@@ -105,18 +106,15 @@ export class MovementController {
           }
 
           const dir = this.directionTo(current, target);
-          // log.debug(
-          //   `移动中: (${current.x},${current.y}) → (${target.x},${target.y}) 方向=${dir} 距离=${dist.toFixed(1)}`,
-          // );
-          // 具体怎么走由子类的 stepTowards 决定(见文件顶部三种实现的说明);
-          // 方向量化后的 dir 只有「八方向点地」那类实现用得上,精确点/随机圆点各自算连续角
+          // 朝目标走一小步
           await this.stepTowards(current, target, dir);
+          // 移动过程中鼠标多久点击一次,给游戏反应时间
           await sleep(stepIntervalMs);
         }
 
         // 退出判断:坐标超过 noMoveTimeoutMs 没有变化,视为卡住
         if (Date.now() - lastMovedAt >= noMoveTimeoutMs) {
-          log.warn(`移动到 (${target.x}, ${target.y}) 失败:${Math.round(noMoveTimeoutMs / 60000)} 分钟没有移动`);
+          log.warn(`移动到 (${target.x}, ${target.y}) 失败:${Math.round(Date.now() - lastMovedAt)} ms没有移动`);
           return false;
         }
       }
@@ -280,8 +278,9 @@ export class MovementControllerByRandom extends MovementController {
  * 每步:
  *   1. 读当前地图坐标(基类循环做)→ 用 MapCalibration 把目标地图坐标换算成屏幕点
  *   2. 落点超出游戏画面时,沿「角色 → 目标」方向裁到画面内(方向不变,只是近了点)
- *   3. 鼠标移到落点单击左键:游戏会命令角色走到「该落点对应的地图坐标」
- *   4. 走一段后再读坐标、重算落点,反复逼近,直到进入 arriveTolerance
+ *   3. 落点落在要避开的 UI 区域(小地图/聊天框/技能栏,见 blockRects)里时,沿同一方向缩到区域外
+ *   4. 鼠标移到落点单击左键:游戏会命令角色走到「该落点对应的地图坐标」
+ *   5. 走一段后再读坐标、重算落点,反复逼近,直到进入 arriveTolerance
  *
  * 和 MovementControllerByRandom 的区别:
  *   - 随机圆点法只保证方向对,走多远由按住时长决定,停在哪全看运气;
@@ -301,12 +300,59 @@ export class MovementControllerByRandom extends MovementController {
 export interface PrecisePointConfig extends MapCalibrationConfig {
   /** 鼠标就位后多久点击(ms,默认 300:同上一步点击的间隔,给游戏反应时间) */
   pressDelayMs?: number;
+  /**
+   * 要避开的 UI 区域(游戏画面坐标,和 gameRect 同一坐标系):落点进了区域就沿
+   * 「角色 → 落点」方向缩到区域外(见 avoidBlockRects)。不传 = 不避让。
+   * 区域是按某个分辨率量出来的,换分辨率时由调用方换算(游戏 UI 贴边固定尺寸)。
+   */
+  blockRects?: Rect[];
 }
 
 /** 单轴步长比例的下限:低于它说明比例错得离谱,本点放弃(见 adaptGain) */
 const GAIN_FLOOR = 1 / 32;
 /** 判断坐标差方向时的零阈值(坐标是整数,这个值只用来排除浮点 0) */
 const SIGN_EPS = 1e-6;
+/** 落点离 UI 区域边界至少留几像素(区域按这个值外扩,避免贴着边界点到 UI 边线) */
+const BLOCK_MARGIN_PX = 4;
+/** 判断「线段是否与矩形相交」时,该轴位移小到这个值就当作平行 */
+const PARALLEL_EPS = 1e-9;
+
+/** 点是否在矩形内(含边界) */
+function containsPoint(r: Rect, p: Point): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+/** 矩形四边各外扩 px 像素(负值 = 内缩) */
+function inflateRect(r: Rect, px: number): Rect {
+  return { x: r.x - px, y: r.y - px, w: r.w + 2 * px, h: r.h + 2 * px };
+}
+
+/**
+ * 线段(从 self 出发、偏移 dx/dy)与矩形相交时,返回「进入矩形」的参数 t ∈ [0,1];不相交返回 null。
+ * 用 slab 法:把矩形在 x/y 两轴上各投影成一段参数区间 [t1,t2],两段区间取交集,空集 = 不相交。
+ */
+function rayRectEnterT(self: Point, dx: number, dy: number, r: Rect): number | null {
+  let enter = 0;
+  let exit = 1;
+  const axes = [
+    { origin: self.x, delta: dx, min: r.x, max: r.x + r.w },
+    { origin: self.y, delta: dy, min: r.y, max: r.y + r.h },
+  ];
+  for (const { origin, delta, min, max } of axes) {
+    if (Math.abs(delta) < PARALLEL_EPS) {
+      // 该轴平行:静止坐标落在区间外,整条线段都碰不到这个矩形
+      if (origin < min || origin > max) return null;
+      continue;
+    }
+    const t1 = (min - origin) / delta;
+    const t2 = (max - origin) / delta;
+    enter = Math.max(enter, Math.min(t1, t2));
+    exit = Math.min(exit, Math.max(t1, t2));
+    if (enter > exit) return null;
+  }
+  if (exit < 0 || enter > 1) return null; // 矩形整段在角色背后 / 整段在落点之外
+  return Math.max(enter, 0);
+}
 
 export class MovementControllerByPrecisePoint extends MovementController {
   private readonly calib: MapCalibration;
@@ -318,11 +364,14 @@ export class MovementControllerByPrecisePoint extends MovementController {
   private readonly lastSign = { x: 0, y: 0 };
   /** 比例错得离谱、自适应也救不回来:不再点击,让基类按"长时间没移动"超时收尾 */
   private gaveUp = false;
+  /** 要避开的 UI 区域:已按 BLOCK_MARGIN_PX 外扩(落点离区域边界至少留这么多像素) */
+  private readonly blockRects: Rect[];
 
   constructor(input: IInputProvider, coords: MapCoordReader, config: PrecisePointConfig = {}) {
     super(input, coords);
     this.calib = new MapCalibration(config);
     this.pressDelayMs = config.pressDelayMs ?? 300; // 默认 300ms,同上一步点击的间隔,给游戏反应时间
+    this.blockRects = (config.blockRects ?? []).map((r) => inflateRect(r, BLOCK_MARGIN_PX));
   }
 
   /** 地图坐标 → 屏幕落点(不含画面裁剪、不含过冲自适应;调试/校验标定用) */
@@ -343,10 +392,12 @@ export class MovementControllerByPrecisePoint extends MovementController {
     const { selfScreen } = this.calib;
     const aim = this.calib.mapToScreen(target, current);
     // 按自适应比例缩短落点距离(绕角色缩放,方向不变)
-    const { point, clamped } = this.calib.clampToView({
+    const { point: inView, clamped } = this.calib.clampToView({
       x: selfScreen.x + (aim.x - selfScreen.x) * this.stepGain.x,
       y: selfScreen.y + (aim.y - selfScreen.y) * this.stepGain.y,
     });
+    // 落点压在 UI 上时,再沿同一方向缩到 UI 之外(否则这一步点的是 UI,角色不动)
+    const { point, blocked } = this.avoidBlockRects(inView);
 
     await this.input.moveMouse(point, { kind: 'instant' });
     await this.input.delay(this.pressDelayMs);
@@ -355,13 +406,50 @@ export class MovementControllerByPrecisePoint extends MovementController {
     // const { dist } = this.deltaTo(current, target);
 
     log.info(
-      `精确点移动: 当前坐标 (${current.x},${current.y})，目标坐标 (${target.x},${target.y},${clamped ? '(超出画面,已裁到边界)' : ''})`,
+      `精确点移动: 当前坐标 (${current.x},${current.y}),目标坐标 (${target.x},${target.y}),` +
+        `落点 (${point.x},${point.y})` +
+        (clamped ? '(超出画面,已裁到边界)' : '') +
+        (blocked ? '(落点在 UI 区域,已裁到区域外)' : ''),
     );
     // log.debug(
     //   `精确点移动: 落点 (${point.x},${point.y}) 距目标 ${dist.toFixed(1)} 单位` +
     //     (clamped ? '(超出画面,已裁到边界)' : '') +
     //     (this.stepGain.x !== 1 || this.stepGain.y !== 1 ? ` 步长比例=(${this.stepGain.x},${this.stepGain.y})` : ''),
     // );
+  }
+
+  /**
+   * 落点落在要避开的 UI 区域(小地图/聊天框/技能栏,见 blockRects)里时,
+   * 沿「角色 → 落点」方向把它缩回区域外(方向不变,只缩短这一步)。
+   *
+   * 为什么不能就这么点下去:这些区域点上去等于点 UI,角色根本不动;朝该方向的每一步都白点,
+   * 坐标长时间不变,基类会按「卡住」超时退出。缩回区域外仍然朝目标方向走了一段,下一步重算落点继续逼近。
+   *
+   * 缩到哪:连线上第一个进入的区域决定上限 —— 取所有区域「进入参数」的最小值,
+   * 缩回点就在所有区域之前(区域已按 BLOCK_MARGIN_PX 外扩,所以离区域边界还留着这个余量)。
+   *
+   * @returns blocked=true 表示落点被 UI 区域挡下、这一步的距离被缩短过
+   */
+  private avoidBlockRects(point: Point): { point: Point; blocked: boolean } {
+    const { selfScreen } = this.calib;
+    const dx = point.x - selfScreen.x;
+    const dy = point.y - selfScreen.y;
+    const len = Math.hypot(dx, dy);
+    if (len < PARALLEL_EPS) return { point, blocked: false };
+
+    let t = 1;
+    for (const rect of this.blockRects) {
+      // 角色脚下本身就在这个区域里(理论上不该发生):沿本方向无从规避,交给下一步重算
+      if (containsPoint(rect, selfScreen)) continue;
+      const enter = rayRectEnterT(selfScreen, dx, dy, rect);
+      if (enter !== null) t = Math.min(t, enter);
+    }
+    if (t >= 1) return { point, blocked: false };
+
+    return {
+      point: { x: Math.round(selfScreen.x + dx * t), y: Math.round(selfScreen.y + dy * t) },
+      blocked: true,
+    };
   }
 
   /** 每个路径点(每次 moveTo)重新开始:过冲自适应只在本次 moveTo 内累计 */

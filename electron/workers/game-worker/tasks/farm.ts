@@ -275,6 +275,20 @@ const CLICK_MARGIN = 4;
  */
 const VIEW_UI_MARGIN = { top: 100, bottom: 70, left: 10, right: 10 };
 
+/**
+ * 精确点移动要避开的游戏 UI 区域(画面坐标,1280x800 实测;宽高即需求给的宽高)
+ * 落点进了这些区域等于点 UI,角色不动,所以移动控制器会沿「角色 → 落点」方向缩到区域外。
+ * 上/下两边的边距(VIEW_UI_MARGIN)只裁一条通栏;这里补的是左右两角伸进画面里的那几块。
+ * 换分辨率:游戏 UI 贴边且尺寸不变,贴着右边/下边的区域跟着那条边平移(见 blockRectsFor)。
+ */
+const BLOCK_RECTS_1280: ScreenRect[] = [
+  { x: 1, y: 1, w: 178, h: 186 }, // 左上:小地图/头像
+  { x: 406, y: 6, w: 440, h: 98 }, // 顶部中间:状态/目标条
+  { x: 1097, y: 1, w: 183, h: 190 }, // 右上:小地图
+  { x: 1, y: 596, w: 112, h: 196 }, // 左下:聊天框
+  { x: 890, y: 730, w: 387, h: 69 }, // 右下:技能栏/功能按钮
+];
+
 /** 结束条件(全局旋钮) */
 const END_CONDITIONS: { maxLoops: number | null } = {
   /** 跑满多少圈结束;null = 不限,只由 stop 命令 / 角色死亡结束 */
@@ -391,6 +405,25 @@ function defaultPickupRange(view: ViewGeometry): Rect {
     w: Math.max(0, view.roi.w - m.left - m.right),
     h: Math.max(0, view.roi.h - m.top - m.bottom),
   };
+}
+
+/**
+ * 把 BLOCK_RECTS_1280(1280x800 实测)换算到当前画面:尺寸不变,贴着右/下边的跟着那条边平移。
+ * 容差 8px 是量出来的余量:技能栏右边界量到 1277(离右边 3px)、聊天框下边界量到 792(离下边 8px),
+ * 都是贴着窗口边缘的那几像素,窗口变大时它们跟着边缘走。左/上边的区域本来就贴着 0/1,不用平移。
+ * 1600x900 未实测,是按贴边规则推的;量到更准的位置后直接改 BLOCK_RECTS_1280 即可。
+ */
+function blockRectsFor(view: ViewGeometry): Rect[] {
+  const dx = view.roi.w - 1280;
+  const dy = view.roi.h - 800;
+  const EDGE_TOLERANCE = 8;
+  const nearEdge = (value: number, edge: number): boolean => Math.abs(value - edge) <= EDGE_TOLERANCE;
+  return BLOCK_RECTS_1280.map((r) => ({
+    x: view.roi.x + r.x + (nearEdge(r.x + r.w, 1280) ? dx : 0),
+    y: view.roi.y + r.y + (nearEdge(r.y + r.h, 800) ? dy : 0),
+    w: r.w,
+    h: r.h,
+  }));
 }
 
 /** 矩形字段清洗:宽高必须为正才有意义,否则回退 fallback(并拷一份,避免调用方共享引用) */
@@ -656,6 +689,8 @@ function buildCalibration(view: ViewGeometry): PrecisePointConfig {
     selfScreen: view.center,
     gameRect: view.roi,
     samples: MAP_CALIBRATION.samples?.map((s) => ({ ...s, screen: { x: s.screen.x + dx, y: s.screen.y + dy } })),
+    // 落点落进这些 UI 区域就不是"往那儿走"而是"点 UI",移动控制器会缩到区域外
+    blockRects: blockRectsFor(view),
   };
 }
 
@@ -884,7 +919,9 @@ async function runPickup(run: FarmRun): Promise<PickupOutcome> {
  * "刚才那只是被打断的,不是打不过"。
  */
 async function pickupFirst(run: FarmRun, lockedName: string | null): Promise<boolean> {
+  // 检查是否有可捡的物品
   if ((await runPickup(run)) !== 'picked') return false;
+  // 如果有锁定的怪物,先放下它
   if (lockedName) {
     run.ctx.sendLog('info', `[${run.label}] 有可拾取物品,先放下「${lockedName}」去捡`);
   }
@@ -935,6 +972,7 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
       ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}`,
   );
 
+  // 当前锁定的怪物: name + 左键点击锁定的时间
   let locked: { name: string; clickedAt: number } | null = null;
   // 最后一次「有怪」的时间:识别不到怪后据此判断是否已连续 idleMs 无怪 → 离开本挂机点
   let lastSeenAt = Date.now();
@@ -1046,7 +1084,7 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
  *   (用户显式清空 = 这个点不干活,不兜底"全部技能",免得误放)
  */
 async function runFixedSpot(run: FarmRun, wp: ResolvedWaypoint, current: MapPosition, prev: MapPosition | null): Promise<void> {
-  const { ctx, conf, view, label, lastCast } = run;
+  const { ctx, view, label, lastCast } = run;
 
   if (wp.skills.length === 0) {
     ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) 挂机点,未绑定技能,跳过`);
@@ -1146,10 +1184,17 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
       // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住(3s 没动视为卡住)
       const arrived = await run.movement.moveTo(
         { map: mapName, x: wp.x, y: wp.y },
-        { arriveTolerance: 1, stepIntervalMs: conf.stepIntervalMs, noMoveTimeoutMs: 3000, moveEpsilon: 0.5 },
+        {
+          arriveTolerance: 1, // 到达容忍度:1 个单位内即到位
+          stepIntervalMs: conf.stepIntervalMs, // 每次移动间隔
+          noMoveTimeoutMs: 3000, // 3s 没动视为卡住
+          moveEpsilon: 0.5, // 1 个单位内即到位
+        },
       );
+      // 读取当前位置(可能超出画面,落进 UI 区域)
       const current: MapPosition | null = await run.movement.readPosition();
       if (current?.map) mapName = current.map;
+      // 落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects
       const here: MapPosition | null = current ?? prev;
 
       if (!arrived) {
@@ -1158,12 +1203,15 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         prev = here;
         continue;
       }
+      // 到达后重置卡住计数
       stuckCount = 0;
       if (!here) continue;
 
+      // 处理不同类型的路径点
       if (wp.type !== 'farm-spot') {
         // 休息点 / 路径中间点:只路过,不放技能
         ctx.sendLog('info', `[${label}] 到达 (${here.x},${here.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
+        // 挂机点:定点识别或定点打怪
       } else if (conf.mode === 'fixed-detect') {
         // 定点识别:识别怪名 → 左键点击锁定 → 按配置打到怪死(识别不到怪 = 结束本挂机点)
         await runDetectSpot(run, wp);
