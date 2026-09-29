@@ -78,8 +78,6 @@ export class MonsterNameDetector {
   locate(name: string): Point | null {
     const s = String(name ?? '').trim();
     if (!s) return null;
-    const x = { value: 0, byref: true } as any;
-    const y = { value: 0, byref: true } as any;
     const found = dmApi.findStrE(
       this.cfg.roi.x,
       this.cfg.roi.y,
@@ -87,7 +85,7 @@ export class MonsterNameDetector {
       this.cfg.roi.y + this.cfg.roi.h,
       s,
       this.cfg.color,
-      this.cfg.similarity,
+      1,
     );
     const findPos = parseTextPos(found);
     if (!found) return null;
