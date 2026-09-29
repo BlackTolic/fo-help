@@ -1,27 +1,37 @@
 // 挂机打怪(farm)任务:沿路径点循环移动,到挂机点按绑定的技能释放
 //
 // 模式(2026-09 改版):
-//   fixed        定点打怪(当前实现):到挂机点不做识别,技能打在固定方向固定距离(移动反方向)
-//   fixed-detect 定点识别(即将推出):到挂机点 → 图色识别怪物名称 → 释放该点绑定的技能
+//   fixed        定点打怪:到挂机点不做识别,技能打在固定方向固定距离(移动反方向)
+//   fixed-detect 定点识别:到挂机点 → OCR/找字识别怪物名称 → 左键点击怪名锁定 → 攻击,
+//                直到该点再也识别不到怪才离开(识别不到怪后原地再等 DETECT.idleMs=3s,等刷新)
+//                · 没配技能 = 普通攻击:识别到怪 → 左键点一下(游戏自动攻击),怪名消失后再识别下一只
+//                · 配了 + 智能施法 = 循环释放「全部已配置技能」(各自按 CD,排除物品使用),直到怪死
+//                · 配了 + 自定义施法 = 循环释放该点绑定的 skillIds(含显式绑定的物品使用),直到怪死
+//                识别范围/颜色/关键字来自 taskConfig.mobFilter(OCR 范围不配 = 整个游戏画面);
+//                「怪死/丢失锁定」以「已锁定怪物名称」HUD 为准(默认 x95,y109,105x35,见
+//                core/constant-ocr/position.ts),HUD 读不到时退回「识别范围里还能否找到该名字」兜底
 //   move-detect  移动识别(尚未实现,UI 未开放):移动途中识别,识别到怪停下打
 //
 // 技能释放方式(按 taskConfig.castMode):
-//   smart  智能施法(默认):到每个挂机点,状态施法(self)技能不占名额——CD 已好的
-//          一次性全部释放;其余技能选一个没进 CD 的释放,多个可释放时选 cooldownMs
-//          最长的;全部冷却中则不释放,留到下一个挂机点
+//   smart  智能施法(默认):
+//           fixed        = 到每个挂机点,状态施法(self)技能不占名额——CD 已好的
+//                          一次性全部释放;其余技能选一个没进 CD 的释放,多个可释放时选
+//                          cooldownMs 最长的;全部冷却中则不释放,留到下一个挂机点
+//           fixed-detect = 不挑技能,循环释放全部已配置技能(排除「物品使用」),直到怪死
 //   custom 自定义施法:按各挂机点绑定的 skillIds 释放(不选 = 全部),逐个点技能
 // 每个技能按 method 施法:
 //   quick  快捷施法:只按技能键 → 等吟唱时间
 //   target 缺省施法:按技能键 → 等吟唱时间 → 左键点击目标坐标
 //                   (定点打怪=移动反方向「施法距离」处,未配则默认 300px,并夹到画面内;
-//                    定点识别=识别到的怪,没识别到则跳过)
+//                    定点识别=重新定位到的怪名坐标,怪名找不到/超出施法距离则跳过)
 //   self   状态施法:左键点击角色自身(屏幕中心)→ 按技能键 → 等吟唱时间
 //   item   物品使用:只按技能键(快捷栏物品/药品),由「生命回复」看门狗按血量自动使用
 // 技能字段:cooldownMs(技能时间间隔)/ castMs(吟唱时间)/ rangePx(施法距离,0=见上默认)
 // 技能 CD(含物品)统一记在 ctx.lastCast,与看门狗的生命回复共用,避免两边抢用同一个物品
 // 智能施法不会把 item 技能当成"输出技能"放出去(否则药品会被每个挂机点白白吃掉);
 //   自定义施法下用户显式绑定到挂机点的 item 技能照常使用
-// 路径点:farm-spot 挂机点(绑定 skillIds,空=释放全部技能)/ rest 休息点 / path 路径中间点(后两种不放技能)
+// 路径点:farm-spot 挂机点(自定义施法绑定 skillIds,不选=全部技能;定点识别下不配技能=普通攻击)/
+//   rest 休息点 / path 路径中间点(后两种不放技能)
 //
 // 结束条件:stop 命令 / 跑满最大圈数 / 检测到角色死亡(isCharacterDead)
 //
@@ -49,10 +59,10 @@
 // 223/56 -- 209/57 -- 208/70 -- 206/73 -- 217/78 -- 220/86 -- 232/83 -- 240/78  --- 227/73 -- 219/63  --- 223/56
 // 无泪南郊： 229/53 -- 215/51 -- 202/50--192/56 --182/61 ---185 /69----184/76 --187/85 -- 199/90 --208/84 --- 219/82 ---225/74 ---217/65 --225/58
 
-import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { DamooVisionProvider } from '../../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
+import { MonsterNameDetector } from '../../../../core/perception/MonsterNameDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import { CoordinateReader } from '../../../../core/state/CoordinateReader';
@@ -61,7 +71,7 @@ import type { MapPosition, MapCoordConfig } from '../../../../core/perception/ty
 import type { WorkerContext } from '../context';
 import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from '../interrupts';
 import type { FarmTaskConfig, GameResolution } from '../../../../shared/types';
-import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../../core/constant-ocr/position';
+import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
 
@@ -78,6 +88,7 @@ interface ViewGeometry {
   center: Point;
 }
 
+// 游戏画面几何:窗口客户区 + 角色脚下(客户区中心)
 function viewGeometry(resolution?: GameResolution | null): ViewGeometry {
   const roi: Rect = resolution === '1600*900' ? { x: 0, y: 0, w: 1600, h: 900 } : { x: 0, y: 0, w: 1280, h: 800 };
   return { roi, center: { x: Math.round(roi.w / 2), y: Math.round(roi.h / 2) } };
@@ -109,11 +120,17 @@ const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 // /** 到达路径点后,站稳多久再扫描/释放 */
 // const SETTLE_MS = 200;
 
-/** 怪物扫描配置(搜索区域 = 画面区域,由 viewGeometry 按分辨率给出;关键字/颜色来自 taskConfig) */
-const MONSTER_SCAN = {
+/** 定点识别的识别配置(搜索区域/颜色/关键字来自 taskConfig.mobFilter) */
+const DETECT = {
   similarity: 0.85,
-  /** 点击位置 = 找到的字 + 该偏移(点在怪身体而不是名字上) */
-  clickOffset: { x: 0, y: 20 },
+  /** 识别/判定循环的轮询间隔(OCR 较慢,别太频繁) */
+  pollMs: 800,
+  /** 普通攻击:锁定后游戏会自动攻击;名字超过这么久还在则补点一次,避免丢失锁定 */
+  reclickMs: 5000,
+  /** 识别不到怪后仍原地等待的时间(ms),连续这么久没怪才前往下一个挂机点(等刷新) */
+  idleMs: 2000,
+  /** 左键点击怪名后,等游戏把「已锁定怪物名称」写进 HUD 的时间(ms) */
+  lockMs: 300,
 };
 
 /**
@@ -128,14 +145,6 @@ const FIXED_AIM = {
   distance: 300,
 };
 
-/** 默认配置 */
-const DEFAULT_CONFIG = {
-  /** 默认找怪配置 */
-  mobFilter: {
-    nameColor: DEFAULT_MONSTER_COLOR,
-  },
-};
-
 /** 点击点离画面边界至少留这么多像素(避免点到窗口边框/窗口外) */
 const CLICK_MARGIN = 4;
 
@@ -146,7 +155,7 @@ const END_CONDITIONS = {
   /** 血量低于该值结束;0 = 不检查(需要 profile.regions.selfHp 已配置) */
   minSelfHpPercent: 0,
   /** 连续多少个路径点未到达(卡住)就结束 */
-  maxStuckPoints: 3,
+  // maxStuckPoints: 3,
 };
 
 /** 地图坐标读取配置(坐标区域按设置里的分辨率取档) */
@@ -284,8 +293,16 @@ interface ResolvedConfig {
   castMode: 'smart' | 'custom';
   waypoints: ResolvedWaypoint[]; // 解析后的路径点
   skills: MoveAttackSkill[]; // 任务级技能列表
-  monsterKeywords: string[]; // 怪名字关键词(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
-  monsterColor: string; // 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用)
+  /** 怪名字关键字;定点识别下为空 = 纯 OCR(范围内任意文字都算怪名) */
+  monsterKeywords: string[];
+  /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';可选值见 core/constant-ocr/color.ts) */
+  monsterColor: string;
+  /** 定点识别的 OCR 识别范围(客户区相对坐标;不配 = 整个游戏画面) */
+  ocrRange: Rect;
+  /** 定点识别:已锁定怪物名称的显示区域(客户区相对坐标;默认 x95,y109,w105,h35) */
+  lockedNameRoi: Rect;
+  /** 定点识别:点击怪名时的偏移(默认 0,0 = 点在名字上) */
+  clickOffset: Point;
   /** 移动步进间隔(ms),来自 taskConfig.movementSpeed */
   stepIntervalMs: number;
   maxLoops: number | null;
@@ -363,9 +380,33 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   });
 
   // 找怪关键字/颜色
+  const rawKeywords = (isFarm && Array.isArray(cfg.mobFilter?.nameKeywords) ? cfg.mobFilter.nameKeywords : [])
+    .map((k) => String(k ?? '').trim())
+    .filter(Boolean);
+  // 识别模式(定点/移动识别):关键字是可选白名单,留空 = 纯 OCR,不做默认兜底
+  // 定点打怪的兜底关键字只给「移动攻击测试」用
   const monsterKeywords =
-    isFarm && cfg.mobFilter?.nameKeywords && cfg.mobFilter.nameKeywords.length > 0 ? cfg.mobFilter.nameKeywords : DEFAULT_MONSTER_KEYWORDS;
+    mode === 'fixed-detect' || mode === 'move-detect' ? rawKeywords : rawKeywords.length > 0 ? rawKeywords : DEFAULT_MONSTER_KEYWORDS;
   const monsterColor = isFarm && cfg.mobFilter?.nameColor?.trim() ? cfg.mobFilter.nameColor.trim() : DEFAULT_MONSTER_COLOR;
+
+  // 定点识别:OCR 识别范围(未配/非法 → 整个游戏画面),点击怪名的偏移
+  const view = viewGeometry(ctx.init.settings?.resolution);
+  const rawRange = isFarm ? cfg.mobFilter?.ocrRange : undefined;
+  const ocrRange: Rect =
+    rawRange && rawRange.w > 0 && rawRange.h > 0
+      ? { x: Math.round(rawRange.x), y: Math.round(rawRange.y), w: Math.round(rawRange.w), h: Math.round(rawRange.h) }
+      : view.roi;
+  // 已锁定怪物名称 HUD 区域:默认用实测常量(见 core/constant-ocr/position.ts),可按配置覆盖
+  const rawLocked = isFarm ? cfg.mobFilter?.lockedNameRoi : undefined;
+  const lockedNameRoi: Rect =
+    rawLocked && rawLocked.w > 0 && rawLocked.h > 0
+      ? { x: Math.round(rawLocked.x), y: Math.round(rawLocked.y), w: Math.round(rawLocked.w), h: Math.round(rawLocked.h) }
+      : { ...DEFAULT_LOCKED_MONSTER_NAME };
+
+  const clickOffset: Point = {
+    x: Math.round(isFarm ? (cfg.mobFilter?.clickOffset?.x ?? 0) : 0),
+    y: Math.round(isFarm ? (cfg.mobFilter?.clickOffset?.y ?? 0) : 0),
+  };
 
   // 到达路径点时停留的时间
   const stepIntervalMs = isFarm && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : 800;
@@ -379,12 +420,33 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     skills,
     monsterKeywords,
     monsterColor,
+    ocrRange,
+    lockedNameRoi,
+    clickOffset,
     stepIntervalMs,
     maxLoops,
   };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 暂停闸门:ctrl.paused 时阻塞,直到 resume(或 stop)命令到达。
+ * 主循环每圈、定点识别的内层循环每轮都调用,保证「定点识别」在挂机点内长时间
+ * 打怪/循环放技能时也能被 pause 命令及时中断。
+ */
+async function waitWhilePaused(ctx: WorkerContext, label: string): Promise<void> {
+  const ctrl = ctx.moveAttack;
+  if (!ctrl.paused) return;
+  ctx.sendLog('info', `[${label}] 已暂停,等待 resume`);
+  await new Promise<void>((resolve) => {
+    ctrl.resumeResolve = resolve;
+    // race 兜底:resume 可能先于 resumeResolve 注册到达,此时 paused 已是 false,直接放行
+    if (!ctrl.paused) resolve();
+  });
+  ctrl.resumeResolve = null;
+  if (ctrl.running) ctx.sendLog('info', `[${label}] 继续`);
+}
 
 /**
  * 判断角色是否死亡(打怪循环的退出条件之一,与 maxLoops 并列)。
@@ -395,30 +457,46 @@ function isCharacterDead(): boolean {
   return false;
 }
 
-/** 扫描怪物,返回屏幕坐标;找不到返回 null */
-function scanMonster(view: ViewGeometry, keywords: string[], color: string): Point | null {
-  for (const keyword of keywords) {
-    const x = { value: 0, byref: true } as any;
-    const y = { value: 0, byref: true } as any;
-    const found = dmApi.findStrE(
-      view.roi.x,
-      view.roi.y,
-      view.roi.x + view.roi.w,
-      view.roi.y + view.roi.h,
-      keyword,
-      color,
-      MONSTER_SCAN.similarity,
-      x,
-      y,
-    );
-    if (found === 1) {
-      return {
-        x: Math.floor(x.value) + MONSTER_SCAN.clickOffset.x,
-        y: Math.floor(y.value) + MONSTER_SCAN.clickOffset.y,
-      };
-    }
+/**
+ * 释放一个技能(定点识别用;定点打怪保留原有内联实现,未走这里):
+ *   target 缺省施法 = 移动到 clickPos → 按键 → 左键点击 → 等吟唱
+ *   quick  快捷施法 = 只按键 → 等吟唱
+ *   self   状态施法 = 点角色自身(画面中心上方)→ 右键 → 按键 → 等吟唱
+ *   item   物品使用 = 只按快捷键
+ * 调用方负责 CD 判定 / lastCast 记录 / target 落点是否有效。
+ */
+async function castSkill(
+  ctx: WorkerContext,
+  input: any,
+  view: ViewGeometry,
+  skill: MoveAttackSkill,
+  clickPos: Point | null,
+  label: string,
+): Promise<void> {
+  const skillLabel = `${skill.key}${skill.name ? `·${skill.name}` : ''}`;
+
+  if (skill.method === 'self') {
+    await input.moveMouse({ x: view.center.x, y: view.center.y - 50 }, { kind: 'instant' });
+    await input.delay(200);
+    await input.click('right');
+    await input.delay(300);
+    await input.pressKey(skill.key);
+    if (skill.castMs > 0) await sleep(skill.castMs);
+    ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @自身(状态施法)`);
+  } else if (skill.method === 'quick') {
+    await input.pressKey(skill.key);
+    if (skill.castMs > 0) await sleep(skill.castMs);
+    ctx.sendLog('info', `[${label}] 释放 ${skillLabel}(快捷施法)`);
+  } else if (skill.method === 'item') {
+    await input.pressKey(skill.key);
+    ctx.sendLog('info', `[${label}] 使用物品 ${skillLabel}(物品使用)`);
+  } else {
+    await input.moveMouse(clickPos!, { kind: 'instant' });
+    await input.pressKey(skill.key);
+    await input.click('left');
+    if (skill.castMs > 0) await sleep(skill.castMs);
+    ctx.sendLog('info', `[${label}] 释放 ${skillLabel} @(${clickPos!.x},${clickPos!.y})`);
   }
-  return null;
 }
 
 /**
@@ -461,6 +539,153 @@ function clampDistanceToView(view: ViewGeometry, angle: number, distancePx: numb
   else if (dy < -EPS) maxDistance = Math.min(maxDistance, (minY + CLICK_MARGIN - view.center.y) / dy);
   const distance = Math.max(0, maxDistance);
   return { distance, clamped: distance < distancePx };
+}
+
+// ===== 定点识别(fixed-detect)=====
+
+/** 定点识别「一次到点」的运行参数 */
+interface DetectSpotParams {
+  ctx: WorkerContext;
+  input: any;
+  view: ViewGeometry;
+  conf: ResolvedConfig;
+  waypoint: ResolvedWaypoint;
+  detector: MonsterNameDetector;
+  lastCast: Map<string, number>;
+  label: string;
+}
+
+const fmtRange = (r: Rect): string => `x=${r.x},y=${r.y},w=${r.w},h=${r.h}`;
+
+/** 点击识别到的怪名以锁定怪物(名字坐标 + 配置的点击偏移) */
+async function clickMonsterName(input: any, pos: Point, conf: ResolvedConfig): Promise<void> {
+  await input.moveMouse({ x: pos.x + conf.clickOffset.x, y: pos.y + conf.clickOffset.y }, { kind: 'instant' });
+  await input.delay(200);
+  await input.click('left');
+}
+
+/**
+ * 锁定的怪物是否还在:HUD 里显示着名字(=锁定中),或识别范围内还能找到该名字(OCR 读 HUD 失败时的兜底)。
+ * 怪物被锁定后,游戏会在固定的「已锁定怪物名称」区域(conf.lockedNameRoi,默认 95,109,105x35)显示它的名字,
+ * 怪死 / 丢失锁定时该区域变空 —— 这是「怪名消失」的主判据。
+ */
+function isLockAlive(detector: MonsterNameDetector, name: string): boolean {
+  return detector.isLocked() || detector.isPresent(name);
+}
+
+/**
+ * 定点识别(一次到点):识别怪名 → 左键点击锁定 → 攻击,直到该点再也识别不到怪才离开
+ * - 没配技能        → 普通攻击:左键点一下锁定(游戏自动攻击),怪死后再识别下一只
+ * - 配了 + 智能施法 → 循环释放全部已配置技能(各自按 CD,排除「物品使用」)
+ * - 配了 + 自定义施法→ 循环释放该点绑定的技能(含显式绑定的「物品使用」)
+ * 怪死 / 丢失锁定判定 = 已锁定怪物名称 HUD 变空(见 isLockAlive)
+ * 识别不到怪不再立刻离开:原地继续识别 DETECT.idleMs,连续这么久没怪才前往下一个路径点
+ */
+async function runDetectSpot(p: DetectSpotParams): Promise<void> {
+  const { ctx, input, view, conf, waypoint, detector, lastCast, label } = p;
+  // 定点识别用的攻击控制器:移动到攻击点 → 按键 → 左键点击 → 等吟唱
+  const ctrl = ctx.moveAttack;
+  // 参与攻击的技能:智能施法排除「物品使用」(药品交给看门狗的「生命回复」,不在每个点空放);
+  // 自定义施法按用户显式绑定(含物品)
+  const castable = conf.castMode === 'smart' ? waypoint.skills.filter((s) => s.method !== 'item') : waypoint.skills;
+  const hasSkills = castable.length > 0;
+
+  ctx.sendLog(
+    'info',
+    `[${label}] 定点识别:范围(${fmtRange(conf.ocrRange)}) 锁定名称区(${fmtRange(conf.lockedNameRoi)}) 颜色=${conf.monsterColor}` +
+      ` 关键字=[${conf.monsterKeywords.join(',') || '无(纯OCR)'}]` +
+      ` 技能=${hasSkills ? `${castable.length}个` : '无(普通攻击)'}` +
+      ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}`,
+  );
+
+  let locked: { name: string; clickedAt: number } | null = null;
+  // 最后一次「有怪」的时间:识别不到怪后据此判断是否已连续 idleMs 无怪 → 离开本挂机点
+  let lastSeenAt = Date.now();
+
+  while (ctrl.running) {
+    await waitWhilePaused(ctx, label);
+    if (!ctrl.running) return;
+
+    // 1) 没有锁定目标 / 锁定的怪物已死(HUD 名字消失)→ 重新识别 + 左键点击锁定
+    if (!locked || !isLockAlive(detector, locked.name)) {
+      locked = null;
+      const m = detector.detect();
+      if (!m) {
+        if (Date.now() - lastSeenAt >= DETECT.idleMs) {
+          ctx.sendLog('info', `[${label}] 连续 ${DETECT.idleMs}ms 未识别到怪物,结束本挂机点`);
+          return;
+        }
+        await sleep(DETECT.pollMs); // 还在等待窗口内:继续原地识别
+        continue;
+      }
+      await clickMonsterName(input, m.screenPos, conf);
+      // 等游戏把「已锁定怪物名称」写进 HUD,再读一次拿到真正的锁定名(读不到就退回识别到的名字)
+      await sleep(DETECT.lockMs);
+      const hudName = detector.readLockedName();
+      locked = { name: hudName || m.name, clickedAt: Date.now() };
+      lastSeenAt = Date.now();
+      ctx.sendLog(
+        'info',
+        `[${label}] 识别到怪物「${m.name}」@(${m.screenPos.x},${m.screenPos.y}),左键点击锁定${hasSkills ? '' : '(普通攻击)'}` +
+          (hudName && hudName !== m.name ? `(HUD 读到「${hudName}」)` : ''),
+      );
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+
+    // 怪名还在 = 有怪,刷新「有怪」时间
+    lastSeenAt = Date.now();
+    const lockedName = locked.name;
+
+    // 2) 没配技能 → 普通攻击:锁定后游戏自动攻击;久未消失则补点一次,避免丢失锁定
+    if (!hasSkills) {
+      if (Date.now() - locked.clickedAt >= DETECT.reclickMs) {
+        const pos = detector.locate(lockedName);
+        if (pos) {
+          await clickMonsterName(input, pos, conf);
+          locked.clickedAt = Date.now();
+          ctx.sendLog('info', `[${label}] 普通攻击:补点「${lockedName}」`);
+        }
+      }
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+
+    // 3) 有技能 → 释放所有 CD 已好的技能(按配置顺序);全在 CD 中就等下一轮
+    const now = Date.now();
+    const ready = castable.filter((s) => now - (lastCast.get(s.id) || 0) >= s.cooldownMs);
+    if (ready.length === 0) {
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+
+    for (const skill of ready) {
+      if (!ctrl.running) break;
+      // 每个技能前确认怪还在:锁定名称消失说明怪死了 → 停止技能,回去重新识别
+      if (!isLockAlive(detector, lockedName)) {
+        ctx.sendLog('info', `[${label}] 怪物「${lockedName}」锁定名称消失,停止技能,重新识别`);
+        locked = null;
+        break;
+      }
+      let clickPos: Point | null = null;
+      if (skill.method === 'target') {
+        clickPos = detector.locate(lockedName);
+        if (!clickPos) {
+          locked = null;
+          break;
+        }
+        if (skill.rangePx > 0) {
+          const dist = Math.hypot(clickPos.x - view.center.x, clickPos.y - view.center.y);
+          if (dist > skill.rangePx) {
+            ctx.sendLog('info', `[${label}] ${skill.key} 跳过:怪距离 ${Math.round(dist)}px 超出施法距离 ${skill.rangePx}px`);
+            continue;
+          }
+        }
+      }
+      await castSkill(ctx, input, view, skill, clickPos, label);
+      lastCast.set(skill.id, Date.now());
+    }
+  }
 }
 
 /**
@@ -539,6 +764,14 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     // }
 
     const lastCast = ctx.lastCast; // 技能/物品上次使用时间戳(与看门狗的生命回复共用)
+    // 定点识别的怪物名称识别器(无状态,复用同一个;配置来自 taskConfig.mobFilter)
+    const detector = new MonsterNameDetector({
+      roi: conf.ocrRange,
+      color: conf.monsterColor,
+      similarity: DETECT.similarity,
+      keywords: conf.monsterKeywords,
+      lockedRoi: conf.lockedNameRoi,
+    });
     let loop = 0;
     let stuckCount = 0;
     /**
@@ -551,17 +784,8 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     // 主循环:沿路径点移动,每到一个点:站稳 → 扫怪(失败则兜底方向)→ 释放所有 CD 已好的技能
     while (conf.maxLoops === null || (ctrl.running && loop < conf.maxLoops)) {
       // 暂停等待(resume 命令会清 paused 并 resolve;stop 命令也会 resolve 并置 running=false)
-      if (ctrl.paused) {
-        ctx.sendLog('info', `[${label}] 已暂停,等待 resume`);
-        await new Promise<void>((resolve) => {
-          ctrl.resumeResolve = resolve;
-          // race 兜底:resume 可能先于 resumeResolve 注册到达,此时 paused 已是 false,直接放行
-          if (!ctrl.paused) resolve();
-        });
-        ctrl.resumeResolve = null;
-        if (!ctrl.running) break;
-        ctx.sendLog('info', `[${label}] 继续`);
-      }
+      await waitWhilePaused(ctx, label);
+      if (!ctrl.running) break;
 
       loop++;
       if (conf.maxLoops !== null) {
@@ -604,7 +828,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
         const current: MapPosition | null = (await movement.readPosition()) ?? prev;
         if (!arrived) {
           stuckCount++;
-          ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}/${END_CONDITIONS.maxStuckPoints}`);
+          ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达,卡住 ${stuckCount}`);
           // if (stuckCount >= END_CONDITIONS.maxStuckPoints) {
           //   const detail = `连续 ${stuckCount} 个路径点卡住,终止`;
           //   ctx.sendLog('warn', `[${label}] ${detail}`);
@@ -626,33 +850,30 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
           prev = current;
           continue;
         }
-        // 挂机点但没绑定技能(用户显式清空):不放,避免误用旧"全部释放"兜底
+        // 定点识别(fixed-detect):OCR/找字识别怪名 → 左键点击锁定 → 按配置攻击到怪死
+        // (识别不到怪 → 结束本挂机点;没配技能 = 普通攻击)
+        if (conf.mode === 'fixed-detect') {
+          await runDetectSpot({ ctx, input, view, conf, waypoint: wp, detector, lastCast, label });
+          prev = current;
+          continue;
+        }
+
+        // 定点打怪(fixed,当前实现):不扫怪,缺省施法技能打在固定方向(移动反方向)
+        // 挂机点没绑定技能(用户显式清空):不放,避免误用旧"全部释放"兜底
         if (wp.skills.length === 0) {
           ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) 挂机点,未绑定技能,跳过`);
           prev = current;
           continue;
         }
 
-        // 定点打怪(fixed,当前实现):不扫怪,缺省施法技能打在固定方向(移动反方向)
-        // 定点识别(fixed-detect):扫怪名 → 按每个技能的施法方式释放(没扫到 → 指向性技能跳过)
-        const isDetect = conf.mode === 'fixed-detect';
         const angle = aimAngle(current, prev);
-        const monster = isDetect ? scanMonster(view, conf.monsterKeywords, conf.monsterColor) : null;
-        // 怪离角色(屏幕中心)的像素距离:target 技能按各自的施法距离过滤
-        const monsterDist = monster ? Math.hypot(monster.x - view.center.x, monster.y - view.center.y) : null;
-
         // 定点打怪:固定方向的落点(每个技能各自的距离在下面按 rangePx 算)
         const fixedAim = clampDistanceToView(view, angle, FIXED_AIM.distance);
         const fixedPoint = pointAt(view, angle, fixedAim.distance);
 
-        let clickDesc: string;
-        if (isDetect) {
-          clickDesc = monster ? `发现怪物 @(${monster.x},${monster.y}) 距离=${Math.round(monsterDist!)}px` : '未发现怪物';
-        } else {
-          clickDesc =
-            `定点打怪:移动反方向落点 (${fixedPoint.x},${fixedPoint.y}) 默认距离=${fixedAim.distance}px` +
-            (fixedAim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : '');
-        }
+        const clickDesc =
+          `定点打怪:移动反方向落点 (${fixedPoint.x},${fixedPoint.y}) 默认距离=${fixedAim.distance}px` +
+          (fixedAim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : '');
         ctx.sendLog('info', `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ${clickDesc}`);
 
         const now = Date.now();
@@ -685,22 +906,11 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
 
           const skillLabel = `${skill.key}${skill.name ? `·${skill.name}` : ''}`;
 
-          // target(缺省施法)前置检查 + 落点:
-          //   定点识别 → 需要识别到怪,且在施法距离内
-          //   定点打怪 → 固定方向,距离 = 施法距离(未配则用 FIXED_AIM.distance),夹到画面内
+          // 缺省施法(target)落点:固定方向,距离 = 施法距离(未配则用 FIXED_AIM.distance),夹到画面内
           let clickPos: Point | null = null;
           if (skill.method === 'target') {
-            if (isDetect) {
-              if (!monster) continue; // 定点识别没扫到怪,指向性技能跳过
-              if (skill.rangePx > 0 && monsterDist !== null && monsterDist > skill.rangePx) {
-                ctx.sendLog('info', `[${label}] ${skillLabel} 跳过:怪距离 ${Math.round(monsterDist)}px 超出施法距离 ${skill.rangePx}px`);
-                continue;
-              }
-              clickPos = monster;
-            } else {
-              const dist = skill.rangePx > 0 ? skill.rangePx : FIXED_AIM.distance;
-              clickPos = pointAt(view, angle, clampDistanceToView(view, angle, dist).distance);
-            }
+            const dist = skill.rangePx > 0 ? skill.rangePx : FIXED_AIM.distance;
+            clickPos = pointAt(view, angle, clampDistanceToView(view, angle, dist).distance);
           }
 
           if (skill.method === 'self') {

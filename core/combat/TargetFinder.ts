@@ -8,6 +8,7 @@
 
 import type { Point, Rect } from '../platform/vision/IVisionProvider';
 import { dmApi } from '../platform/damoo/dm-api';
+import { parseTextPos } from '../utils/parse';
 
 export interface CombatTarget {
   /** 临时 ID(基于位置 hash) */
@@ -47,21 +48,11 @@ export class TargetFinder {
       try {
         const x = { value: 0, byref: true } as any;
         const y = { value: 0, byref: true } as any;
-        const result = dmApi.findStrE(
-          roi.x,
-          roi.y,
-          roi.x + roi.w,
-          roi.y + roi.h,
-          keyword,
-          'FFFFFF-FFFFFF',
-          0.85,
-          x,
-          y,
-        );
-        if (result === 1) {
+        const result = dmApi.findStrE(roi.x, roi.y, roi.x + roi.w, roi.y + roi.h, keyword, 'FFFFFF-FFFFFF', 0.85);
+        if (result) {
           return {
-            id: `${Math.floor(x.value)}-${Math.floor(y.value)}-${Date.now() % 100000}`,
-            screenPos: { x: Math.floor(x.value), y: Math.floor(y.value) },
+            id: `${Date.now() % 100000}`,
+            screenPos: parseTextPos(result) || { x: 0, y: 0 },
             name: keyword,
             confidence: 0.85,
           };

@@ -175,8 +175,8 @@ export const dmApi = {
   findStrFastE: (x1: number, y1: number, x2: number, y2: number, str: string, color: string, sim: number): string =>
     String(getRaw().FindStrFastE(x1, y1, x2, y2, str, color, sim) || ''),
   /** 找字带坐标 ref,找到返回 1,失败 0;xRef/yRef 会被填充坐标 */
-  findStrE: (x1: number, y1: number, x2: number, y2: number, str: string, color: string, sim: number, xRef: any, yRef: any): number =>
-    Number(getRaw().FindStrE(x1, y1, x2, y2, str, color, sim, xRef, yRef) || 0),
+  findStrE: (x1: number, y1: number, x2: number, y2: number, str: string, color: string, sim: number): string =>
+    String(getRaw().FindStrFastEx(x1, y1, x2, y2, str, color, sim) || ''),
 
   // ---- 找图 ----
   /** 找图,返回 "x|y" 字符串(单结果),失败空 */

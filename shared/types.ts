@@ -47,6 +47,14 @@ export interface Waypoint {
   note?: string;
 }
 
+/** 屏幕矩形(大漠绑定的窗口客户区相对坐标) */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** 技能施法方式 */
 export type SkillCastMethod =
   | 'quick' // 快捷施法:只按键
@@ -79,7 +87,11 @@ export interface FarmSkillConfig {
 /** 挂机打怪模式: fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
 export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
 
-/** 挂机打怪施法方式: smart=智能施法(每个挂机点自动选一个可释放技能) / custom=自定义施法(按路径点绑定的技能) */
+/**
+ * 挂机打怪施法方式:
+ * - smart  智能施法:定点打怪=每个挂机点自动选一个可释放技能;定点识别=循环释放全部已配置技能直到锁定的怪名消失
+ * - custom 自定义施法:按路径点绑定的 skillIds 释放(不选 = 全部)
+ */
 export type FarmCastMode = 'smart' | 'custom';
 
 /** 组队申请处理方式:agree=点同意进队 / reject=点拒绝关闭弹框 */
@@ -118,11 +130,25 @@ export interface FarmTaskConfig {
   waypoints: Waypoint[];
   /** 找怪配置 */
   mobFilter: {
+    /**
+     * 怪名字关键字(逗号分隔):
+     * - 定点识别:可选白名单——配了只认含关键字的怪名(用找字定位,最快最准),留空 = 纯 OCR(范围内任意文字都算怪名)
+     * - 移动识别 / 移动攻击测试:按关键字找怪
+     */
     nameKeywords: string[];
     minLevel?: number;
     maxLevel?: number;
-    /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';移动攻击测试找怪用) */
+    /** 怪名字颜色(大漠颜色格式,如 'FFFFFF-FFFFFF';可选值见 core/constant-ocr/color.ts) */
     nameColor?: string;
+    /** 定点识别的 OCR 识别范围(客户区相对坐标;不配 = 整个游戏画面) */
+    ocrRange?: ScreenRect;
+    /**
+     * 定点识别:已锁定怪物名称的显示区域(客户区相对坐标;不配 = 默认 x95,y109,w105,h35)。
+     * 怪物被锁定后游戏在此显示它的名字,没锁定时为空 —— 用来判断锁定 / 怪是否已死
+     */
+    lockedNameRoi?: ScreenRect;
+    /** 定点识别:点击识别到的怪名时的偏移(像素;默认 0,0 = 点在名字上,有些游戏需要点到名字下方) */
+    clickOffset?: { x: number; y: number };
   };
   /** 任务级技能列表(路径点通过 skillIds 引用;空 = 用 worker 内置默认) */
   skills?: FarmSkillConfig[];

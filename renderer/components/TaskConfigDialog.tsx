@@ -27,8 +27,10 @@ import type {
   StoredTaskConfig,
   DefaultSkillTaskConfig,
   DefaultSkillStep,
+  ScreenRect,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
+import { COLOR_WHITE, COLOR_RED, COLOR_YELLOW, COLOR_GREEN } from '../../core/constant-ocr/color';
 import { useStore } from '../store/useStore';
 import { HistoryTaskDialog } from './HistoryTaskDialog';
 
@@ -56,6 +58,14 @@ const FARM_MAPS = [
   { id: 'lan-yue', name: '蓝月谷' },
   { id: 'tian-yuan', name: '桃源村' },
   { id: 'custom', name: '自定义...' },
+];
+
+/** 定点识别的怪名颜色可选值(取自 core/constant-ocr/color.ts) */
+const MONSTER_COLOR_OPTIONS: { value: string; label: string }[] = [
+  { value: COLOR_WHITE, label: '白色' },
+  { value: COLOR_RED, label: '红色' },
+  { value: COLOR_YELLOW, label: '黄色' },
+  { value: COLOR_GREEN, label: '绿色' },
 ];
 
 /** 把 worker.status 映射成短标签(右上角状态徽章) */
@@ -163,9 +173,12 @@ export function TaskConfigDialog({
   // 施法方式:智能施法(默认)= 到挂机点自动选一个可释放技能;自定义 = 按路径点绑定技能释放
   const [castMode, setCastMode] = useState<FarmCastMode>('smart');
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [nameKeywords, setNameKeywords] = useState('野,狼,鸡,鹿,狐,猫');
-  // 找怪相关:怪名颜色 / 任务级技能列表 / 角色移动间隔
-  const [mobNameColor, setMobNameColor] = useState('FFFFFF-FFFFFF');
+  // 找怪关键字:定点识别下留空 = 纯 OCR(范围内任意文字都算怪名),不强制默认值
+  const [nameKeywords, setNameKeywords] = useState('');
+  // 找怪相关:怪名颜色 / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 角色移动间隔
+  const [mobNameColor, setMobNameColor] = useState(COLOR_WHITE);
+  const [ocrRange, setOcrRange] = useState<ScreenRect>({ x: 0, y: 0, w: 0, h: 0 });
+  const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
   const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(800);
   // 看门狗:组队申请 / 神医验证码 / 生命回复 / 角色停级;全空 = worker 不启动看门狗
@@ -192,8 +205,7 @@ export function TaskConfigDialog({
       const farm = cfg as FarmTaskConfig;
       setMapId(farm.mapId);
       setCustomMapName(farm.customMapName || '');
-      // 兼容旧配置:旧模式(single/patrol/aoe)统一迁到当前实现的「定点打怪」;
-      // 定点识别(旧 fixed-detect)本期尚未开放,仅原样保留
+      // 兼容旧配置:旧模式(single/patrol/aoe)统一迁到「定点打怪」;fixed-detect / move-detect 原样保留
       const legacyModeMap: Record<string, FarmMode> = {
         single: 'fixed',
         patrol: 'fixed',
@@ -203,8 +215,10 @@ export function TaskConfigDialog({
       // 旧配置没有 castMode 字段,按默认的智能施法处理
       setCastMode(farm.castMode ?? 'smart');
       setWaypoints(farm.waypoints || []);
-      setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '野,狼,鸡,鹿,狐,猫');
-      setMobNameColor(farm.mobFilter?.nameColor || 'FFFFFF-FFFFFF');
+      setNameKeywords(farm.mobFilter?.nameKeywords?.join(',') || '');
+      setMobNameColor(farm.mobFilter?.nameColor || COLOR_WHITE);
+      setOcrRange(farm.mobFilter?.ocrRange ?? { x: 0, y: 0, w: 0, h: 0 });
+      setClickOffset(farm.mobFilter?.clickOffset ?? { x: 0, y: 0 });
       // 旧技能没有施法方式/吟唱/距离字段,按旧行为(target + 400ms 吟唱 + 不限距离)补默认值
       setSkills(
         (farm.skills || []).map((s) => ({
@@ -282,6 +296,17 @@ export function TaskConfigDialog({
             .map((s) => s.trim())
             .filter(Boolean),
           nameColor: mobNameColor.trim() || undefined,
+          // OCR 范围:x/y 允许为 0,w/h 必须为正才有意义(全 0 = 不配,worker 回退整个画面)
+          ocrRange:
+            ocrRange.w > 0 && ocrRange.h > 0
+              ? {
+                  x: Math.max(0, ocrRange.x | 0),
+                  y: Math.max(0, ocrRange.y | 0),
+                  w: Math.max(0, ocrRange.w | 0),
+                  h: Math.max(0, ocrRange.h | 0),
+                }
+              : undefined,
+          clickOffset: clickOffset.x !== 0 || clickOffset.y !== 0 ? { x: clickOffset.x | 0, y: clickOffset.y | 0 } : undefined,
         },
         // 过滤掉未启用的技能 + 规范化数值,保存前清洗(同缺省技能的清洗思路)
         skills: skills
@@ -568,6 +593,10 @@ export function TaskConfigDialog({
               setNameKeywords={setNameKeywords}
               mobNameColor={mobNameColor}
               setMobNameColor={setMobNameColor}
+              ocrRange={ocrRange}
+              setOcrRange={setOcrRange}
+              clickOffset={clickOffset}
+              setClickOffset={setClickOffset}
               skills={skills}
               setSkills={setSkills}
               moveStepIntervalMs={moveStepIntervalMs}
@@ -782,6 +811,12 @@ interface FarmConfigProps {
   setNameKeywords: (v: string) => void;
   mobNameColor: string;
   setMobNameColor: (v: string) => void;
+  /** 定点识别的 OCR 识别范围(客户区相对坐标;w/h=0 表示不配 = 整个画面) */
+  ocrRange: ScreenRect;
+  setOcrRange: (v: ScreenRect) => void;
+  /** 定点识别:点击怪名的偏移(默认 0,0 = 点在名字上) */
+  clickOffset: { x: number; y: number };
+  setClickOffset: (v: { x: number; y: number }) => void;
   skills: FarmSkillConfig[];
   setSkills: (v: FarmSkillConfig[] | ((prev: FarmSkillConfig[]) => FarmSkillConfig[])) => void;
   moveStepIntervalMs: number;
@@ -814,6 +849,10 @@ function FarmConfig(props: FarmConfigProps) {
     setNameKeywords,
     mobNameColor,
     setMobNameColor,
+    ocrRange,
+    setOcrRange,
+    clickOffset,
+    setClickOffset,
     skills,
     setSkills,
     moveStepIntervalMs,
@@ -928,8 +967,8 @@ function FarmConfig(props: FarmConfigProps) {
               {
                 value: 'fixed-detect',
                 label: '🔍 定点识别',
-                ready: false,
-                desc: '在固定路径点上,用图色识别怪物名称,再释放绑定的技能',
+                ready: true,
+                desc: '在固定路径点上,OCR 识别怪物名称并点击锁定,再按配置攻击(可不配技能 = 普通攻击)',
               },
               {
                 value: 'move-detect',
@@ -972,7 +1011,7 @@ function FarmConfig(props: FarmConfigProps) {
           {mode === 'fixed' &&
             '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
           {mode === 'fixed-detect' &&
-            '在固定路径点上,用图色识别怪物名称,再释放该点绑定的技能(即将推出)'}
+            '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,左键点击怪名锁定后再攻击;不配技能 = 识别到怪就普通攻击(左键点一下);识别不到怪后原地再等约 3 秒,仍没有怪才前往下一个点'}
           {mode === 'move-detect' && '移动途中识别到怪物名称,优先停下打怪,打完再继续前往路径点'}
         </div>
       </div>
@@ -999,7 +1038,7 @@ function FarmConfig(props: FarmConfigProps) {
 
         {skills.length === 0 ? (
           <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式)
+            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式); 定点识别可以不配技能 = 普通攻击(识别到怪左键点一下)
           </div>
         ) : (
           <div className="space-y-2">
@@ -1159,11 +1198,14 @@ function FarmConfig(props: FarmConfigProps) {
         )}
         <div className="text-[10px] text-text-muted mt-1">
           施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、
-          施法距离处」);状态施法 = 点击角色自身 + 按键;物品使用 =
+          施法距离处」,定点识别时点识别到的怪);状态施法 = 点击角色自身 + 按键;物品使用 =
           只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选)。配好技能后,
           {castMode === 'smart'
-            ? '智能施法会在每个挂机点自动释放所有就绪的状态施法技能,并从其余技能里选一个可释放的'
+            ? mode === 'fixed-detect'
+              ? '定点识别 + 智能施法会在每个挂机点循环释放全部已配置技能,直到锁定的怪名消失,再重新识别'
+              : '智能施法会在每个挂机点自动释放所有就绪的状态施法技能,并从其余技能里选一个可释放的'
             : '在下方"挂机点"类型的路径点上选择要释放的技能'}
+          。定点识别也可以不配任何技能:不配 = 普通攻击(识别到怪左键点一下)
         </div>
       </div>
 
@@ -1217,7 +1259,9 @@ function FarmConfig(props: FarmConfigProps) {
           ))}
           <span className="text-text-muted text-[10px]">
             {castMode === 'smart'
-              ? '到每个挂机点,状态施法技能(CD 已好)一次性全部释放;其余技能自动选一个未冷却的释放(多个可释放时选 CD 最长的;都在冷却则跳过);物品使用技能不参与自动挑选(交给看门狗的「生命回复」)'
+              ? mode === 'fixed-detect'
+                ? '定点识别:到每个挂机点后循环释放全部已配置技能(各自按 CD,物品使用除外),直到锁定的怪名消失才停手,再重新 OCR 识别;识别不到怪后原地再等约 3 秒(等刷新),仍没有怪才前往下一个点'
+                : '到每个挂机点,状态施法技能(CD 已好)一次性全部释放;其余技能自动选一个未冷却的释放(多个可释放时选 CD 最长的;都在冷却则跳过);物品使用技能不参与自动挑选(交给看门狗的「生命回复」)'
               : '在下方每个挂机点上勾选要释放的技能(不选 = 释放全部;物品使用需在此显式绑定)'}
           </span>
         </div>
@@ -1351,39 +1395,123 @@ function FarmConfig(props: FarmConfigProps) {
         )}
       </div>
 
-      {/* 找怪关键字 / 怪名颜色:只有需要识别的模式(定点识别/移动识别)才展示 */}
+      {/* 识别配置:只有需要识别的模式(定点识别/移动识别)才展示 */}
       {mode !== 'fixed' && (
         <>
-          {/* 找怪关键字 */}
+          {/* 定点识别:OCR 识别范围(x,y,w,h) */}
+          {mode === 'fixed-detect' && (
+            <div>
+              <label className="text-sm text-text-secondary mb-1.5 block">
+                OCR 识别范围 <span className="text-text-muted text-[11px]">(窗口客户区坐标 x / y / 宽 / 高;宽高留 0 = 整个游戏画面)</span>
+              </label>
+              <div className="flex items-center gap-3 flex-wrap">
+                {(
+                  [
+                    ['x', 'X'],
+                    ['y', 'Y'],
+                    ['w', '宽 W'],
+                    ['h', '高 H'],
+                  ] as [keyof ScreenRect, string][]
+                ).map(([key, label]) => (
+                  <div key={key} className="flex items-center gap-1">
+                    <span className="text-text-muted text-[10px] shrink-0">{label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={ocrRange[key]}
+                      onChange={(e) => setOcrRange({ ...ocrRange, [key]: Math.max(0, parseInt(e.target.value) || 0) })}
+                      disabled={readOnly}
+                      className={`w-20 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-[10px] text-text-muted mt-1">在这块区域里 OCR 找怪名(配合下面的颜色);范围越小识别越快、越准</div>
+            </div>
+          )}
+
+          {/* 定点识别:点击怪名的偏移 */}
+          {mode === 'fixed-detect' && (
+            <div>
+              <label className="text-sm text-text-secondary mb-1.5 block">
+                点击偏移 <span className="text-text-muted text-[11px]">(像素;默认 0,0 = 点在怪名上)</span>
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1">
+                  <span className="text-text-muted text-[10px] shrink-0">X</span>
+                  <input
+                    type="number"
+                    value={clickOffset.x}
+                    onChange={(e) => setClickOffset({ ...clickOffset, x: parseInt(e.target.value) || 0 })}
+                    disabled={readOnly}
+                    className={`w-20 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-text-muted text-[10px] shrink-0">Y</span>
+                  <input
+                    type="number"
+                    value={clickOffset.y}
+                    onChange={(e) => setClickOffset({ ...clickOffset, y: parseInt(e.target.value) || 0 })}
+                    disabled={readOnly}
+                    className={`w-20 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+                  />
+                </div>
+              </div>
+              <div className="text-[10px] text-text-muted mt-1">左键点击怪名(锁定怪物)时的偏移;点不到怪时再往下 / 往右调一点</div>
+            </div>
+          )}
+
+          {/* 怪名颜色(OCR / 找字用):4 种预设 + 自定义 */}
           <div>
             <label className="text-sm text-text-secondary mb-1.5 block">
-              找怪关键字 <span className="text-text-muted text-[11px]">(逗号分隔)</span>
+              怪名颜色 <span className="text-text-muted text-[11px]">(OCR / 找字按这个颜色识别)</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={MONSTER_COLOR_OPTIONS.some((o) => o.value === mobNameColor) ? mobNameColor : '__custom__'}
+                onChange={(e) => setMobNameColor(e.target.value === '__custom__' ? '' : e.target.value)}
+                disabled={readOnly}
+                className={`w-28 bg-bg-input border border-border-base rounded px-2 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
+              >
+                {MONSTER_COLOR_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+                <option value="__custom__">自定义...</option>
+              </select>
+              {!MONSTER_COLOR_OPTIONS.some((o) => o.value === mobNameColor) && (
+                <input
+                  type="text"
+                  value={mobNameColor}
+                  onChange={(e) => setMobNameColor(e.target.value)}
+                  placeholder="e85048-111111"
+                  disabled={readOnly}
+                  className={`flex-1 bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+                />
+              )}
+            </div>
+            <div className="text-[10px] text-text-muted mt-1">
+              对应 core/constant-ocr/color.ts;不确定就先用「白色」,识别不到再换别的颜色
+            </div>
+          </div>
+
+          {/* 找怪关键字(可选) */}
+          <div>
+            <label className="text-sm text-text-secondary mb-1.5 block">
+              找怪关键字 <span className="text-text-muted text-[11px]">(可选,逗号分隔;留空 = 纯 OCR)</span>
             </label>
             <input
               type="text"
               value={nameKeywords}
               onChange={(e) => setNameKeywords(e.target.value)}
-              placeholder="野,狼,鸡,鹿,狐,猫"
+              placeholder="留空 = 范围内识别到的任意文字都算怪名"
               disabled={readOnly}
               className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan ${disabledCls}`}
             />
-          </div>
-
-          {/* 怪名颜色(识别找怪用) */}
-          <div>
-            <label className="text-sm text-text-secondary mb-1.5 block">
-              怪名颜色 <span className="text-text-muted text-[11px]">(大漠颜色格式)</span>
-            </label>
-            <input
-              type="text"
-              value={mobNameColor}
-              onChange={(e) => setMobNameColor(e.target.value)}
-              placeholder="FFFFFF-FFFFFF"
-              disabled={readOnly}
-              className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
-            />
             <div className="text-[10px] text-text-muted mt-1">
-              找怪时按这个字的颜色匹配;不确定就用默认 FFFFFF-FFFFFF(白名)
+              定点识别:配了关键字 = 只认含关键字的怪名(用找字定位,更快更准);留空 = 纯 OCR 识别
             </div>
           </div>
         </>
