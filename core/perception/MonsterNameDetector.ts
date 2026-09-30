@@ -6,7 +6,7 @@
 //   2) 没配关键字 → Ocr 读出范围内文字 → 再用 FindStrE 反查该文字的坐标
 //
 // 对外能力:
-//   detect()         识别范围内的一只怪物(名字 + 名字屏幕坐标,用于左键点击锁定)
+//   detect()         识别范围内的一只怪物(名字 + 名字屏幕坐标,用于右键点击锁定 / 左键点击攻击)
 //   locate()         在范围内重新定位某个名字(怪会移动,每次点击/施法前重新定位)
 //   isPresent()      名字当前是否还在「识别范围」内(兜底判断)
 //   readLockedName() 读「已锁定怪物名称」HUD 区域的文字(被锁定时游戏在此显示名字,未锁定为空)
@@ -45,7 +45,7 @@ export interface MonsterNameDetectorConfig {
 export interface DetectedMonster {
   /** 怪物名称 */
   name: string;
-  /** 名称文字在屏幕上的坐标(用于左键点击锁定) */
+  /** 名称文字在屏幕上的坐标(用于点击:右键锁定 / 左键攻击) */
   screenPos: Point;
 }
 
@@ -60,12 +60,13 @@ export class MonsterNameDetector {
     if (keywords.length > 0) {
       for (const kw of keywords) {
         const pos = this.locate(kw);
+        // 找到就返回搜索的关键字和坐标
         if (pos) return { name: kw, screenPos: pos };
       }
       return null;
     }
 
-    // 2) 没配关键字:纯 OCR —— 读出文字后反查坐标,点上去锁定
+    // 2) 没配关键字:纯 OCR —— 读出文字后反查坐标,点上去(右键)锁定
     const text = this.ocrText();
     for (const candidate of this.candidates(text)) {
       const pos = this.locate(candidate);

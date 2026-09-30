@@ -2,7 +2,7 @@
 //
 // ── 打怪模式(taskConfig.mode)────────────────────────────────────────────
 //   fixed        定点打怪:不做任何识别,技能打在固定方向(移动反方向)   → runFixedSpot
-//   fixed-detect 定点识别:找字/OCR 认出怪名 → 左键点击锁定 → 打到怪死   → runDetectSpot
+//   fixed-detect 定点识别:找字/OCR 认出怪名 → 右键点击锁定(读 HUD 名字确认) → 左键点击开打 → 打到怪死 → runDetectSpot
 //   move-detect  移动识别:尚未实现,按定点打怪执行
 //
 // ── 技能 ────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ import { ItemNameDetector } from '../../../../core/perception/ItemNameDetector';
 import type { DetectedItem, ItemPickupRule } from '../../../../core/perception/ItemNameDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
-import type { IInputProvider } from '../../../../core/platform/input/IInputProvider';
+import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
 import type { Point, Rect } from '../../../../core/platform/vision/IVisionProvider';
 import type { MapPosition, MapCoordConfig } from '../../../../core/perception/types';
 import type { WorkerContext } from '../context';
@@ -214,8 +214,8 @@ const DEFAULT_MONSTER_COLOR = 'FFFFFF-FFFFFF';
 const DETECT = {
   similarity: DEFAULT_SIM,
   /** 识别/判定循环的轮询间隔(OCR 较慢,别太频繁) */
-  pollMs: 800,
-  /** 普通攻击:锁定后游戏会自动攻击;名字超过这么久还在则补点一次,避免丢失锁定 */
+  pollMs: 500,
+  /** 普通攻击:锁定后用左键点击目标;超过这么久没再点则补点一次,维持攻击 */
   reclickMs: 1000,
   /** 识别不到怪后仍原地等待的时间(ms),连续这么久没怪才前往下一个挂机点(等刷新) */
   idleMs: 2000,
@@ -286,7 +286,7 @@ const BLOCK_RECTS_1280: ScreenRect[] = [
   { x: 406, y: 6, w: 440, h: 98 }, // 顶部中间:状态/目标条
   { x: 1097, y: 1, w: 183, h: 190 }, // 右上:小地图
   { x: 1, y: 596, w: 112, h: 196 }, // 左下:聊天框
-  { x: 890, y: 730, w: 387, h: 69 }, // 右下:技能栏/功能按钮
+  { x: 890, y: 720, w: 387, h: 69 }, // 右下:技能栏/功能按钮
 ];
 
 /** 结束条件(全局旋钮) */
@@ -930,12 +930,16 @@ async function pickupFirst(run: FarmRun, lockedName: string | null): Promise<boo
 
 // ===== 定点识别(fixed-detect)=====
 
-/** 左键点击怪名以锁定怪物(名字坐标 + 配置的点击偏移) */
-async function clickMonsterName(run: FarmRun, pos: Point): Promise<void> {
+/**
+ * 把鼠标移到怪名上点击(名字坐标 + 配置的点击偏移):
+ *   right = 右键:命令游戏锁定这个目标 —— 锁上了,HUD(conf.lockedNameRoi)里就会出现它的名字
+ *   left  = 左键:对已锁定的目标出手(开始攻击 / 补点一次)
+ */
+async function clickMonsterName(run: FarmRun, pos: Point, button: MouseButton): Promise<void> {
   const { input, conf } = run;
   await input.moveMouse({ x: pos.x + conf.clickOffset.x, y: pos.y + conf.clickOffset.y }, { kind: 'instant' });
   await input.delay(200);
-  await input.click('left');
+  await input.click(button);
 }
 
 /**
@@ -948,12 +952,28 @@ function isLockAlive(run: FarmRun, name: string): boolean {
 }
 
 /**
- * 定点识别(一次到点):识别怪名 → 左键点击锁定 → 攻击,直到该点再也识别不到怪才离开
- * - 没配技能        → 普通攻击:左键点一下锁定(游戏自动攻击),怪死后再识别下一只
+ * 本挂机点是不是没得打、该走了:连续 DETECT.idleMs 没锁上过一只怪。
+ * 「识别不到怪」和「识别到但右键锁不上(尸体)」都算没得打 —— 只按前者判的话,
+ * 范围里留着一具尸体的名字会让循环一直「扫到 → 右键 → HUD 空」地原地空转,永远离不开本点。
+ */
+function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
+  if (Date.now() - lastSeenAt < DETECT.idleMs) return false;
+  run.ctx.sendLog('info', `[${run.label}] 连续 ${DETECT.idleMs}ms 未锁定到怪物,结束本挂机点`);
+  return true;
+}
+
+/**
+ * 定点识别(一次到点):识别怪名 → 右键点击锁定 → 左键点击开打,直到该点再也打不到怪才离开
+ * - 锁定 = 右键点击扫描到的目标:锁上了游戏才会把这个名字写进 HUD,读不到名字就当没锁上
+ *   (HUD 里的名字与识别到的对不上时只打一条警告,不当作没锁上:OCR 读花字符是常事)
+ * - 扫到了、右键点了、HUD 里却没出现名字 → 这个目标已经阵亡(名字还留在识别范围里),
+ *   不攻击,回去接着扫下一只(连续这么扫 DETECT.idleMs 就打不出东西了,由 leaveSpotIfIdle 收工)
+ * - 锁定后先左键点击扫描区域内的目标开始攻击,再按下面的技能打
+ * - 没配技能        → 普通攻击:锁定后游戏自动攻击,久不结束则左键补点一次
  * - 配了 + 智能施法 → 循环释放全部已配置技能(各自按 CD,排除「物品使用」)
  * - 配了 + 自定义施法→ 循环释放该点绑定的技能(含显式绑定的「物品使用」)
  * 怪死 / 丢失锁定判定 = 已锁定怪物名称 HUD 变空(见 isLockAlive)
- * 识别不到怪不再立刻离开:原地继续识别 DETECT.idleMs,连续这么久没怪才前往下一个路径点
+ * 识别不到怪不再立刻离开:原地继续识别 DETECT.idleMs,连续这么久没锁上怪才前往下一个路径点
  * 开了物品拾取时拾取优先:每轮循环先捡一次(见 pickupFirst),正在打的怪也先放下 ——
  *   捡东西会把人走开、丢掉锁定,下一轮重新识别(怪还在就重新锁上,不在就找下一只)
  */
@@ -972,9 +992,9 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
       ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}`,
   );
 
-  // 当前锁定的怪物: name + 左键点击锁定的时间
+  // 当前锁定的怪物: name + 锁定(左键开打)的时间
   let locked: { name: string; clickedAt: number } | null = null;
-  // 最后一次「有怪」的时间:识别不到怪后据此判断是否已连续 idleMs 无怪 → 离开本挂机点
+  // 最后一次「锁上怪」的时间:据此判断是否已连续 idleMs 没得打 → 离开本挂机点(见 leaveSpotIfIdle)
   let lastSeenAt = Date.now();
 
   while (ctrl.running) {
@@ -985,31 +1005,40 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
     // 0) 拾取优先:不管有没有正在打的怪,先把范围内的物品捡掉再继续。
     //    runPickup 会把能找到的都捡完才返回;捡到要刷新「有怪」计时
     //    (拾取本身耗时,别让它把下一点的等待窗口吃掉),没捡到则不刷新,该走就走
-    if (await pickupFirst(run, locked?.name ?? null)) {
+    if ((await await runPickup(run)) === 'picked') {
       lastSeenAt = Date.now();
       continue;
     }
 
-    // 1) 没有锁定目标 / 锁定的怪物已死(HUD 名字消失)→ 重新识别 + 左键点击锁定
+    // 1) 没有锁定目标 / 锁定的怪物已死(HUD 名字消失)→ 重新识别 →  左键开打
     if (!locked || !isLockAlive(run, locked.name)) {
       locked = null;
       const m = monster.detect();
+      ctx.sendLog('info', `[${label}] 没有锁住，所以开始识别到的怪物的坐标「${JSON.stringify(m?.screenPos)}」`);
+
+      // 没有扫描到怪物
       if (!m) {
-        // 识别不到怪物:判断是否已连续 idleMs 无怪 → 离开本挂机点
-        if (Date.now() - lastSeenAt >= DETECT.idleMs) {
-          ctx.sendLog('info', `[${label}] 连续 ${DETECT.idleMs}ms 未识别到怪物,结束本挂机点`);
-          return;
-        }
-        await sleep(DETECT.pollMs); // 还在等待窗口内:继续原地识别
+        // 识别不到怪物:连续 idleMs = 1S 没得打就离开本挂机点,否则原地继续识别(等刷新)
+        if (leaveSpotIfIdle(run, lastSeenAt)) return;
+        // 识别到怪物就停留pollMs秒，然后继续
+        await sleep(DETECT.pollMs);
         continue;
       }
-      await clickMonsterName(run, m.screenPos);
-      // 等游戏把「已锁定怪物名称」写进 HUD,再读一次拿到真正的锁定名(读不到就退回识别到的名字)
-      await sleep(DETECT.lockMs);
+
+      // 左键点击开始攻击
+      await clickMonsterName(run, monster.locate(m.name) ?? m.screenPos, 'left');
+      ctx.sendLog('info', `[${label}] 普通攻击:左键点击「${JSON.stringify(m.screenPos)}」`);
+      // 延迟200ms,确保锁定名称更新
+      await sleep(200);
+      // 点击点中怪物后，记录锁定的怪物
       const hudName = monster.readLockedName();
-      locked = { name: hudName || m.name, clickedAt: Date.now() };
-      lastSeenAt = Date.now();
-      ctx.sendLog('info', `[${label}] 识别到怪物「${hudName}」` + `,左键点击锁定${castable.length > 0 ? '' : '(普通攻击)'}`);
+      // 锁定的怪物名称与识别到的怪物名称一致,且没有其他怪物名称包含在锁定名称中
+      if (hudName && hudName.includes(m.name) && m.name.split('|').some((n) => hudName.includes(n))) {
+        locked = { name: hudName, clickedAt: Date.now() };
+        // 开始计时
+        lastSeenAt = Date.now();
+        ctx.sendLog('info', `[${label}] 已经识别到怪物「${hudName}」,不用点击左键`);
+      }
       await sleep(DETECT.pollMs);
       continue;
     }
@@ -1018,19 +1047,19 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
     lastSeenAt = Date.now();
     const lockedName = locked.name;
 
-    // 2) 没配技能 → 普通攻击:锁定后游戏自动攻击;久未消失则补点一次,避免丢失锁定
-    if (castable.length === 0) {
-      if (Date.now() - locked.clickedAt >= DETECT.reclickMs) {
-        const pos = monster.locate(lockedName);
-        if (pos) {
-          await clickMonsterName(run, pos);
-          locked.clickedAt = Date.now();
-          ctx.sendLog('info', `[${label}] 普通攻击:识别到「${lockedName}」，正在点击`);
-        }
-      }
-      await sleep(DETECT.pollMs);
-      continue;
-    }
+    // 2) 没配技能 → 普通攻击:锁定后游戏自动攻击;超过 reclickMs 没点则左键补点一次
+    // if (castable.length === 0) {
+    //   if (Date.now() - locked.clickedAt >= DETECT.reclickMs) {
+    //     const pos = monster.locate(lockedName);
+    //     if (pos) {
+    //       await clickMonsterName(run, pos, 'left');
+    //       locked.clickedAt = Date.now();
+    //       ctx.sendLog('info', `[${label}] 普通攻击:左键点击「${lockedName}」`);
+    //     }
+    //   }
+    //   await sleep(DETECT.pollMs);
+    //   continue;
+    // }
 
     // 3) 有技能 → 释放所有 CD 已好的技能(按配置顺序);全在 CD 中就等下一轮
     const now = Date.now();
@@ -1159,6 +1188,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
     const deadAtStart = checkDeath(run, loop, '开始时');
+    // 死亡时退出循环
     if (deadAtStart) return deadAtStart;
 
     for (const wp of conf.waypoints) {
@@ -1207,7 +1237,8 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         ctx.sendLog('info', `[${label}] 到达 (${here.x},${here.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
         // 挂机点:定点识别或定点打怪
       } else if (conf.mode === 'fixed-detect') {
-        // 定点识别:识别怪名 → 左键点击锁定 → 按配置打到怪死(识别不到怪 = 结束本挂机点)
+        // 定点识别:识别怪名 → 右键点击锁定(HUD 出现名字)→ 左键点击开打 → 按配置打到怪死
+        // (连续识别不到怪 / 扫到的都是尸体 = 结束本挂机点)
         await runDetectSpot(run, wp);
       } else {
         // 定点打怪(默认):不识别,技能打在固定方向
@@ -1265,6 +1296,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     }
     ctx.sendLog('info', `[${label}] 起点: (${start.x}, ${start.y}) 地图=${start.map ?? '未知'}`);
 
+    // 运行时环境
     const run: FarmRun = {
       ctx,
       input,

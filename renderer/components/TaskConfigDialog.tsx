@@ -1154,7 +1154,7 @@ function FarmConfig(props: FarmConfigProps) {
                 value: 'fixed-detect',
                 label: '🔍 定点识别',
                 ready: true,
-                desc: '在固定路径点上,OCR 识别怪物名称并点击锁定,再按配置攻击(可不配技能 = 普通攻击)',
+                desc: '在固定路径点上,OCR 识别怪物名称,右键点击锁定(HUD 出现名字)后左键点击开始攻击(可不配技能 = 普通攻击)',
               },
               {
                 value: 'move-detect',
@@ -1194,7 +1194,7 @@ function FarmConfig(props: FarmConfigProps) {
         <div className="text-[11px] text-text-muted mt-1.5">
           {mode === 'fixed' && '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
           {mode === 'fixed-detect' &&
-            '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,左键点击怪名锁定后再攻击;不配技能 = 识别到怪就普通攻击(左键点一下);识别不到怪后原地再等约 3 秒,仍没有怪才前往下一个点'}
+            '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,右键点击怪名锁定(HUD 出现名字才算锁上)后用左键点击怪名开打;右键点了 HUD 里却没出现名字 = 该目标已阵亡,不攻击,继续扫描;不配技能 = 识别到怪就普通攻击(左键点一下);连续识别不到怪后原地再等约 3 秒,仍没有怪才前往下一个点'}
           {mode === 'move-detect' && '移动途中识别到怪物名称,优先停下打怪,打完再继续前往路径点'}
         </div>
       </div>
@@ -1215,7 +1215,7 @@ function FarmConfig(props: FarmConfigProps) {
 
         {skills.length === 0 ? (
           <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式); 定点识别可以不配技能 = 普通攻击(识别到怪左键点一下)
+            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式); 定点识别可以不配技能 = 普通攻击(右键锁定后左键点一下)
           </div>
         ) : (
           <div className="space-y-2">
@@ -1363,14 +1363,14 @@ function FarmConfig(props: FarmConfigProps) {
           </div>
         )}
         <div className="text-[10px] text-text-muted mt-1">
-          施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、 施法距离处」,定点识别时点识别到的怪);状态施法
+          施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、 施法距离处」,定点识别时点已锁定的怪);状态施法
           = 点击角色自身 + 按键;物品使用 = 只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选)。配好技能后,
           {castMode === 'smart'
             ? mode === 'fixed-detect'
               ? '定点识别 + 智能施法会在每个挂机点循环释放全部已配置技能,直到锁定的怪名消失,再重新识别'
               : '智能施法会在每个挂机点自动释放所有就绪的状态施法技能,并从其余技能里选一个可释放的'
             : '在下方"挂机点"类型的路径点上选择要释放的技能'}
-          。定点识别也可以不配任何技能:不配 = 普通攻击(识别到怪左键点一下)
+          。定点识别也可以不配任何技能:不配 = 普通攻击(右键锁定后左键点一下)
         </div>
       </div>
 
@@ -1600,7 +1600,7 @@ function FarmConfig(props: FarmConfigProps) {
                   />
                 </div>
               </div>
-              <div className="text-[10px] text-text-muted mt-1">左键点击怪名(锁定怪物)时的偏移;点不到怪时再往下 / 往右调一点</div>
+              <div className="text-[10px] text-text-muted mt-1">点击怪名(右键锁定 / 左键攻击)时的偏移;点不到怪时再往下 / 往右调一点</div>
             </div>
           )}
 
