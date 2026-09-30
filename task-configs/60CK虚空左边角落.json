@@ -1,0 +1,142 @@
+{
+  "id": "task-60CK虚空左边角落-1790753436919",
+  "name": "60CK虚空左边角落",
+  "taskType": "farm",
+  "config": {
+    "type": "farm",
+    "mapId": "hu-ya-shan",
+    "mode": "fixed-detect",
+    "castMode": "smart",
+    "waypoints": [
+      {
+        "id": "wp-1790753180310-o108",
+        "x": 129,
+        "y": 140,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753180658-l7bt",
+        "x": 118,
+        "y": 147,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753180838-kovc",
+        "x": 107,
+        "y": 153,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753180984-1n3e",
+        "x": 122,
+        "y": 145,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181114-cr5s",
+        "x": 131,
+        "y": 146,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181256-bby9",
+        "x": 118,
+        "y": 139,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181380-96p3",
+        "x": 126,
+        "y": 132,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181514-5b7o",
+        "x": 135,
+        "y": 126,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181644-avuv",
+        "x": 124,
+        "y": 132,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181776-7nw2",
+        "x": 121,
+        "y": 140,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753181926-mib8",
+        "x": 132,
+        "y": 147,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753182080-jxwe",
+        "x": 145,
+        "y": 151,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753276625-461n",
+        "x": 155,
+        "y": 157,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753277007-avze",
+        "x": 144,
+        "y": 151,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790753277383-1dab",
+        "x": 133,
+        "y": 144,
+        "type": "farm-spot"
+      }
+    ],
+    "mobFilter": {
+      "nameKeywords": [
+        "勇敢的|远古的|月光|沙漠|幻蝶|灵异|小妖|"
+      ],
+      "nameColors": [
+        "40bc00-111111"
+      ],
+      "ocrRange": {
+        "x": 195,
+        "y": 110,
+        "w": 1050,
+        "h": 620
+      },
+      "clickOffset": {
+        "x": 30,
+        "y": 55
+      }
+    },
+    "skills": [],
+    "movementSpeed": 400,
+    "watchdog": {
+      "verifyCode": true
+    },
+    "pickup": {
+      "enabled": true,
+      "rangeMode": "default",
+      "rules": [
+        {
+          "colors": [
+            "e0e4a8-111111"
+          ],
+          "nameKeywords": [
+            "+4|+5|+6|+7|幻|蝶|之|羽|捆|仙|索|药水|生命|法力"
+          ]
+        }
+      ]
+    }
+  },
+  "createdAt": 1790753436919,
+  "updatedAt": 1790753524048
+}

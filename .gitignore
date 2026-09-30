@@ -54,7 +54,7 @@ diag-windows.ps1
 _*
 
 # 运行时数据(每个 hwnd 一个 JSON,本地生成)
-task-configs/
+# task-configs/
 
 # 应用设置(分辨率/大漠注册码/大模型 API key,含密钥不入库)
 app-settings.json

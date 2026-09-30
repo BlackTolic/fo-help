@@ -1009,12 +1009,6 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
       const hudName = monster.readLockedName();
       locked = { name: hudName || m.name, clickedAt: Date.now() };
       lastSeenAt = Date.now();
-      // ctx.sendLog(
-      //   'info',
-      //   `[${label}] 识别到怪物「${m.name}」@(${m.screenPos.x},${m.screenPos.y})` +
-      //     `,左键点击锁定${castable.length > 0 ? '' : '(普通攻击)'}` +
-      //     (hudName && hudName !== m.name ? `(HUD 读到「${hudName}」)` : ''),
-      // );
       ctx.sendLog('info', `[${label}] 识别到怪物「${hudName}」` + `,左键点击锁定${castable.length > 0 ? '' : '(普通攻击)'}`);
       await sleep(DETECT.pollMs);
       continue;
@@ -1031,7 +1025,7 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
         if (pos) {
           await clickMonsterName(run, pos);
           locked.clickedAt = Date.now();
-          ctx.sendLog('info', `[${label}] 普通攻击:锁定「${lockedName}」`);
+          ctx.sendLog('info', `[${label}] 普通攻击:识别到「${lockedName}」，正在点击`);
         }
       }
       await sleep(DETECT.pollMs);

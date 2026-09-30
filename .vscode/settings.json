@@ -29,6 +29,13 @@
   "[html]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
   "[markdown]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
 
+  // // 字体大小
+  // "editor.fontSize": 24,
+  // // 终端字体大小
+  // "terminal.integrated.fontSize": 24,
+  
+  
+
   // 行尾统一 LF,和 .prettierrc 的 endOfLine: "lf"、.gitattributes 的 eol=lf 保持一致
   "files.eol": "\n"
 }

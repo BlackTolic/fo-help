@@ -1,0 +1,88 @@
+{
+  "id": "task-虚空60CK右边角落打怪-1790747351702",
+  "name": "虚空60CK右边角落打怪",
+  "taskType": "farm",
+  "config": {
+    "type": "farm",
+    "mapId": "hu-ya-shan",
+    "mode": "fixed-detect",
+    "castMode": "smart",
+    "waypoints": [
+      {
+        "id": "wp-1790747017502-31gh",
+        "x": 483,
+        "y": 137,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790747023416-rao9",
+        "x": 469,
+        "y": 131,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790747023716-7mwq",
+        "x": 455,
+        "y": 131,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790747023930-gr0b",
+        "x": 453,
+        "y": 139,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790747032074-hx3b",
+        "x": 467,
+        "y": 145,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1790747032482-8a9g",
+        "x": 478,
+        "y": 141,
+        "type": "farm-spot"
+      }
+    ],
+    "mobFilter": {
+      "nameKeywords": [
+        "勇敢的|远古的|月光|沙漠|幻蝶|灵异|小妖|勇敢的"
+      ],
+      "nameColors": [
+        "40bc00-111111"
+      ],
+      "ocrRange": {
+        "x": 195,
+        "y": 110,
+        "w": 1050,
+        "h": 620
+      },
+      "clickOffset": {
+        "x": 30,
+        "y": 55
+      }
+    },
+    "skills": [],
+    "movementSpeed": 400,
+    "watchdog": {
+      "verifyCode": true
+    },
+    "pickup": {
+      "enabled": true,
+      "rangeMode": "default",
+      "rules": [
+        {
+          "colors": [
+            "e0e4a8-111111"
+          ],
+          "nameKeywords": [
+            "+4|+5|+6|+7|幻|蝶|之|羽|捆|仙|索|药水|生命|法力"
+          ]
+        }
+      ]
+    }
+  },
+  "createdAt": 1790747351702,
+  "updatedAt": 1790750698531
+}
