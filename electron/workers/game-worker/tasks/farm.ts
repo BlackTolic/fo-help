@@ -2,7 +2,7 @@
 //
 // ── 打怪模式(taskConfig.mode)────────────────────────────────────────────
 //   fixed        定点打怪:不做任何识别,技能打在固定方向(移动反方向)   → runFixedSpot
-//   fixed-detect 定点识别:找字/OCR 认出怪名 → 右键点击锁定(读 HUD 名字确认) → 左键点击开打 → 打到怪死 → runDetectSpot
+//   fixed-detect 定点识别:找字/OCR 认出怪名 → 左键点一下锁定(读 HUD 确认) → 打到怪死(尸体名字跳过) → runDetectSpot
 //   move-detect  移动识别:尚未实现,按定点打怪执行
 //
 // ── 技能 ────────────────────────────────────────────────────────────────
@@ -186,6 +186,22 @@ interface FarmRun {
   pickup: PickupRuntime;
   /** 技能/物品上次使用时间戳(与看门狗「生命回复」共用) */
   lastCast: Map<string, number>;
+  /** 已击杀怪物的尸体位置:坐标 key → 忽略截止时间(尸体名字还没消失,见 isCorpseIgnored / ignoreCorpse) */
+  corpses: Map<string, number>;
+}
+
+/**
+ * 定点识别里"当前锁定的怪物"。
+ * name 记识别到的名字(不是 HUD 读到的):它一定能在识别范围内 findStrE 到 ——
+ * target 技能的定位、以及怪死后重新定位尸体位置都靠它;HUD 里的名字只用于判活和日志。
+ */
+interface LockedMonster {
+  /** 目标名字(识别到的) */
+  name: string;
+  /** 最近一次锁定/点击的时间 */
+  clickedAt: number;
+  /** 最近一次读到 HUD 非空的时间:判活靠它(见 isLockAlive) */
+  hudSeenAt: number;
 }
 
 /** runFarmLoop 的运行结果(任务 start() 与 screenshot-test 测试路径共用) */
@@ -217,10 +233,21 @@ const DETECT = {
   pollMs: 500,
   /** 普通攻击:锁定后用左键点击目标;超过这么久没再点则补点一次,维持攻击 */
   reclickMs: 1000,
-  /** 识别不到怪后仍原地等待的时间(ms),连续这么久没怪才前往下一个挂机点(等刷新) */
+  /** 连续这么久没锁上怪(识别不到 / 识别到但已阵亡)才前往下一个挂机点(等刷新) */
   idleMs: 2000,
-  /** 左键点击怪名后,等游戏把「已锁定怪物名称」写进 HUD 的时间(ms) */
-  lockMs: 300,
+  /** 左键点击怪名后,等游戏把「已锁定怪物名称」写进 HUD 的时间(ms);实测 200 够,慢的机器往上调 */
+  lockMs: 200,
+  /**
+   * HUD 读空后,还要连续空这么久才认"这只怪已死"(ms)。
+   * 一次读空可能只是 OCR 抖动、名字正在刷新,直接判死会白锁一次(还得再点一次怪名)。
+   */
+  hudLostMs: 800,
+  /**
+   * 怪被击杀后,尸体名字还会在识别范围内停留这么久(ms),这段时间把它当"不可打"跳过。
+   * 尸体名和活怪名在识别范围里长得一模一样(实测怪死后名字约 3s 才消失),
+   * 不跳过它,重扫时又会把它当新目标、左键点一次(点地移动的游戏里这就是一次走位指令)。
+   */
+  corpseTtlMs: 3000,
 };
 
 /** 物品拾取的识别参数 */
@@ -263,7 +290,7 @@ const FIXED_AIM = {
 const SELF_CLICK_OFFSET_Y = 50;
 
 /** 技能配得多时,每个技能释放前先让一拍(ms),避免连点被当成异常操作 */
-const INTER_SKILL_MS = 500;
+const INTER_SKILL_MS = 400;
 
 /** 点击点离画面边界至少留这么多像素(避免点到窗口边框/窗口外) */
 const CLICK_MARGIN = 4;
@@ -774,7 +801,7 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
       await input.moveMouse({ x: view.center.x, y: view.center.y - SELF_CLICK_OFFSET_Y }, { kind: 'instant' });
       await input.delay(200);
       await input.click('right');
-      await input.delay(300);
+      await input.delay(200);
       await input.pressKey(skill.key);
       if (skill.castMs > 0) await sleep(skill.castMs);
       ctx.sendLog('info', `[${label}] 释放 ${name} @自身(状态施法)`);
@@ -789,7 +816,8 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
       await input.moveMouse(clickPos, { kind: 'instant' });
       await input.pressKey(skill.key);
       await input.click('left');
-      if (skill.castMs > 0) await sleep(skill.castMs);
+      // 在施法过程中再补充100ms
+      if (skill.castMs > 0) await sleep(skill.castMs + 100);
       ctx.sendLog('info', `[${label}] 释放 ${name} @(${clickPos.x},${clickPos.y})`);
       return true;
   }
@@ -797,12 +825,12 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
 
 // ===== 物品拾取(打怪间隙捡掉落物)=====
 
-/** 坐标 → 放弃记录的 key:按 10px 网格取整(同一件物品两次扫描的坐标会有几像素抖动) */
-const pickupPosKey = (pos: Point): string => `${Math.round(pos.x / 10)},${Math.round(pos.y / 10)}`;
+/** 坐标 → 10px 网格 key(拾取放弃表 / 尸体忽略表共用):同一目标两次扫描的坐标会有几像素抖动,按网格取整抵消它 */
+const posGridKey = (pos: Point): string => `${Math.round(pos.x / 10)},${Math.round(pos.y / 10)}`;
 
 /** 这件物品是不是刚被放弃过(TTL 内不再碰,TTL 一过自动失效) */
 function isItemAbandoned(rt: PickupRuntime, pos: Point): boolean {
-  const key = pickupPosKey(pos);
+  const key = posGridKey(pos);
   const at = rt.abandoned.get(key);
   if (at === undefined) return false;
   if (Date.now() - at > PICKUP.abandonTtlMs) {
@@ -818,7 +846,7 @@ function abandonItem(rt: PickupRuntime, pos: Point): void {
   for (const [key, at] of rt.abandoned) {
     if (now - at > PICKUP.abandonTtlMs) rt.abandoned.delete(key);
   }
-  rt.abandoned.set(pickupPosKey(pos), now);
+  rt.abandoned.set(posGridKey(pos), now);
 }
 
 /** 等 waitMs 后看物品还在不在:不在了打一条日志并返回 true(捡起来了) */
@@ -931,9 +959,9 @@ async function pickupFirst(run: FarmRun, lockedName: string | null): Promise<boo
 // ===== 定点识别(fixed-detect)=====
 
 /**
- * 把鼠标移到怪名上点击(名字坐标 + 配置的点击偏移):
- *   right = 右键:命令游戏锁定这个目标 —— 锁上了,HUD(conf.lockedNameRoi)里就会出现它的名字
- *   left  = 左键:对已锁定的目标出手(开始攻击 / 补点一次)
+ * 把鼠标移到怪名上点击(名字坐标 + 配置的点击偏移)。
+ * 定点识别现在固定用左键:按一下怪名,游戏就会锁定它并开始自动攻击,锁定成功时 HUD 里会出现它的名字
+ * (见 isLockAlive / readLockedName)。保留 button 参数是为了以后换回"右键只锁定"时只改调用处。
  */
 async function clickMonsterName(run: FarmRun, pos: Point, button: MouseButton): Promise<void> {
   const { input, conf } = run;
@@ -943,18 +971,61 @@ async function clickMonsterName(run: FarmRun, pos: Point, button: MouseButton): 
 }
 
 /**
- * 锁定的怪物是否还在:HUD 里显示着名字(= 锁定中),或识别范围内还能找到该名字(读 HUD 失败时的兜底)。
- * 怪物被锁定后游戏会在固定的「已锁定怪物名称」区域(conf.lockedNameRoi)显示它的名字,
- * 怪死 / 丢失锁定时该区域变空 —— 这是「怪名消失」的主判据。
+ * 「锁定的怪还在不在」只认 HUD(conf.lockedNameRoi),不用识别范围内的名字兜底。
+ *
+ * 为什么:怪死了尸体名还会在画面上留 DETECT.corpseTtlMs(≈3s),这段时间里 findStrE/locate 照样命中 ——
+ * 尸体和活怪在"区域内有没有这串字"上结果完全相同,拿它判活等于把"怪死"的信号吃掉:
+ * 循环会抱着尸体继续放技能,也不去扫下一只。
+ * 两个信号的分工:
+ *   识别范围里的文字 → 找新目标 + 给 target 技能提供点击坐标(见 MonsterNameDetector)
+ *   HUD 里的名字     → 唯一的"活/死"判据(游戏自己维护的当前目标,怪死/丢失锁定立刻变空)
+ *
+ * ⚠️ 代价不对称,所以宁可偏向"判死":把尸体当活怪 = 白打几秒且不重扫;
+ *    把活怪当死了 = 重新扫一次(≤1 个 pollMs),怪还在就再锁一次。
+ * 单次读空不算死:DETECT.hudLostMs 的确认窗口挡掉 OCR 抖动(连续读空才认死)。
+ *
+ * @param hudName 本轮读到的 HUD 文本,'' = 本轮读空(调用方每轮读一次,避免每个技能都 OCR)
  */
-function isLockAlive(run: FarmRun, name: string): boolean {
-  return run.monster.isLocked() || run.monster.isPresent(name);
+function isLockAlive(locked: LockedMonster, hudName: string): boolean {
+  if (hudName) {
+    locked.hudSeenAt = Date.now();
+    return true;
+  }
+  return Date.now() - locked.hudSeenAt < DETECT.hudLostMs;
+}
+
+/** 这个坐标上的名字是不是刚击杀的尸体(TTL 内跳过它,别当新目标;过期项顺手清掉,免得 Map 一直长) */
+function isCorpseIgnored(run: FarmRun, pos: Point): boolean {
+  const key = posGridKey(pos);
+  const until = run.corpses.get(key);
+  if (until === undefined) return false;
+  if (Date.now() >= until) {
+    run.corpses.delete(key);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * 怪被打死:把尸体名字的位置记进忽略表(DETECT.corpseTtlMs 内不再当目标)。
+ * 位置从识别范围里重新定位尸体名拿到(它此刻还在原地);名字已经不在了 = 尸体早清完了,没东西可跳过。
+ * @returns 记下忽略的坐标;名字已消失返回 null
+ */
+function ignoreCorpse(run: FarmRun, name: string): Point | null {
+  const pos = run.monster.locate(name);
+  if (!pos) return null;
+  const now = Date.now();
+  for (const [key, until] of run.corpses) {
+    if (now >= until) run.corpses.delete(key);
+  }
+  run.corpses.set(posGridKey(pos), now + DETECT.corpseTtlMs);
+  return pos;
 }
 
 /**
  * 本挂机点是不是没得打、该走了:连续 DETECT.idleMs 没锁上过一只怪。
- * 「识别不到怪」和「识别到但右键锁不上(尸体)」都算没得打 —— 只按前者判的话,
- * 范围里留着一具尸体的名字会让循环一直「扫到 → 右键 → HUD 空」地原地空转,永远离不开本点。
+ * 「识别不到怪」和「扫到的都是刚击杀的尸体(被 isCorpseIgnored 跳过)」都算没得打 ——
+ * 后者名字虽然还挂在画面上,但已经打不到了,不能当成"有怪"把它一直留在本点。
  */
 function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
   if (Date.now() - lastSeenAt < DETECT.idleMs) return false;
@@ -963,18 +1034,20 @@ function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
 }
 
 /**
- * 定点识别(一次到点):识别怪名 → 右键点击锁定 → 左键点击开打,直到该点再也打不到怪才离开
- * - 锁定 = 右键点击扫描到的目标:锁上了游戏才会把这个名字写进 HUD,读不到名字就当没锁上
- *   (HUD 里的名字与识别到的对不上时只打一条警告,不当作没锁上:OCR 读花字符是常事)
- * - 扫到了、右键点了、HUD 里却没出现名字 → 这个目标已经阵亡(名字还留在识别范围里),
- *   不攻击,回去接着扫下一只(连续这么扫 DETECT.idleMs 就打不出东西了,由 leaveSpotIfIdle 收工)
- * - 锁定后先左键点击扫描区域内的目标开始攻击,再按下面的技能打
- * - 没配技能        → 普通攻击:锁定后游戏自动攻击,久不结束则左键补点一次
+ * 定点识别(一次到点):识别怪名 → 左键点一下锁定(读 HUD 确认) → 按配置打,直到该点再也打不到怪才离开
+ * - 锁定 = 左键点一下识别到的怪名;游戏锁定成功才会把名字写进 HUD,读不到名字就当没锁上
+ *   (HUD 里的名字与识别到的对不上时不锁定,只打一条警告,继续扫描)
+ * - 扫到了、点了、HUD 里却没出现名字 → 这个目标已经阵亡(尸体名字还留在识别范围里),
+ *   不攻击,回去接着扫下一只(连续这么扫 DETECT.idleMs 打不出东西就由 leaveSpotIfIdle 收工)
+ * - 怪死 / 丢失锁定判定 = HUD(已锁定怪物名称)读空(见 isLockAlive):
+ *   识别范围里的名字不能判死活 —— 尸体名还要留 DETECT.corpseTtlMs 才消失
+ * - 击杀后把尸体名字的坐标记进忽略表(DETECT.corpseTtlMs 内不再当目标,见 isCorpseIgnored):
+ *   否则重扫时会把还没消失的尸体名当成新目标,左键点它 = 白走一趟
+ * - 没配技能        → 普通攻击:锁定后游戏自动攻击(点那一下就是攻击命令)
  * - 配了 + 智能施法 → 循环释放全部已配置技能(各自按 CD,排除「物品使用」)
  * - 配了 + 自定义施法→ 循环释放该点绑定的技能(含显式绑定的「物品使用」)
- * 怪死 / 丢失锁定判定 = 已锁定怪物名称 HUD 变空(见 isLockAlive)
  * 识别不到怪不再立刻离开:原地继续识别 DETECT.idleMs,连续这么久没锁上怪才前往下一个路径点
- * 开了物品拾取时拾取优先:每轮循环先捡一次(见 pickupFirst),正在打的怪也先放下 ——
+ * 开了物品拾取时拾取优先:每轮循环先捡一次(见 runPickup),正在打的怪也先放下 ——
  *   捡东西会把人走开、丢掉锁定,下一轮重新识别(怪还在就重新锁上,不在就找下一只)
  */
 async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> {
@@ -992,10 +1065,12 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
       ` 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}`,
   );
 
-  // 当前锁定的怪物: name + 锁定(左键开打)的时间
-  let locked: { name: string; clickedAt: number } | null = null;
+  // 当前锁定的怪物(判活靠它的 hudSeenAt,见 isLockAlive)
+  let locked: LockedMonster | null = null;
   // 最后一次「锁上怪」的时间:据此判断是否已连续 idleMs 没得打 → 离开本挂机点(见 leaveSpotIfIdle)
   let lastSeenAt = Date.now();
+  /** HUD 一次都没读到过名字:说明「已锁定怪物名称」区域/颜色很可能没配对(它现在是判活的唯一依据) */
+  let hudNeverSeen = true;
 
   while (ctrl.running) {
     // 等待暂停
@@ -1005,45 +1080,72 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
     // 0) 拾取优先:不管有没有正在打的怪,先把范围内的物品捡掉再继续。
     //    runPickup 会把能找到的都捡完才返回;捡到要刷新「有怪」计时
     //    (拾取本身耗时,别让它把下一点的等待窗口吃掉),没捡到则不刷新,该走就走
-    if ((await await runPickup(run)) === 'picked') {
+    if ((await runPickup(run)) === 'picked') {
       lastSeenAt = Date.now();
       continue;
     }
 
-    // 1) 没有锁定目标 / 锁定的怪物已死(HUD 名字消失)→ 重新识别 →  左键开打
-    if (!locked || !isLockAlive(run, locked.name)) {
+    // 每轮读一次 HUD:它是"锁定的怪还在不在"的唯一判据(见 isLockAlive);没锁定目标就不用读
+    const hudName = locked ? monster.readLockedName() : '';
+    if (hudName) hudNeverSeen = false;
+
+    // 1) 没有锁定目标 / HUD 连续读空(确认已击杀)→ 重新识别 → 左键点一下开打
+    if (!locked || !isLockAlive(locked, hudName)) {
+      if (locked) {
+        // 怪死了:尸体名字可能还挂在识别范围里(DETECT.corpseTtlMs≈3s)→ 记进忽略表,别把它当新目标
+        const corpsePos = ignoreCorpse(run, locked.name);
+        ctx.sendLog(
+          'info',
+          `[${label}] HUD 锁定名称消失,判定「${locked.name}」已击杀` +
+            (corpsePos ? `(尸体名还在 (${corpsePos.x},${corpsePos.y}),${DETECT.corpseTtlMs}ms 内不再当目标)` : ''),
+        );
+      }
       locked = null;
-      const m = monster.detect();
-      ctx.sendLog('info', `[${label}] 没有锁住，所以开始识别到的怪物的坐标「${JSON.stringify(m?.screenPos)}」`);
+      // 找目标时跳过刚击杀的尸体名字(忽略表按坐标记:同名怪在别处刷出来照样能识别到)
+      const m = monster.detect((pos) => isCorpseIgnored(run, pos));
 
       // 没有扫描到怪物
       if (!m) {
-        // 识别不到怪物:连续 idleMs = 1S 没得打就离开本挂机点,否则原地继续识别(等刷新)
+        // 识别不到怪物:连续 idleMs 没得打就离开本挂机点,否则原地继续识别(等刷新)
         if (leaveSpotIfIdle(run, lastSeenAt)) return;
-        // 识别到怪物就停留pollMs秒，然后继续
         await sleep(DETECT.pollMs);
         continue;
       }
 
       // 左键点击开始攻击
       await clickMonsterName(run, monster.locate(m.name) ?? m.screenPos, 'left');
-      ctx.sendLog('info', `[${label}] 普通攻击:左键点击「${JSON.stringify(m.screenPos)}」`);
-      // 延迟200ms,确保锁定名称更新
-      await sleep(200);
-      // 点击点中怪物后，记录锁定的怪物
-      const hudName = monster.readLockedName();
-      // 锁定的怪物名称与识别到的怪物名称一致,且没有其他怪物名称包含在锁定名称中
-      if (hudName && hudName.includes(m.name) && m.name.split('|').some((n) => hudName.includes(n))) {
-        locked = { name: hudName, clickedAt: Date.now() };
-        // 开始计时
+      ctx.sendLog('info', `[${label}] 识别到怪物「${m.name}」@(${m.screenPos.x},${m.screenPos.y}),左键点击开打`);
+      // 等游戏把「已锁定怪物名称」写进 HUD,再读一次:HUD 里有名字才说明这一下点中了
+      await sleep(DETECT.lockMs);
+      const hudAfterClick = monster.readLockedName();
+      if (hudAfterClick) hudNeverSeen = false; // 能读出来 = HUD 区域/颜色没问题
+      if (hudAfterClick.includes(m.name)) {
+        // ⚠️ name 记识别到的名字(不是 HUD 名):它一定能在识别范围内 findStrE 到,
+        // target 技能的定位、以及怪死后重新定位尸体位置都靠它;HUD 名带一个 OCR 噪声就再也定位不到
+        locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
         lastSeenAt = Date.now();
-        ctx.sendLog('info', `[${label}] 已经识别到怪物「${hudName}」,不用点击左键`);
+        ctx.sendLog('info', `[${label}] 已锁定「${m.name}」(HUD:「${hudAfterClick}」),开始攻击`);
+      } else if (!hudAfterClick && hudNeverSeen) {
+        // HUD 读空:可能这只是尸体,也可能是 HUD 区域/颜色没配对 —— 后者会让判活全部失效,必须提示
+        ctx.sendLog(
+          'warn',
+          `[${label}] 左键点击「${m.name}」后 HUD 读不到名字:若每只怪都这样,` +
+            `先核对「已锁定怪物名称」区域与颜色(它现在是判断怪死活的唯一依据)`,
+        );
+      } else if (hudAfterClick) {
+        ctx.sendLog('warn', `[${label}] HUD 锁定名称「${hudAfterClick}」与识别到的「${m.name}」对不上,本次不锁定,继续扫描`);
       }
       await sleep(DETECT.pollMs);
       continue;
     }
 
-    // 怪名还在 = 有怪,刷新「有怪」时间
+    // HUD 读空(还在确认窗口内)就先不动手:可能这只已经死了,别把技能空放给尸体 ——
+    // 窗口一到,上面的分支 1 就会按"已击杀"收尾(记尸体忽略表 + 重新识别)
+    if (!hudName) {
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+    // HUD 里还有名字 = 怪还锁着,刷新「有怪」时间
     lastSeenAt = Date.now();
     const lockedName = locked.name;
 
@@ -1071,8 +1173,8 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
 
     for (const skill of ready) {
       if (!ctrl.running) break;
-      // 每个技能前确认怪还在:锁定名称消失说明怪死了 → 停手,回去重新识别
-      if (!isLockAlive(run, lockedName)) {
+      // 每个技能前重新读一次 HUD:中途怪死了立刻停手,别把技能空放给尸体(见 isLockAlive)
+      if (!isLockAlive(locked, monster.readLockedName())) {
         ctx.sendLog('info', `[${label}] 怪物「${lockedName}」锁定名称消失,停止技能,重新识别`);
         locked = null;
         break;
@@ -1130,11 +1232,12 @@ async function runFixedSpot(run: FarmRun, wp: ResolvedWaypoint, current: MapPosi
     return;
   }
 
-  for (const skill of skillsToCast) {
+  for (const [index, skill] of skillsToCast.entries()) {
     if (!ctx.moveAttack.running) break;
     // 技能配得多时,每个技能释放前先让一拍,避免连点被当成异常操作
-    if (wp.skills.length > 2) await sleep(INTER_SKILL_MS);
+    if (index > 0) await sleep(INTER_SKILL_MS);
     const clickPos = skill.method === 'target' ? fixedAimPoint(view, angle, skill) : null;
+    // 目标技能(如普通攻击)需要先定位到目标,再点击
     if (await castSkill(run, skill, clickPos)) lastCast.set(skill.id, Date.now());
   }
 }
@@ -1153,7 +1256,7 @@ function pickSkillsToCast(run: FarmRun, wp: ResolvedWaypoint, now: number): Move
   const selfBuffs = ready.filter((s) => s.method === 'self');
   const others = ready.filter((s) => s.method !== 'self' && s.method !== 'item');
   const best = others.length > 0 ? [others.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))] : [];
-  return [...selfBuffs, ...best]; // 先放状态 buff,再放选中的输出技能
+  return [...best, ...selfBuffs]; // 先放输出技能,再放状态 buff
 }
 
 // ===== 主循环 =====
@@ -1237,7 +1340,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         ctx.sendLog('info', `[${label}] 到达 (${here.x},${here.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
         // 挂机点:定点识别或定点打怪
       } else if (conf.mode === 'fixed-detect') {
-        // 定点识别:识别怪名 → 右键点击锁定(HUD 出现名字)→ 左键点击开打 → 按配置打到怪死
+        // 定点识别:识别怪名 → 左键点一下锁定(HUD 出现名字)→ 按配置打到怪死
         // (连续识别不到怪 / 扫到的都是尸体 = 结束本挂机点)
         await runDetectSpot(run, wp);
       } else {
@@ -1325,6 +1428,8 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       },
       // 技能/物品上次使用时间戳(与看门狗「生命回复」共用,避免两边抢同一个物品)
       lastCast: ctx.lastCast,
+      // 已击杀怪物的尸体位置(尸体名还没消失时别再当目标,见 isCorpseIgnored)
+      corpses: new Map(),
     };
 
     return await walkWaypoints(run, start);

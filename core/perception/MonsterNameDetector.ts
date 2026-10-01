@@ -6,9 +6,10 @@
 //   2) 没配关键字 → Ocr 读出范围内文字 → 再用 FindStrE 反查该文字的坐标
 //
 // 对外能力:
-//   detect()         识别范围内的一只怪物(名字 + 名字屏幕坐标,用于右键点击锁定 / 左键点击攻击)
+//   detect()         识别范围内的一只怪物(名字 + 名字屏幕坐标,用于左键点击锁定/攻击;
+//                    可选 isCorpse 钩子跳过刚击杀的尸体名字)
 //   locate()         在范围内重新定位某个名字(怪会移动,每次点击/施法前重新定位)
-//   isPresent()      名字当前是否还在「识别范围」内(兜底判断)
+//   isPresent()      名字当前是否还在「识别范围」内(找目标用;名字还在 ≠ 怪还活着,别拿来判死活)
 //   readLockedName() 读「已锁定怪物名称」HUD 区域的文字(被锁定时游戏在此显示名字,未锁定为空)
 //   isLocked()      当前是否有锁定的怪物(HUD 区域显示着名字)
 //
@@ -45,32 +46,37 @@ export interface MonsterNameDetectorConfig {
 export interface DetectedMonster {
   /** 怪物名称 */
   name: string;
-  /** 名称文字在屏幕上的坐标(用于点击:右键锁定 / 左键攻击) */
+  /** 名称文字在屏幕上的坐标(用于左键点击:按一下怪名即锁定并开始攻击) */
   screenPos: Point;
 }
 
 export class MonsterNameDetector {
   constructor(private readonly cfg: MonsterNameDetectorConfig) {}
 
-  /** 识别范围内的一只怪物;找不到返回 null */
-  detect(): DetectedMonster | null {
+  /**
+   * 识别范围内的一只怪物;找不到返回 null
+   * @param isCorpse 可选:这个坐标上的名字是不是刚击杀的尸体 —— 是的话跳过这次命中、继续找下一个
+   *   (尸体名和活怪名在识别范围里长得一模一样,不跳过它,重扫时又会把它当成新目标点一次)
+   */
+  detect(isCorpse?: (pos: Point) => boolean): DetectedMonster | null {
     const keywords = (this.cfg.keywords ?? []).map((k) => k.trim()).filter(Boolean);
 
     // 1) 配了关键字:按关键字找字定位(快,且坐标精确)
     if (keywords.length > 0) {
       for (const kw of keywords) {
         const pos = this.locate(kw);
-        // 找到就返回搜索的关键字和坐标
-        if (pos) return { name: kw, screenPos: pos };
+        if (!pos || isCorpse?.(pos)) continue;
+        return { name: kw, screenPos: pos };
       }
       return null;
     }
 
-    // 2) 没配关键字:纯 OCR —— 读出文字后反查坐标,点上去(右键)锁定
+    // 2) 没配关键字:纯 OCR —— 读出文字后反查坐标,点上去(左键)锁定
     const text = this.ocrText();
     for (const candidate of this.candidates(text)) {
       const pos = this.locate(candidate);
-      if (pos) return { name: candidate, screenPos: pos };
+      if (!pos || isCorpse?.(pos)) continue;
+      return { name: candidate, screenPos: pos };
     }
     return null;
   }
@@ -93,7 +99,11 @@ export class MonsterNameDetector {
     return findPos;
   }
 
-  /** 名字当前是否还在识别范围内(兜底:名字还在场上) */
+  /**
+   * 名字当前是否还在识别范围内(找目标用)。
+   * ⚠️ 别拿它判"怪还活着":怪死后尸体名还会留几秒,那几秒里它同样返回 true
+   * (活/死只能看「已锁定怪物名称」HUD,见 farm.ts 的 isLockAlive)
+   */
   isPresent(name: string): boolean {
     return this.locate(name) !== null;
   }
