@@ -15,7 +15,7 @@ import { parseFindColor, parseTextPos } from '../utils/parse';
  * 验证码弹框出现后等待动画结束的时间(毫秒)
  * 弹框刚弹出时标题还在移动,此时的命中坐标不能用于截图/点击,必须等它停下来
  */
-const VERIFY_CODE_SETTLE_MS = 5000;
+const VERIFY_CODE_SETTLE_MS = 3000;
 
 /**
  * 连续未命中的容忍次数:弹框动画期间标题可能短暂找不到,

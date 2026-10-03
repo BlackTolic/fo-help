@@ -10,6 +10,16 @@ import { createLogger } from '../../core/logger';
 const log = createLogger('window-registry');
 const execFileAsync = promisify(execFile);
 
+// PowerShell 冷启动 + Add-Type 编译 + 枚举一次约 3~4s(机器上有杀软时更慢),
+// 5s 超时会在首页 3s 轮询叠加时被踩爆 → 子进程被判 SIGTERM,窗口列表变空。
+const PS_TIMEOUT_MS = 20000;
+// 单次枚举成本高于前端轮询间隔,同一份结果在 TTL 内复用;
+// 配合在途去重(见 listAllWindowsCached),避免每 3s 拉起一个 PowerShell。
+const CACHE_TTL_MS = 3000;
+
+let cachedWindows: { at: number; data: GameWindow[] } | null = null;
+let inflightEnumeration: Promise<GameWindow[]> | null = null;
+
 /** 调 PowerShell 枚举所有可见顶层窗口,返回 JSON 列表 */
 async function listAllWindowsViaPS(): Promise<GameWindow[]> {
   const script = `
@@ -36,7 +46,6 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
         [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
         [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
         [DllImport("psapi.dll", CharSet=CharSet.Unicode)] public static extern uint GetModuleBaseName(IntPtr h, IntPtr m, StringBuilder s, uint n);
-        [DllImport("user32.dll")] public static extern bool EnumProcesses(uint[] pids, uint size, out uint needed);
         [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
       }
 "@ -ErrorAction SilentlyContinue
@@ -63,7 +72,11 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
       # 尺寸检查放宽:某些私服/反外挂让 GetWindowRect 返回 0,但 title/className 仍可识别
       if ($w -lt 50 -or $h2 -lt 50) { return $true }
       $procName = ""
-      $hp = [WinEnum]::OpenProcess(0x1000, $false, $procId)
+      # GetModuleBaseName 需要 PROCESS_QUERY_INFORMATION | PROCESS_VM_READ(0x0410);
+      # 之前只用 0x1000 会静默拿到空进程名,导致按进程名匹配全部失效。
+      # 受保护进程可能拒绝 0x0410,回退 0x1000 拿不到名字也不影响标题/类名匹配。
+      $hp = [WinEnum]::OpenProcess(0x0410, $false, $procId)
+      if ($hp -eq [IntPtr]::Zero) { $hp = [WinEnum]::OpenProcess(0x1000, $false, $procId) }
       if ($hp -ne [IntPtr]::Zero) {
         $nb = New-Object System.Text.StringBuilder 256
         [WinEnum]::GetModuleBaseName($hp, [IntPtr]::Zero, $nb, 256) | Out-Null
@@ -96,11 +109,12 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
     [Convert]::ToBase64String($bytes)
   `;
 
+  const startedAt = Date.now();
   try {
     const { stdout } = await execFileAsync(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
-      { timeout: 5000, windowsHide: true },
+      { timeout: PS_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
     );
 
     if (!stdout.trim()) return [];
@@ -108,7 +122,7 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
     const decoded = Buffer.from(stdout.trim(), 'base64').toString('utf8');
     const parsed = JSON.parse(decoded);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((w: any) => ({
+    const list = parsed.map((w: any) => ({
       hwnd: Number(w.HWnd),
       pid: Number(w.Pid),
       title: String(w.Title || ''),
@@ -123,10 +137,41 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
       isForeground: !!w.IsForeground,
       isMinimized: !!w.IsMinimized,
     }));
-  } catch (err) {
-    log.error('[WindowRegistry] PowerShell 枚举失败:', err);
+    log.debug(`[WindowRegistry] 枚举到 ${list.length} 个窗口,耗时 ${Date.now() - startedAt}ms`);
+    return list;
+  } catch (err: any) {
+    if (err?.killed || err?.signal === 'SIGTERM') {
+      log.warn(
+        `[WindowRegistry] PowerShell 枚举超过 ${PS_TIMEOUT_MS}ms 被终止,本轮返回空列表(下次轮询会重试)`,
+      );
+    } else {
+      log.error('[WindowRegistry] PowerShell 枚举失败:', err);
+    }
     return [];
   }
+}
+
+/**
+ * 带在途去重 + 短 TTL 缓存的枚举。
+ * 前端每 3s 轮询一次,而单次枚举要 3~4s;不做去重会同时挂着多个 PowerShell 互相抢 CPU,
+ * 每个都更容易踩超时,窗口列表就会周期性变空。
+ */
+async function listAllWindowsCached(): Promise<GameWindow[]> {
+  const now = Date.now();
+  if (cachedWindows && now - cachedWindows.at < CACHE_TTL_MS) {
+    return cachedWindows.data;
+  }
+  if (inflightEnumeration) return inflightEnumeration;
+
+  inflightEnumeration = listAllWindowsViaPS()
+    .then((data) => {
+      cachedWindows = { at: Date.now(), data };
+      return data;
+    })
+    .finally(() => {
+      inflightEnumeration = null;
+    });
+  return inflightEnumeration;
 }
 
 /** QQ幻想 窗口识别规则(可扩展) */
@@ -187,6 +232,6 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
 
 /** 列出所有 QQ幻想 窗口 */
 export async function listGameWindows(): Promise<GameWindow[]> {
-  const all = await listAllWindowsViaPS();
+  const all = await listAllWindowsCached();
   return all.filter(isQQFantasyWindow);
 }

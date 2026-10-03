@@ -309,11 +309,11 @@ const VIEW_UI_MARGIN = { top: 100, bottom: 70, left: 10, right: 10 };
  * 换分辨率:游戏 UI 贴边且尺寸不变,贴着右边/下边的区域跟着那条边平移(见 blockRectsFor)。
  */
 const BLOCK_RECTS_1280: ScreenRect[] = [
-  { x: 1, y: 1, w: 178, h: 186 }, // 左上:小地图/头像
+  { x: 1, y: 1, w: 207, h: 186 }, // 左上:小地图/头像
   { x: 406, y: 6, w: 440, h: 98 }, // 顶部中间:状态/目标条
   { x: 1097, y: 1, w: 183, h: 190 }, // 右上:小地图
-  { x: 1, y: 596, w: 112, h: 196 }, // 左下:聊天框
-  { x: 890, y: 720, w: 387, h: 69 }, // 右下:技能栏/功能按钮
+  { x: 1, y: 588, w: 228, h: 213 }, // 左下:聊天框
+  { x: 890, y: 720, w: 387, h: 90 }, // 右下:技能栏/功能按钮
 ];
 
 /** 结束条件(全局旋钮) */
@@ -1219,12 +1219,12 @@ async function runFixedSpot(run: FarmRun, wp: ResolvedWaypoint, current: MapPosi
   const angle = aimAngle(current, prev);
   const aim = clampDistanceToView(view, angle, FIXED_AIM.distance);
   const aimPoint = pointAt(view, angle, aim.distance);
-  ctx.sendLog(
-    'info',
-    `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ` +
-      `定点打怪:移动反方向落点 (${aimPoint.x},${aimPoint.y}) 默认距离=${aim.distance}px` +
-      (aim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : ''),
-  );
+  // ctx.sendLog(
+  //   'info',
+  //   `[${label}] 到达 (${current.x},${current.y}) 挂机点,技能 ${wp.skills.length} 个 ` +
+  //     `定点打怪:移动反方向落点 (${aimPoint.x},${aimPoint.y}) 默认距离=${aim.distance}px` +
+  //     (aim.clamped ? '(超出画面,已夹到边界;各技能的"施法距离"可单独调)' : ''),
+  // );
 
   const skillsToCast = pickSkillsToCast(run, wp, Date.now());
   if (skillsToCast.length === 0) {

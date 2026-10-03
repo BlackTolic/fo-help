@@ -405,12 +405,12 @@ export class MovementControllerByPrecisePoint extends MovementController {
 
     // const { dist } = this.deltaTo(current, target);
 
-    log.info(
-      `精确点移动: 当前坐标 (${current.x},${current.y}),目标坐标 (${target.x},${target.y}),` +
-        `落点 (${point.x},${point.y})` +
-        (clamped ? '(超出画面,已裁到边界)' : '') +
-        (blocked ? '(落点在 UI 区域,已裁到区域外)' : ''),
-    );
+    // log.info(
+    //   `精确点移动: 当前坐标 (${current.x},${current.y}),目标坐标 (${target.x},${target.y}),` +
+    //     `落点 (${point.x},${point.y})` +
+    //     (clamped ? '(超出画面,已裁到边界)' : '') +
+    //     (blocked ? '(落点在 UI 区域,已裁到区域外)' : ''),
+    // );
     // log.debug(
     //   `精确点移动: 落点 (${point.x},${point.y}) 距目标 ${dist.toFixed(1)} 单位` +
     //     (clamped ? '(超出画面,已裁到边界)' : '') +
