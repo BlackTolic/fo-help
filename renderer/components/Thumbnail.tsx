@@ -2,7 +2,7 @@
 // 支持自动定时刷新
 
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw } from '../icons';
 
 interface Props {
   hwnd: number;

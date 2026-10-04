@@ -10,11 +10,9 @@
 //
 // 启动整合到 dialog:不再有独立的"启动"按钮,配置确认后自动进入战斗循环
 
-import { useState } from 'react';
-import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from 'lucide-react';
+import { Suspense, lazy, useState } from 'react';
+import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from '../icons';
 import { useStore } from '../store/useStore';
-import { TaskConfigDialog } from './TaskConfigDialog';
-import { HistoryTaskDialog } from './HistoryTaskDialog';
 import type {
   GameWindow,
   TaskConfig,
@@ -23,6 +21,15 @@ import type {
   StoredTaskConfig,
 } from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
+
+// 两个 dialog 都是"点开才需要"的重量级组件(TaskConfigDialog 源码 100KB),
+// 静态 import 会把它们算进首屏模块图;懒加载后只有用户点开时才请求。
+const TaskConfigDialog = lazy(() =>
+  import('./TaskConfigDialog').then((m) => ({ default: m.TaskConfigDialog })),
+);
+const HistoryTaskDialog = lazy(() =>
+  import('./HistoryTaskDialog').then((m) => ({ default: m.HistoryTaskDialog })),
+);
 
 interface Props {
   gameWindow: GameWindow;
@@ -583,26 +590,30 @@ export function WindowCard({
       {/* 任务配置 dialog — 渲染条件:dialogOpen + (已有 taskConfig 或 创建流程中)
           创建流程时 taskConfig 还是 null(没保存),但要能开 dialog 让用户配置 */}
       {dialogOpen && (taskConfig || dialogMode === 'create') && (
-        <TaskConfigDialog
-          hwnd={gameWindow.hwnd}
-          initialConfig={taskConfig}
-          thumbnail={useStore.getState().thumbnails.get(gameWindow.hwnd)}
-          workerState={worker || null}
-          readOnly={dialogMode === 'view'}
-          onClose={handleDialogClose}
-          onSaved={handleTaskSaved}
-          onConfirm={dialogMode === 'view' ? undefined : handleTaskConfirm}
-        />
+        <Suspense fallback={null}>
+          <TaskConfigDialog
+            hwnd={gameWindow.hwnd}
+            initialConfig={taskConfig}
+            thumbnail={useStore.getState().thumbnails.get(gameWindow.hwnd)}
+            workerState={worker || null}
+            readOnly={dialogMode === 'view'}
+            onClose={handleDialogClose}
+            onSaved={handleTaskSaved}
+            onConfirm={dialogMode === 'view' ? undefined : handleTaskConfirm}
+          />
+        </Suspense>
       )}
 
       {/* 历史任务 dialog */}
       {historyOpen && (
-        <HistoryTaskDialog
-          history={taskHistory}
-          currentHwnd={gameWindow.hwnd}
-          onClose={() => setHistoryOpen(false)}
-          onApply={(stored) => handleHistorySelect(stored)}
-        />
+        <Suspense fallback={null}>
+          <HistoryTaskDialog
+            history={taskHistory}
+            currentHwnd={gameWindow.hwnd}
+            onClose={() => setHistoryOpen(false)}
+            onApply={(stored) => handleHistorySelect(stored)}
+          />
+        </Suspense>
       )}
     </>
   );

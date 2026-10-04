@@ -7,9 +7,9 @@
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
-    "dev": "npm run build:main && concurrently -k -n vite,main -c blue,green \"npm:dev:renderer\" \"npm:dev:main\"",
+    "dev": "concurrently -k -n vite,main -c blue,green \"npm:dev:renderer\" \"npm:dev:main\"",
     "dev:renderer": "vite",
-    "dev:main": "wait-on http-get://localhost:5174 dist-electron/electron/main.js && cross-env NODE_ENV=development electron .",
+    "dev:main": "npm run build:main && node scripts/wait-for-dev-server.mjs && cross-env NODE_ENV=development electron .",
     "build:main": "tsc -p electron/tsconfig.json",
     "build:renderer": "vite build",
     "build": "npm run build:main && npm run build:renderer",

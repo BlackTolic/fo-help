@@ -19,7 +19,7 @@ import {
   Pencil,
   Trash2,
   Play,
-} from 'lucide-react';
+} from '../icons';
 import type { TaskType, StoredTaskConfig, TaskConfig } from '../../shared/types';
 import { useStore } from '../store/useStore';
 import { TaskConfigDialog } from './TaskConfigDialog';

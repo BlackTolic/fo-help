@@ -13,6 +13,9 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
+    // 每次 npm run dev 都会重编一遍主进程,全量重编要 3~4s。
+    // incremental 把 .tsbuildinfo 落在 dist-electron/,二次启动只重编改动过的文件。
+    "incremental": true,
     "forceConsistentCasingInFileNames": true,
     "baseUrl": "..",
     "paths": {

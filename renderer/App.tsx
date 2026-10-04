@@ -9,7 +9,7 @@ import {
   Loader2,
   ShieldCheck,
   Settings,
-} from 'lucide-react';
+} from './icons';
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -44,11 +44,14 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 首次自动弹出(未检测到分辨率设置)时标记,面板里提示必须先选分辨率
   const [settingsFirstRun, setSettingsFirstRun] = useState(false);
+  // 手动刷新进行中:枚举一次要拉起 PowerShell(1.5~4s),期间按钮转圈并禁用
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     // 订阅 IPC 事件
     subscribeToIpc();
-    // 刷新窗口列表
+    // 窗口列表只在启动时枚举一次;之后由用户点"刷新"手动获取
+    // (单次枚举要拉起 PowerShell 1.5~4s,轮询会让它几乎一直占着 CPU)
     refreshWindows();
     // 加载全局历史任务列表
     loadTaskHistory();
@@ -62,10 +65,16 @@ function App() {
         setSettingsOpen(true);
       }
     })();
-    // 每 3 秒刷新窗口列表
-    const t = setInterval(refreshWindows, 3000);
-    return () => clearInterval(t);
   }, [refreshWindows, loadTaskHistory, checkDamoo]);
+
+  const handleRefreshWindows = async () => {
+    setRefreshing(true);
+    try {
+      await refreshWindows();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // ⚠️ 新流程:不再自动 loadTaskConfig(每个窗口都需要用户主动选"创建/历史")
 
@@ -100,11 +109,12 @@ function App() {
             运行中 <span className="text-accent-green font-mono">{runningCount}</span>
           </span>
           <button
-            className="ml-3 btn btn-secondary flex items-center gap-1"
-            onClick={refreshWindows}
+            className="ml-3 btn btn-secondary flex items-center gap-1 disabled:opacity-60"
+            disabled={refreshing}
+            onClick={handleRefreshWindows}
           >
-            <RefreshCw size={12} />
-            刷新
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : undefined} />
+            {refreshing ? '刷新中...' : '刷新'}
           </button>
           <button
             className="btn btn-secondary flex items-center gap-1"

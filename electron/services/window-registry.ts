@@ -10,14 +10,11 @@ import { createLogger } from '../../core/logger';
 const log = createLogger('window-registry');
 const execFileAsync = promisify(execFile);
 
-// PowerShell 冷启动 + Add-Type 编译 + 枚举一次约 3~4s(机器上有杀软时更慢),
-// 5s 超时会在首页 3s 轮询叠加时被踩爆 → 子进程被判 SIGTERM,窗口列表变空。
+// PowerShell 冷启动 + Add-Type 编译 + 枚举一次约 1.5~4s(机器上有杀软时更慢)。
+// 窗口列表现在只在启动时取一次、以及用户点"刷新"时取一次(不再轮询),所以不做结果缓存 ——
+// 每次调用都真实枚举一次;只保留在途去重,避免连点刷新时同时挂起多个 PowerShell 互相抢 CPU。
 const PS_TIMEOUT_MS = 20000;
-// 单次枚举成本高于前端轮询间隔,同一份结果在 TTL 内复用;
-// 配合在途去重(见 listAllWindowsCached),避免每 3s 拉起一个 PowerShell。
-const CACHE_TTL_MS = 3000;
 
-let cachedWindows: { at: number; data: GameWindow[] } | null = null;
 let inflightEnumeration: Promise<GameWindow[]> | null = null;
 
 /** 调 PowerShell 枚举所有可见顶层窗口,返回 JSON 列表 */
@@ -152,25 +149,14 @@ async function listAllWindowsViaPS(): Promise<GameWindow[]> {
 }
 
 /**
- * 带在途去重 + 短 TTL 缓存的枚举。
- * 前端每 3s 轮询一次,而单次枚举要 3~4s;不做去重会同时挂着多个 PowerShell 互相抢 CPU,
- * 每个都更容易踩超时,窗口列表就会周期性变空。
+ * 带在途去重的枚举:同一时刻只允许一次 PowerShell 枚举,并发调用复用同一个 Promise。
  */
-async function listAllWindowsCached(): Promise<GameWindow[]> {
-  const now = Date.now();
-  if (cachedWindows && now - cachedWindows.at < CACHE_TTL_MS) {
-    return cachedWindows.data;
-  }
+async function listAllWindows(): Promise<GameWindow[]> {
   if (inflightEnumeration) return inflightEnumeration;
 
-  inflightEnumeration = listAllWindowsViaPS()
-    .then((data) => {
-      cachedWindows = { at: Date.now(), data };
-      return data;
-    })
-    .finally(() => {
-      inflightEnumeration = null;
-    });
+  inflightEnumeration = listAllWindowsViaPS().finally(() => {
+    inflightEnumeration = null;
+  });
   return inflightEnumeration;
 }
 
@@ -232,6 +218,6 @@ export function isQQFantasyWindow(win: GameWindow): boolean {
 
 /** 列出所有 QQ幻想 窗口 */
 export async function listGameWindows(): Promise<GameWindow[]> {
-  const all = await listAllWindowsCached();
+  const all = await listAllWindows();
   return all.filter(isQQFantasyWindow);
 }

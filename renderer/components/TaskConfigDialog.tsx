@@ -2,7 +2,7 @@
 // 两步:1.选任务类型(可从历史任务加载) 2.配置参数(挂机打怪详细,其他留白)
 
 import { useState, useEffect } from 'react';
-import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from 'lucide-react';
+import { X, ChevronRight, Plus, Trash2, ArrowUp, ArrowDown, Check, History, Keyboard } from '../icons';
 import type {
   TaskType,
   TaskConfig,

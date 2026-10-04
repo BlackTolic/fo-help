@@ -3,7 +3,7 @@
 // - 保存走主进程 settings:save,落到本地 JSON;下次启动不再提醒
 
 import { useEffect, useState } from 'react';
-import { X, Monitor, KeyRound, Bot, Save } from 'lucide-react';
+import { X, Monitor, KeyRound, Bot, Save } from '../icons';
 import type { GameResolution } from '../../shared/types';
 import { useStore } from '../store/useStore';
 
