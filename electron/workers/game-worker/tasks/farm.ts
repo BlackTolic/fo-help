@@ -1314,7 +1314,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         {
           arriveTolerance: 1, // 到达容忍度:1 个单位内即到位
           stepIntervalMs: conf.stepIntervalMs, // 每次移动间隔
-          noMoveTimeoutMs: 3000, // 3s 没动视为卡住
+          noMoveTimeoutMs: 2000, // 1.5s 没动视为卡住
           moveEpsilon: 0.5, // 1 个单位内即到位
         },
       );
