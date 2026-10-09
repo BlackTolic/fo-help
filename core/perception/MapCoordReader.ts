@@ -5,6 +5,8 @@
 // 区域和文字颜色全部来自 MapCoordConfig(profile 里配置)。
 
 import type { IVisionProvider } from '../platform/vision/IVisionProvider';
+import { MAP_NAME_ROI } from '../constant-ocr/position';
+import type { WindowSizeKey } from '../constant-ocr/popup';
 import { createLogger } from '../logger';
 import type { MapCoordConfig, MapPosition } from './types';
 
@@ -14,11 +16,16 @@ export class MapCoordReader {
   constructor(
     private vision: IVisionProvider,
     private config: MapCoordConfig,
+    /**
+     * 窗口分辨率档位(可选):配置里没配 mapNameRoi 时,按档位取内置常量
+     * MAP_NAME_ROI(见 core/constant-ocr/position.ts)作为地图名识别区域。
+     */
+    private size?: WindowSizeKey,
   ) {}
 
   /** 读当前地图坐标;OCR 失败或解析不出数字时返回 null */
   async read(): Promise<MapPosition | null> {
-    const { coordRoi, coordColor, mapNameRoi, mapNameColor, similarity } = this.config;
+    const { coordRoi, coordColor, similarity } = this.config;
     const coordResult = await this.vision.ocr(coordRoi, {
       color: coordColor,
       similarity: similarity ?? 0.8,
@@ -29,16 +36,28 @@ export class MapCoordReader {
       return null;
     }
 
-    let map: string | null = null;
-    if (mapNameRoi && mapNameColor) {
-      const nameResult = await this.vision.ocr(mapNameRoi, {
-        color: mapNameColor,
-        similarity: similarity ?? 0.8,
-      });
-      map = nameResult.text.trim() || null;
-    }
+    const map = await this.readMapName();
+    return { map: map || null, x: xy.x, y: xy.y };
+  }
 
-    return { map, x: xy.x, y: xy.y };
+  /**
+   * 读当前地图名(OCR);读不到返回空字符串。
+   * 识别区域优先用配置里的 mapNameRoi/mapNameColor;没配且构造时给了分辨率档位时,
+   * 按档位取内置常量 MAP_NAME_ROI。
+   */
+  async readMapName(): Promise<string> {
+    const { mapNameRoi, mapNameColor, similarity } = this.config;
+    const fallback = this.size ? MAP_NAME_ROI[this.size] : undefined;
+    const roi =
+      mapNameRoi ?? (fallback ? { x: fallback.x1, y: fallback.y1, w: fallback.x2 - fallback.x1, h: fallback.y2 - fallback.y1 } : undefined);
+    const color = mapNameColor ?? fallback?.color;
+    if (!roi || !color) return '';
+
+    const nameResult = await this.vision.ocr(roi, {
+      color,
+      similarity: similarity ?? fallback?.sim ?? 0.8,
+    });
+    return nameResult.text.trim();
   }
 
   /**

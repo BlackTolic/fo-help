@@ -9,9 +9,7 @@ import path from 'path';
 import { app } from 'electron';
 import type { StoredTaskConfig, TaskConfig } from '../../shared/types';
 
-const STORAGE_DIR = app.isPackaged
-  ? path.join(app.getPath('userData'), 'task-configs')
-  : path.join(app.getAppPath(), 'task-configs');
+const STORAGE_DIR = app.isPackaged ? path.join(app.getPath('userData'), 'task-configs') : path.join(app.getAppPath(), 'task-configs');
 
 function ensureDir() {
   if (!fs.existsSync(STORAGE_DIR)) fs.mkdirSync(STORAGE_DIR, { recursive: true });
@@ -84,6 +82,15 @@ export class TaskConfigService {
     if (!existing) {
       return { ok: false, error: `任务"${trimmedName}"不存在,无法更新` };
     }
+    // 防呆:不允许把已有任务的类型改掉(例如把「城镇档案」覆盖成「挂机打怪」)。
+    // 换类型必须走「另存为…」→ saveByName(换新名字);这里一旦放开就会静默毁掉被引用的配置。
+    const existingType = existing.taskType ?? existing.config?.type;
+    if (existingType && config.type && existingType !== config.type) {
+      return {
+        ok: false,
+        error: `任务「${trimmedName}」的类型是「${existingType}」,不能保存成「${config.type}」;想换类型请用「另存为…」存成新任务`,
+      };
+    }
     const stored: StoredTaskConfig = {
       ...existing,
       taskType: config.type,
@@ -112,9 +119,7 @@ export class TaskConfigService {
     for (const f of fs.readdirSync(STORAGE_DIR)) {
       if (!f.endsWith('.json')) continue;
       try {
-        const raw = JSON.parse(
-          fs.readFileSync(path.join(STORAGE_DIR, f), 'utf-8'),
-        ) as StoredTaskConfig;
+        const raw = JSON.parse(fs.readFileSync(path.join(STORAGE_DIR, f), 'utf-8')) as StoredTaskConfig;
         // 跳过旧版本数据(没 name 字段)
         if (!raw.name) continue;
         results.push(raw);

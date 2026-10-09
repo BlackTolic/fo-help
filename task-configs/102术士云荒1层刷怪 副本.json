@@ -1,0 +1,306 @@
+{
+  "id": "task-102术士云荒1层刷怪 副本-1791552010285",
+  "name": "102术士云荒1层刷怪 副本",
+  "taskType": "farm",
+  "config": {
+    "type": "farm",
+    "mapId": "custom",
+    "customMapName": "云泽秘径",
+    "mode": "fixed",
+    "castMode": "smart",
+    "waypoints": [
+      {
+        "id": "wp-1791370259400-hw9m",
+        "x": 130,
+        "y": 131,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370259683-6mze",
+        "x": 140,
+        "y": 125,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370259851-zco3",
+        "x": 149,
+        "y": 119,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260019-yw9c",
+        "x": 158,
+        "y": 113,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260167-i9ai",
+        "x": 170,
+        "y": 108,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260295-c2aa",
+        "x": 177,
+        "y": 102,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260415-nset",
+        "x": 168,
+        "y": 96,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260550-ke4p",
+        "x": 160,
+        "y": 90,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260683-skxj",
+        "x": 151,
+        "y": 83,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260782-huct",
+        "x": 141,
+        "y": 77,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370260911-fb2h",
+        "x": 132,
+        "y": 70,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261039-sj92",
+        "x": 124,
+        "y": 64,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261170-7q68",
+        "x": 119,
+        "y": 57,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261295-f6ld",
+        "x": 107,
+        "y": 60,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261419-0jlv",
+        "x": 97,
+        "y": 64,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261550-dcw5",
+        "x": 87,
+        "y": 68,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261675-uqay",
+        "x": 77,
+        "y": 70,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261814-zxsl",
+        "x": 68,
+        "y": 75,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370261930-a61n",
+        "x": 57,
+        "y": 79,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262063-j6z7",
+        "x": 48,
+        "y": 85,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262179-w4hk",
+        "x": 38,
+        "y": 90,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262298-p976",
+        "x": 47,
+        "y": 95,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262431-z8dz",
+        "x": 56,
+        "y": 99,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262551-39fj",
+        "x": 65,
+        "y": 104,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262682-j7j0",
+        "x": 77,
+        "y": 108,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791370262835-l28v",
+        "x": 87,
+        "y": 112,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791371087464-bxpz",
+        "x": 95,
+        "y": 117,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791371087826-0im5",
+        "x": 105,
+        "y": 127,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791371088167-5wd7",
+        "x": 118,
+        "y": 128,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791371088555-zfc5",
+        "x": 129,
+        "y": 135,
+        "type": "farm-spot"
+      }
+    ],
+    "mobFilter": {
+      "nameKeywords": [
+        "野",
+        "狼",
+        "鸡",
+        "鹿",
+        "狐",
+        "猫"
+      ],
+      "nameColors": [
+        "FFFFFF-FFFFFF"
+      ]
+    },
+    "skills": [
+      {
+        "id": "skill-1790561668551-2lfl",
+        "key": "F1",
+        "cooldownMs": 6000,
+        "castMs": 500,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668768-0lrx",
+        "key": "F2",
+        "cooldownMs": 5000,
+        "castMs": 750,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668944-a5gb",
+        "key": "F3",
+        "cooldownMs": 10000,
+        "castMs": 0,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561669095-36q7",
+        "key": "F4",
+        "cooldownMs": 25000,
+        "castMs": 0,
+        "rangePx": 100,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561749975-tw2o",
+        "key": "F7",
+        "cooldownMs": 300000,
+        "castMs": 100,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561750353-3c79",
+        "key": "F8",
+        "cooldownMs": 60000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790569034369-qqxi",
+        "key": "F10",
+        "cooldownMs": 120000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790595746624-r8cm",
+        "key": "F5",
+        "name": "喂草",
+        "cooldownMs": 1800000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "quick",
+        "enabled": true
+      }
+    ],
+    "movementSpeed": 500,
+    "watchdog": {
+      "verifyCode": true,
+      "autoHeal": {
+        "itemIds": [
+          "skill-1790569034369-qqxi"
+        ]
+      }
+    },
+    "pickup": {
+      "enabled": false,
+      "rangeMode": "default",
+      "rules": []
+    },
+    "resupply": {
+      "enabled": true,
+      "townProfileName": "云泽秘径",
+      "reviveMode": "auto",
+      "reviveTimeoutMs": 180000,
+      "checkDurability": true,
+      "runOnStart": true
+    }
+  },
+  "createdAt": 1791552010285,
+  "updatedAt": 1791555346521
+}

@@ -1,30 +1,24 @@
-// 历史任务 dialog:列出全局所有已保存的任务(按名字),
+// 历史任务 dialog:列出全局所有**可运行**任务(按名字),
 // 启动 → 应用到当前 hwnd + 立即启动 任务(实心 cyan,最右,最醒目)
 // 编辑 → 弹 TaskConfigDialog 锁名字,保存后**不启动**,只更新磁盘
 // 删除 → 从磁盘移除该任务的 JSON 文件(二次确认)
 //
-// 按钮顺序(从左到右):[删除] [编辑] [启动]
+// 注意:「城镇档案 / 对话配方」是配置型任务,不在这里出现,改由「选择任务」里的
+// 各自卡片管理(查看 / 修改 / 新建 / 删除)。
+//
+// 按钮顺序(从左到右):[删除] [编辑] [主操作]
+//   主操作:可运行类型 → 「启动」(实心 cyan);嵌入编辑器且没传 onStart 时退化为「载入到编辑器」
 //
 // 数据来源:store.taskHistory(全局,跨窗口复用)
 
 import { useState } from 'react';
-import {
-  X,
-  FileText,
-  Swords,
-  Pickaxe,
-  PawPrint,
-  Hammer,
-  Trophy,
-  Pencil,
-  Trash2,
-  Play,
-} from '../icons';
+import { X, FileText, Swords, Pickaxe, PawPrint, Hammer, Trophy, Pencil, Trash2, Play } from '../icons';
 import type { TaskType, StoredTaskConfig, TaskConfig } from '../../shared/types';
 import { useStore } from '../store/useStore';
+import { isConfigOnlyTaskType } from '../aux-configs';
 import { TaskConfigDialog } from './TaskConfigDialog';
 
-const TASK_LABEL: Record<TaskType, { name: string; Icon: any }> = {
+const TASK_LABEL: Partial<Record<TaskType, { name: string; Icon: any }>> = {
   farm: { name: '挂机打怪', Icon: Swords },
   mine: { name: '挖矿', Icon: Pickaxe },
   'catch-pet': { name: '捕捉宠物', Icon: PawPrint },
@@ -56,14 +50,25 @@ interface Props {
    *   3. bootstrap + startTask,直接开始跑
    */
   onApply: (stored: StoredTaskConfig) => void;
+  /**
+   * 仅 variant='load' 用:把这条历史任务直接应用并启动
+   * (父组件 WindowCard 负责停旧 worker + bootstrap + startTask)。
+   * 未提供时,嵌入模式里的主操作退化为「载入到编辑器」。
+   */
+  onStart?: (stored: StoredTaskConfig) => void;
+  /**
+   * 'start' = 独立的历史任务弹窗:主操作「启动」
+   * 'load'  = 嵌在 TaskConfigDialog 里「从历史任务中选择」:主操作「启动」(onStart)
+   */
+  variant?: 'start' | 'load';
 }
 
-export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Props) {
+export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply, onStart, variant = 'start' }: Props) {
   /**
    * 编辑模式:点某行的「编辑」进入。这时整个 dialog 上叠一层 TaskConfigDialog。
    * - initialConfig = 该任务的 config
-   * - initialTaskName = 锁定的任务名
-   * - 走 updateTaskByName 后**不启动 worker**,只持久化
+   * - initialTaskName = 正在编辑的任务名(编辑器 footer 于是走 保存 / 保存并启动 / 另存为)
+   * - 保存走 updateTaskByName 覆盖,不启动 worker;"保存并启动"则保存后再走 onApply 启动链路
    * 保存成功后切回 null,关闭编辑对话框,刷新 history 让 user 看到改动。
    */
   const [editing, setEditing] = useState<StoredTaskConfig | null>(null);
@@ -72,8 +77,13 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
   // 删除进行中(防重复点)
   const [deleting, setDeleting] = useState(false);
   const updateTaskByName = useStore((s) => s.updateTaskByName);
+  const saveTaskByName = useStore((s) => s.saveTaskByName);
   const deleteTaskByName = useStore((s) => s.deleteTaskByName);
   const loadTaskHistory = useStore((s) => s.loadTaskHistory);
+  /** 嵌入模式(TaskConfigDialog 里「从历史任务中选择」) */
+  const loadMode = variant === 'load';
+  /** 配置型任务(城镇档案/对话配方)不在这里管理,过滤掉 */
+  const visibleHistory = history.filter((h) => !isConfigOnlyTaskType(h.config.type));
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6">
@@ -82,7 +92,7 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
           <div className="flex items-center gap-2 text-sm">
             <FileText size={14} className="text-accent-cyan" />
             <span className="text-text-primary font-medium">历史任务</span>
-            <span className="text-text-muted text-xs">({history.length} 条,全局共享)</span>
+            <span className="text-text-muted text-xs">({visibleHistory.length} 条,全局共享)</span>
           </div>
           <button onClick={onClose} className="text-text-muted hover:text-text-primary">
             <X size={18} />
@@ -90,48 +100,61 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
         </header>
 
         <div className="flex-1 overflow-y-auto p-3">
-          {history.length === 0 ? (
+          {visibleHistory.length === 0 ? (
             <div className="text-center py-12 text-text-muted text-xs">
               <div className="text-3xl mb-2 opacity-30">📋</div>
               <div>还没有保存过任何任务</div>
-              <div className="mt-1">
-                先在 WindowCard 上点"创建任务" → 选好 → 点"保存配置" + 输入名字
-              </div>
+              <div className="mt-1">先在 WindowCard 上点"创建任务" → 选好 → 点"保存配置" + 输入名字</div>
             </div>
           ) : (
             <div className="space-y-1.5">
-              {history.map((stored) => {
+              {visibleHistory.map((stored) => {
                 const { name, Icon } = TASK_LABEL[stored.config.type] || {
                   name: '未知',
                   Icon: FileText,
                 };
+                // 主操作(最右)按钮:可运行类型 → 「启动」;嵌入模式没传 onStart 时退化为「载入到编辑器」
+                const primary: { label: string; icon: boolean; onClick: () => void; title: string } =
+                  loadMode && !onStart
+                    ? {
+                        label: '载入到编辑器',
+                        icon: false,
+                        onClick: () => onApply(stored),
+                        title: '把这份配置填进编辑器(保存时可覆盖它,或「另存为…」存成新任务)',
+                      }
+                    : {
+                        label: '启动',
+                        icon: true,
+                        onClick: () => (loadMode ? onStart!(stored) : onApply(stored)),
+                        title: loadMode
+                          ? `把这条任务直接应用到 hwnd ${currentHwnd} 并立即启动(不经过编辑器)`
+                          : '把这个任务应用到当前 hwnd 并启动',
+                      };
                 return (
                   <div
                     key={stored.name}
                     className="flex items-center gap-3 p-3 rounded border bg-bg-input border-border-base hover:border-accent-cyan/50"
-                    title={`点击将此任务应用到 hwnd ${currentHwnd}`}
+                    title={
+                      loadMode ? `点右侧「启动」直接应用并开跑;点「编辑」可修改配置后再保存` : `点击将此任务应用到 hwnd ${currentHwnd}`
+                    }
                   >
                     <Icon size={18} className="text-text-secondary flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">{stored.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-cyan/20 text-accent-cyan">
-                          {name}
-                        </span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-cyan/20 text-accent-cyan">{name}</span>
                       </div>
                       <div className="text-[11px] text-text-muted truncate">
                         {stored.config.type === 'farm' && (
                           <>
                             地图 {(stored.config as any).mapId} · 模式{' '}
-                            {FARM_MODE_LABELS[(stored.config as any).mode] ??
-                              (stored.config as any).mode}{' '}
-                            ·{' '}
+                            {FARM_MODE_LABELS[(stored.config as any).mode] ?? (stored.config as any).mode} ·{' '}
                           </>
                         )}
                         更新于 {new Date(stored.updatedAt).toLocaleString('zh-CN')}
                       </div>
                     </div>
-                    {/* 按钮顺序:[删除] [编辑] [启动](醒目) */}
+                    {/* 按钮顺序:[删除] [编辑] [主操作(醒目)] */}
                     {confirmDelete === stored.name ? (
                       // 二次确认:确定 / 取消(占位用,顺序保持在最左)
                       <>
@@ -187,22 +210,22 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
                         e.stopPropagation();
                         setEditing(stored);
                       }}
-                      title="编辑这个任务(只更新磁盘,不启动)"
+                      title="编辑这条历史任务:保存会覆盖它(不启动)"
                     >
                       <Pencil size={11} />
                       编辑
                     </button>
-                    {/* "启动"按钮:实心 cyan,醒目强调 — 这是用户最常点的动作 */}
+                    {/* 主操作(最右)按钮:实心 cyan,醒目强调 — 这是用户最常点的动作 */}
                     <button
                       className="text-xs px-2.5 py-1 bg-accent-cyan text-bg-base hover:bg-accent-cyan/90 rounded flex items-center gap-1 font-semibold"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onApply(stored);
+                        primary.onClick();
                       }}
-                      title="把这个任务应用到当前 hwnd 并启动"
+                      title={primary.title}
                     >
-                      <Play size={11} />
-                      启动
+                      {primary.icon && <Play size={11} />}
+                      {primary.label}
                     </button>
                   </div>
                 );
@@ -212,7 +235,9 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
         </div>
 
         <footer className="px-5 py-3 border-t border-border-base text-[11px] text-text-muted">
-          点击某条任务将其加载到 hwnd {currentHwnd} 并立即启动任务流程
+          {loadMode
+            ? '点「启动」直接应用并开跑,点「编辑」修改配置后再保存'
+            : `点某条任务右侧的「启动」把它应用到 hwnd ${currentHwnd} 并立即开始跑`}
         </footer>
       </div>
 
@@ -223,16 +248,20 @@ export function HistoryTaskDialog({ history, currentHwnd, onClose, onApply }: Pr
           initialConfig={editing.config}
           initialTaskName={editing.name}
           onClose={() => setEditing(null)}
-          onSaved={async (newConfig: TaskConfig, name: string) => {
-            const res = await updateTaskByName(name, newConfig);
-            if (res.ok) {
-              // 刷新 history 列表,关掉编辑 dialog
-              await loadTaskHistory();
-              setEditing(null);
-            } else {
+          onSaved={async (newConfig: TaskConfig, name: string, opts?: { existing?: boolean; start?: boolean }) => {
+            // 「保存 / 保存并启动」= 覆盖这条历史任务(opts.existing=true);
+            // 「另存为…」= 存成新任务(无 existing)→ 走 saveTaskByName(重名会被拒绝,由 dialog 留在 name 步骤改名)
+            const res = opts?.existing === true ? await updateTaskByName(name, newConfig) : await saveTaskByName(name, newConfig);
+            if (!res.ok) {
               // 错误留在 dialog 内,因为 input 锁了,弹 alert 最直观
               alert(`保存失败: ${res.error || '未知错误'}`);
+              return res;
             }
+            // 刷新 history 列表,关掉编辑 dialog
+            await loadTaskHistory();
+            setEditing(null);
+            // 「保存并启动」:复用父组件的"启动"链路(停旧 worker → bootstrap → startTask)
+            if (opts?.start) onApply({ ...editing, config: newConfig, updatedAt: Date.now() });
             return res;
           }}
         />

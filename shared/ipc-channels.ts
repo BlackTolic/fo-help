@@ -16,6 +16,7 @@ export enum RequestChannel {
   PauseWorker = 'worker:pause',
   ResumeWorker = 'worker:resume',
   ListWorkers = 'worker:list',
+  ReadWorkerPosition = 'worker:read-position', // 同步读取某 worker 当前地图名/坐标(一次性请求/响应)
 
   // 任务配置
   SaveTaskConfig = 'task:save', // 新建(按 name 唯一存储,重名拒绝)

@@ -218,10 +218,18 @@ export const dmApi = {
   keyDown: (vkCode: number): number => getRaw().KeyDown(vkCode),
   keyUp: (vkCode: number): number => getRaw().KeyUp(vkCode),
   keyPress: (vkCode: number): number => getRaw().KeyPress(vkCode),
+  /**
+   * 输入一段文字(对话配方的 input-text 步骤用,如输入购买数量)
+   * 用 SendString2(Unicode 版,能发中文);hwnd=0 = 当前绑定窗口,与鼠标/键盘 API 同一约定
+   */
+  sendString: (text: string, hwnd = 0): number => getRaw().SendString2(hwnd, text),
 
   // ---- 延时 ----
   delay: (ms: number): number => getRaw().Delay(ms),
 };
+
+/** dmApi 的静态类型;感知层检测器把它作为 client 参数传入(与 MonsterNameDetector 直接用 dmApi 同一封装) */
+export type DamooClient = typeof dmApi;
 
 // ===== 旧 API 兼容(让原 damoo-instance 的调用方不用大改) =====
 

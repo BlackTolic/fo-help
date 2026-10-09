@@ -1,5 +1,5 @@
 // WorkerContext: game utilityProcess 子进程的共享上下文
-//   持有 init 数据 + 全部运行期状态(currentStatus/killCount/缺省技能与移动攻击的运行标志等),
+//   持有 init 数据 + 全部运行期状态(currentStatus/stats/缺省技能与移动攻击的运行标志等),
 //   以及跨模块共用的通信方法(sendLog/setStatus/stepStart/stepEnd/postMessage)
 // 这些原来是 game-utility-worker.ts 的模块级变量/函数,拆模块后集中到这里,
 // 语义与模块级变量完全一致(包括 pause/stop 可在任务 start() 之前到达的边界行为)
@@ -9,7 +9,7 @@
 import { createLogger } from '../../../core/logger';
 import { DEFAULT_DAMOO_CONFIG, type DamooConfig } from '../../../core/platform/damoo/dm-api';
 import type { InterruptWatcher } from '../../../core/interrupt';
-import type { TaskType, ScriptStatus, AppSettings } from '../../../shared/types';
+import type { TaskType, ScriptStatus, AppSettings, StartTaskAuxConfigs } from '../../../shared/types';
 
 export interface InitData {
   hwnd: number;
@@ -18,6 +18,8 @@ export interface InitData {
   damooConfig?: Partial<DamooConfig>;
   profile?: any;
   taskConfig?: any;
+  /** start-task 随命令下发的附属配置(城镇档案/对话配方/farm 地图名),与 taskConfig 同生命周期 */
+  auxConfigs?: StartTaskAuxConfigs;
   waitForConfig?: boolean;
   thumbsDir?: string;
   /** 验证码截图目录(dev = 项目根/logs/verify-codes,packaged = userData/logs/verify-codes) */
@@ -48,7 +50,12 @@ export class WorkerContext {
   currentStatus: ScriptStatus = 'idle';
   running = true;
   readonly startedAt = Date.now();
-  killCount = 0;
+  /**
+   * 运行统计(对应主进程 WorkerState.stats):deathCount 由 farm 的死亡分支累加
+   * ⚠️ 上报时必须整份发 —— worker-manager 合并 state 用的是浅合并
+   *    (`{ ...m.state, ...msg.state }`,stats 是对象,只给部分字段会把其余字段抹成 undefined)
+   */
+  readonly stats = { killCount: 0, deathCount: 0 };
   bindSuccess = false;
   characterName = '';
   dm: any = null;
@@ -85,6 +92,13 @@ export class WorkerContext {
     stopReason: null as string | null,
   };
 
+  // ===== 回城补给(resupply)的运行控制 =====
+  // 死亡触发的补给流程同一时刻只跑一个:running 兼作防重入标志
+  // (补给途中又检测到"死亡"时不递归进第二个流程,farm 侧据此放弃本次触发)
+  resupply = {
+    running: false,
+  };
+
   currentStep = '(none)';
   mainStart = Date.now();
 
@@ -102,9 +116,7 @@ export class WorkerContext {
   constructor() {
     // ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行
     try {
-      process.stderr.write(
-        `[DEBUG] utilityProcess 启动 PID=${process.pid}, argv.length=${process.argv.length}\n`,
-      );
+      process.stderr.write(`[DEBUG] utilityProcess 启动 PID=${process.pid}, argv.length=${process.argv.length}\n`);
     } catch {}
 
     if (!process.parentPort) {
@@ -137,8 +149,19 @@ export class WorkerContext {
     this.currentStatus = status;
     this.postMessage({
       type: 'state',
-      state: { status, statusDetail: detail, startedAt: this.startedAt },
+      state: {
+        status,
+        statusDetail: detail,
+        startedAt: this.startedAt,
+        // 每次状态变化顺带同步统计(死亡计数在补给流程里就靠这条上报到主面板)
+        stats: this.statsSnapshot(),
+      },
     });
+  }
+
+  /** WorkerState.stats 快照(uptimeMs 按调用时刻算,上报前调一次) */
+  statsSnapshot(): { killCount: number; deathCount: number; uptimeMs: number } {
+    return { ...this.stats, uptimeMs: Date.now() - this.startedAt };
   }
 
   // 在每个同步/原生阻塞调用前后写 stderr 标记,父进程 bootstrap 超时 kill 时
@@ -153,9 +176,7 @@ export class WorkerContext {
 
   stepEnd(name: string, ok: boolean, extra?: string): void {
     try {
-      process.stderr.write(
-        `[STEP-END] ${name} ${ok ? 'OK' : 'FAIL'} [+${Date.now() - this.mainStart}ms]${extra ? ' ' + extra : ''}\n`,
-      );
+      process.stderr.write(`[STEP-END] ${name} ${ok ? 'OK' : 'FAIL'} [+${Date.now() - this.mainStart}ms]${extra ? ' ' + extra : ''}\n`);
     } catch {}
   }
 

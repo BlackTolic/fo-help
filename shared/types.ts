@@ -19,8 +19,11 @@ export interface CharacterInfo {
   level: number;
 }
 
-/** 任务类型 */
-export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation' | 'default-skill';
+/**
+ * 任务类型
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)是配置型"任务":与任务同样存储/编辑,但不可作为任务运行
+ */
+export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation' | 'default-skill' | 'town-profile' | 'dialog-recipe';
 
 /** 脚本状态(主面板卡片显示) */
 export type ScriptStatus =
@@ -205,8 +208,105 @@ export interface FarmTaskConfig {
   watchdog?: FarmWatchdogConfig;
   /** 物品拾取(打怪间隙捡掉落物);不配 = 不开启 */
   pickup?: FarmPickupConfig;
+  /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
+  resupply?: FarmResupplyConfig;
   /** 自定义备注 */
   note?: string;
+}
+
+/**
+ * 回城补给配置(farm 专属):
+ * 角色死亡后 自动复活 → (可选)检查装备耐久/药水 → 按城镇档案走到道具商人 → 按对话配方修理/买药 → 走回野外地图续跑
+ * 同一段流程挂在第二个触发器上:runOnStart=true 时任务启动也先跑一遍(不复活,直接检查状态 → 商人 → 挂机地图)
+ * 依赖 StartTaskAuxConfigs 下发的 townProfile(城镇档案)与 recipes(对话配方)
+ */
+export interface FarmResupplyConfig {
+  /** 是否开启死亡回城补给 */
+  enabled: boolean;
+  /** 城镇档案名(按"任务名"存储的那份 TownProfileConfig 的 name) */
+  townProfileName: string;
+  /** 复活方式: auto=自动点「原地复活」 / manual=等玩家自己复活 */
+  reviveMode: 'auto' | 'manual';
+  /** 等复活超时(毫秒),超时按异常处理 */
+  reviveTimeoutMs: number;
+  /** 是否开角色面板检查装备耐久(装备红/快红 → 触发修理) */
+  checkDurability: boolean;
+  /** 红药 OCR 数量少于该值则触发购买;不配 = 不检查药水 */
+  potionThreshold?: number;
+  /** 任务启动时先跑一次补给(检查状态 → 必要时找道具商人修理/买药 → 前往挂机地图)再进入打怪循环;缺省 false */
+  runOnStart: boolean;
+}
+
+// ===== 城镇档案(town-profile):某城镇的复活点 / NPC / 出入口 + 锚点间寻路路线 =====
+// 配置型"任务":作为任务配置存储/编辑,但不能作为任务运行;
+// farm 的 resupply 通过 StartTaskAuxConfigs.townProfile 整份下发给 worker
+
+/** 城镇 NPC(道具商人/仓库等);position 为游戏内地图坐标 */
+export interface TownProfileNpc {
+  id: string;
+  /** NPC 职能(与 DialogRecipeConfig.npcKind 对应,如 'potion' / 'repair' / 'storage') */
+  kind: string;
+  name: string;
+  position: { x: number; y: number };
+}
+
+/** 锚点间的一条寻路路线;waypoints 为地图坐标途径点 */
+export interface TownProfileRoute {
+  id: string;
+  /** 起点锚点 id: 'revive' | 某 npc.id | 某 exit.id */
+  from: string;
+  /** 终点锚点 id: 同上 */
+  to: string;
+  waypoints: { x: number; y: number }[];
+}
+
+/** 城镇出口(传送口);toMap 是游戏内 OCR 地图名(中文),如 '无泪南郊' */
+export interface TownProfileExit {
+  id: string;
+  toMap: string;
+  position: { x: number; y: number };
+}
+
+export interface TownProfileConfig {
+  type: 'town-profile';
+  /** 本城镇的 OCR 地图名 */
+  mapName: string;
+  /** 复活点(原地复活后所在位置) */
+  revivePoint: { x: number; y: number };
+  npcs: TownProfileNpc[];
+  routes: TownProfileRoute[];
+  exits: TownProfileExit[];
+}
+
+// ===== 对话配方(dialog-recipe):与某类 NPC 对话完成修理/买药的步骤脚本 =====
+// 同为配置型"任务";farm 的 resupply 通过 StartTaskAuxConfigs.recipes 按 npcKind 取用
+
+/**
+ * 对话步骤:
+ * - click-text   点对话选项里含指定文字的条目(offsetY=纵向点击偏移;onMissing=找不到时 skip/fail)
+ * - click-at     直接点屏幕坐标(客户区相对坐标)
+ * - key          按键(如 Enter/Esc/F1~F12)
+ * - wait         等待毫秒
+ * - input-text   输入文字(如购买数量)
+ * - if-text      条件分支:对话窗口含指定文字则跳 thenId,否则跳 elseId(缺省 = 顺序往下)
+ * - close-dialog 关闭对话窗口
+ * thenId / elseId 引用同一配方里其它步骤的 id
+ */
+export type DialogStep =
+  | { id: string; kind: 'click-text'; text: string; offsetY?: number; onMissing: 'skip' | 'fail' }
+  | { id: string; kind: 'click-at'; x: number; y: number; note?: string }
+  | { id: string; kind: 'key'; key: string }
+  | { id: string; kind: 'wait'; ms: number }
+  | { id: string; kind: 'input-text'; text: string }
+  | { id: string; kind: 'if-text'; text: string; thenId?: string; elseId?: string }
+  | { id: string; kind: 'close-dialog' };
+
+/** 对话配方:某一类 NPC(kind 对应 TownProfileNpc.kind)的完整对话流程 */
+export interface DialogRecipeConfig {
+  type: 'dialog-recipe';
+  /** NPC 职能(如 'potion' / 'repair'),resupply 按它从 recipes 里取配方 */
+  npcKind: string;
+  steps: DialogStep[];
 }
 
 /**
@@ -261,8 +361,35 @@ export interface PlaceholderTaskConfig {
   _todo?: never;
 }
 
-/** 任务配置联合类型 */
-export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTaskConfig;
+/**
+ * 任务配置联合类型
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)只参与存储/编辑,不可作为任务运行
+ */
+export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTaskConfig | TownProfileConfig | DialogRecipeConfig;
+
+/**
+ * start-task 命令的附属配置(farm 回城补给用):
+ * renderer 启动任务时把 farm 配置里的引用解析成完整配置,随 start-task 一并下发,
+ * worker 收到后存到 ctx.init.auxConfigs(与 taskConfig 同生命周期)
+ */
+export interface StartTaskAuxConfigs {
+  /** 城镇档案(farm.resupply.townProfileName 指向的那份) */
+  townProfile?: TownProfileConfig;
+  /** 对话配方(resupply 对话按 npcKind 从中取) */
+  recipes?: DialogRecipeConfig[];
+  /** farm 挂机地图的 OCR 中文地图名(回城后靠它找出口返回),renderer 启动时解析传入 */
+  farmMapName?: string;
+}
+
+/** worker:read-position 的响应:成功 = { map, x, y }(map=null 表示地图名未识别);失败/超时 = error 有值 */
+export interface WorkerPositionResult {
+  /** 当前地图名(OCR 中文);未识别为 null */
+  map: string | null;
+  x: number;
+  y: number;
+  /** 失败原因(OCR 失败 / worker 不存在 / 超时等);成功时为 undefined */
+  error?: string;
+}
 
 /** 任务配置存储(按"任务名"维度存储,跨窗口复用) */
 export interface StoredTaskConfig {

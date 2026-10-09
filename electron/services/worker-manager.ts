@@ -13,7 +13,14 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
 import path from 'path';
 import { app } from 'electron';
-import type { WorkerState, TaskName, TaskType, TaskConfig } from '../../shared/types';
+import type {
+  WorkerState,
+  TaskName,
+  TaskType,
+  TaskConfig,
+  StartTaskAuxConfigs,
+  WorkerPositionResult,
+} from '../../shared/types';
 import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
 import { ThumbnailService } from './thumbnail-service';
@@ -388,11 +395,13 @@ export class WorkerManager {
   /**
    * 给已 bootstrap 的 worker 发 'start-task' 命令,进入战斗循环
    * 异步:如果 worker 未 ready,等 ready(最多 30s)再发,避免消息丢失
+   * auxConfigs = 城镇档案/对话配方/farm 地图名(farm 回城补给用),随命令一并下发,worker 存到 ctx.init.auxConfigs
    */
   async startTask(
     hwnd: number,
     taskType?: TaskType,
     taskConfig: any = null,
+    auxConfigs: StartTaskAuxConfigs | null = null,
   ): Promise<{ ok: boolean; error?: string }> {
     const wid = this.byHwnd.get(hwnd);
     if (!wid) {
@@ -421,7 +430,7 @@ export class WorkerManager {
     log.info(
       `[WorkerManager] → start-task 已发给 ${wid} (hwnd=${hwnd}, taskType=${taskType || m.state.taskType || 'farm'}, 等 ready 耗时 ${Date.now() - t0}ms)`,
     );
-    // 把 taskType + taskConfig 一起带给 worker,worker 收到后覆盖 init 字段再分派任务
+    // 把 taskType + taskConfig + auxConfigs 一起带给 worker,worker 收到后覆盖 init 字段再分派任务
     //   bootstrap 阶段 worker fork 时 init.taskType 硬编码为 'farm'(worker-manager.bootstrap 兜底默认),
     //   但真正的任务类型由 dialog 保存后才确定,只能通过 start-task 命令告诉 worker
     m.worker.postMessage({
@@ -429,6 +438,7 @@ export class WorkerManager {
       command: 'start-task',
       taskType,
       taskConfig,
+      auxConfigs,
     });
     return { ok: true };
   }
@@ -501,6 +511,44 @@ export class WorkerManager {
     });
   }
 
+  /**
+   * 同步读取某 hwnd 对应 worker 的当前地图名/坐标(一次性请求/响应,参考 captureTest 的 await 模式)
+   * main 发 'read-position' 命令 → worker 用 MapCoordReader(OCR)读取 → 回传 { type:'position' } 消息
+   * 失败(OCR 失败 / worker 不存在 / 超时)时 resolve 带 error 的结果,不 reject
+   */
+  readPosition(hwnd: number): Promise<WorkerPositionResult> {
+    return new Promise((resolve) => {
+      const wid = this.byHwnd.get(hwnd);
+      if (!wid) {
+        resolve({ map: null, x: 0, y: 0, error: '该 hwnd 还没有 worker' });
+        return;
+      }
+      const m = this.workers.get(wid)!;
+      const onMessage = (msg: any) => {
+        if (msg.type === 'position' && msg.hwnd === hwnd) {
+          m.worker.off('message', onMessage);
+          clearTimeout(timer);
+          if (msg.error) {
+            resolve({ map: null, x: 0, y: 0, error: msg.error });
+          } else {
+            resolve({
+              map: msg.position?.map ?? null,
+              x: msg.position?.x ?? 0,
+              y: msg.position?.y ?? 0,
+            });
+          }
+        }
+      };
+      m.worker.on('message', onMessage);
+      m.worker.postMessage({ type: 'command', command: 'read-position' });
+      // 超时保护:OCR 是同步原生调用,正常 <1s,10s 兜底
+      const timer = setTimeout(() => {
+        m.worker.off('message', onMessage);
+        resolve({ map: null, x: 0, y: 0, error: '读取坐标超时(10s)' });
+      }, 10000);
+    });
+  }
+
   list(): WorkerState[] {
     return Array.from(this.workers.values()).map((m) => m.state);
   }
@@ -511,8 +559,9 @@ export class WorkerManager {
     return this.workers.get(wid)?.state ?? null;
   }
 
-  private taskNameFor(t: TaskType): TaskName {
-    const map: Record<TaskType, TaskName> = {
+  // Partial:town-profile / dialog-recipe 是配置型"任务"(只存储/编辑,不启动 worker),没有任务名
+  private taskNameFor(t: TaskType): TaskName | null {
+    const map: Partial<Record<TaskType, TaskName>> = {
       farm: '挂机打怪',
       mine: '挖矿',
       'catch-pet': '捕捉宠物',
@@ -520,7 +569,7 @@ export class WorkerManager {
       reputation: '名誉任务',
       'default-skill': '缺省技能',
     };
-    return map[t];
+    return map[t] ?? null;
   }
 
   // 处理 worker 发来的的消息
@@ -560,6 +609,11 @@ export class WorkerManager {
     } else if (msg.type === 'thumbnail-test') {
       // 测试截图:只 log,不 broadcast(由 captureTest await 模式接走)
       log.info(`[WorkerManager] 测试截图: hwnd=${msg.hwnd} → ${msg.filePath || msg.error}`);
+    } else if (msg.type === 'position') {
+      // 读取坐标响应:只 log,不 broadcast(由 readPosition await 模式接走)
+      log.info(
+        `[WorkerManager] 坐标响应: hwnd=${msg.hwnd} → ${msg.error || `${msg.position?.x},${msg.position?.y} @ ${msg.position?.map ?? '未知地图'}`}`,
+      );
     } else if (msg.type === 'ready') {
       // 子进程初始化完成,message listener 已注册,可以安全 postMessage
       log.info(`[WorkerManager] utilityProcess ${workerId} 报告 ready`);

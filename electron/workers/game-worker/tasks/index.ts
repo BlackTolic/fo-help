@@ -1,6 +1,7 @@
 // 任务注册表:taskType → TaskFactory
 // 新增任务类型 = 新建一个 tasks/xxx.ts 实现 TaskFactory + 在这里加一行
-// 未实现/未知 taskType → sendLog('warn') + 回退 farm(保留原 game-utility-worker.ts 的行为)
+// 未实现/未知 taskType → sendLog('error') + 停在非运行状态(alert):
+//   静默回退成"挂机打怪"会把配置型任务(town-profile / dialog-recipe)当 farm 跑,必须报错说清楚
 
 import type { TaskType } from '../../../../shared/types';
 import type { WorkerContext } from '../context';
@@ -18,7 +19,22 @@ function fallbackToFarm(taskType: string): TaskFactory {
   });
 }
 
-export const TASK_RUNNERS: Record<TaskType, TaskFactory> = {
+/**
+ * 没有执行器的任务类型:明确报错并停在非运行状态,不做任何自动化操作。
+ * 覆盖两类:配置型"任务"(town-profile / dialog-recipe,只用于存储/编辑)、以及未来的未知类型。
+ * 留在 alert 状态而不是 idle:主面板卡片上能直接看到原因(statusDetail),便于排查。
+ */
+function unregisteredTask(taskType: string): TaskFactory {
+  return (fc) => ({
+    async start() {
+      const detail = `任务类型 ${taskType} 没有对应的执行器(配置型任务不可运行),已停在未运行状态`;
+      fc.ctx.sendLog('error', detail);
+      fc.ctx.setStatus('alert', detail);
+    },
+  });
+}
+
+export const TASK_RUNNERS: Partial<Record<TaskType, TaskFactory>> = {
   farm: createFarmTask,
   mine: fallbackToFarm('mine'),
   'catch-pet': fallbackToFarm('catch-pet'),
@@ -29,9 +45,8 @@ export const TASK_RUNNERS: Record<TaskType, TaskFactory> = {
 
 /** 按(可能被 start-task 命令覆盖过的)init.taskType 分派任务并跑到结束 */
 export async function runTask(ctx: WorkerContext): Promise<void> {
-  const factory =
-    (TASK_RUNNERS as Partial<Record<TaskType, TaskFactory>>)[ctx.init.taskType] ??
-    fallbackToFarm(ctx.init.taskType);
+  const taskType = ctx.init.taskType;
+  const factory = TASK_RUNNERS[taskType] ?? unregisteredTask(taskType ?? '(未指定)');
   const fc: TaskFactoryContext = {
     ctx,
     init: ctx.init,

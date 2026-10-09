@@ -1,0 +1,34 @@
+{
+  "id": "task-与仓库管理员对话-1791553552584",
+  "name": "与仓库管理员对话",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "npcKind": "item-merchant",
+    "steps": [
+      {
+        "id": "step-1791553336515-w1es",
+        "kind": "click-text",
+        "text": "仓库管理员",
+        "offsetY": 50,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791553447014-1ltb",
+        "kind": "click-text",
+        "text": "使用仓库",
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791553494155-nx10",
+        "kind": "click-at",
+        "x": 0,
+        "y": 0,
+        "note": "取钱"
+      }
+    ]
+  },
+  "createdAt": 1791553552584,
+  "updatedAt": 1791553552584
+}

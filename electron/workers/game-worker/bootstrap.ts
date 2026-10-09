@@ -20,7 +20,8 @@ import type { TaskType, TaskName } from '../../../shared/types';
 import type { WorkerContext } from './context';
 import { takeAndSendThumbnail } from './thumbnail';
 
-export const taskNameMap: Record<TaskType, TaskName> = {
+// Partial:town-profile / dialog-recipe 是配置型"任务"(只存储/编辑,不启动 worker),没有任务名
+export const taskNameMap: Partial<Record<TaskType, TaskName>> = {
   farm: '挂机打怪',
   mine: '挖矿',
   'catch-pet': '捕捉宠物',
@@ -65,7 +66,7 @@ export async function bootstrap(ctx: WorkerContext): Promise<boolean> {
   const elapsed = () => `[+${Date.now() - t0}ms]`;
   ctx.sendLog(
     'info',
-    `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType]} 角色=${init.characterName}`,
+    `UtilityWorker 启动(PID=${process.pid}) ${elapsed()}: hwnd=${init.hwnd} 任务=${taskNameMap[init.taskType] ?? init.taskType} 角色=${init.characterName}`,
   );
   try {
     process.stderr.write(`[STEP-START] main 进入 [+0ms]\n`);

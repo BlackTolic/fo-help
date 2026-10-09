@@ -13,23 +13,14 @@
 import { Suspense, lazy, useState } from 'react';
 import { Play, Pause, Square, Settings, RefreshCw, Loader2, Camera, Edit3 } from '../icons';
 import { useStore } from '../store/useStore';
-import type {
-  GameWindow,
-  TaskConfig,
-  TaskType,
-  WorkerState,
-  StoredTaskConfig,
-} from '../../shared/types';
+import type { GameWindow, TaskConfig, TaskType, WorkerState, StoredTaskConfig, StartTaskAuxConfigs } from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
+import { isConfigOnlyTaskType, resolveAuxConfigs } from '../aux-configs';
 
 // 两个 dialog 都是"点开才需要"的重量级组件(TaskConfigDialog 源码 100KB),
 // 静态 import 会把它们算进首屏模块图;懒加载后只有用户点开时才请求。
-const TaskConfigDialog = lazy(() =>
-  import('./TaskConfigDialog').then((m) => ({ default: m.TaskConfigDialog })),
-);
-const HistoryTaskDialog = lazy(() =>
-  import('./HistoryTaskDialog').then((m) => ({ default: m.HistoryTaskDialog })),
-);
+const TaskConfigDialog = lazy(() => import('./TaskConfigDialog').then((m) => ({ default: m.TaskConfigDialog })));
+const HistoryTaskDialog = lazy(() => import('./HistoryTaskDialog').then((m) => ({ default: m.HistoryTaskDialog })));
 
 interface Props {
   gameWindow: GameWindow;
@@ -55,6 +46,7 @@ interface Props {
     hwnd: number,
     taskType?: TaskType,
     taskConfig?: TaskConfig | null,
+    auxConfigs?: StartTaskAuxConfigs | null,
   ) => Promise<{ ok: boolean; error?: string }>;
   onStop: (workerId: string) => void;
   onPause: (workerId: string) => void;
@@ -82,6 +74,9 @@ export function WindowCard({
 }: Props) {
   const taskHistory = useStore((s) => s.taskHistory);
   const saveTaskByName = useStore((s) => s.saveTaskByName);
+  const updateTaskByName = useStore((s) => s.updateTaskByName);
+  /** 历史任务里可运行的任务条数(城镇档案/对话配方是配置型,由各自卡片管理,不进历史任务) */
+  const runnableHistoryCount = taskHistory.filter((h) => !isConfigOnlyTaskType(h.config.type)).length;
 
   // ---- dialog 状态 ----
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -180,6 +175,13 @@ export function WindowCard({
       }
     }
 
+    // 解析回城补给的附属配置(城镇档案 / 全部对话配方 / 挂机地图中文名);解析不出就阻止启动
+    const auxRes = resolveAuxConfigs(stored.config, taskHistory);
+    if (!auxRes.ok) {
+      setError(`任务"${stored.name}"无法启动:${auxRes.error}`);
+      return;
+    }
+
     if (worker) {
       // 切任务前先停掉旧 worker(stop handler 跑 dmApi.unbindWindow() + setTimeout(exit, 300))
       onStop(worker.workerId);
@@ -193,13 +195,23 @@ export function WindowCard({
       setError(res.error || '启动 worker 失败');
       return;
     }
-    const startRes = await onStartTask(gameWindow.hwnd, stored.config.type, stored.config);
+    const startRes = await onStartTask(gameWindow.hwnd, stored.config.type, stored.config, auxRes.auxConfigs);
     if (!startRes.ok) {
       alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
     }
   };
 
   // ---- dialog handlers ----
+
+  /**
+   * 配置型"任务"(城镇档案 / 对话配方)保存后调用:
+   * 创建流程为拿缩略图 bootstrap 的 worker 会停在 idle(没收到 start-task),顺手停掉回到干净状态
+   */
+  const cancelThumbnailWorker = () => {
+    if (dialogMode === 'create' && autoStartAfterClose && !worker?.taskConfig) {
+      onCancelBootstrap(gameWindow.hwnd);
+    }
+  };
 
   /** dialog 关闭:取消自动启动标记,如果是 creating 流程且没保存则 cancelBootstrap */
   const handleDialogClose = () => {
@@ -218,23 +230,49 @@ export function WindowCard({
   };
 
   /**
-   * "保存配置":接收 dialog 传来的 name(替代 Electron 不支持的 window.prompt)
-   * 持久化到磁盘 + 自动 startTask;重名拒绝,返回 error 让 dialog 留在 name 步骤
+   * 保存任务(TaskConfigDialog 的保存按钮调用):持久化到磁盘,可选启动 worker
+   * - opts.existing=true → 覆盖保存同名历史任务(updateTaskByName);缺省新建(saveTaskByName,重名拒绝)
+   * - opts.start=false   → 只保存,不启动 worker(缺省/true = 保存后自动跑,兼容旧调用)
    *
    * 关键修复:如果现有 worker 是不同 taskType(例:用户先点了"创建任务" → bootstrap 了一个
    * 'farm' worker 拿 thumbnail,现在保存的是 'default-skill'),
    * 直接 startTask 会跑老 taskType。
    * 所以这里检测不匹配 → 停掉旧 worker → 用新 taskType 重新 bootstrap → startTask。
+   *
+   * 配置型"任务"(town-profile / dialog-recipe)只落盘:它们不能作为任务运行,
+   * 保存后不 bootstrap、不 startTask(引用它们的 farm 任务启动时再把它们放进 auxConfigs)。
    */
   const handleTaskSaved = async (
     config: TaskConfig,
     name: string,
+    opts?: { existing?: boolean; start?: boolean },
   ): Promise<{ ok: boolean; error?: string }> => {
     const trimmed = name.trim();
     if (!trimmed) {
       return { ok: false, error: '任务名不能为空' };
     }
-    const res = await saveTaskByName(trimmed, config);
+    const existing = opts?.existing === true;
+    const shouldStart = opts?.start !== false;
+
+    // 配置型"任务":只存盘 + 关 dialog(不写内存的 taskConfig,也不启动 worker)
+    if (isConfigOnlyTaskType(config.type)) {
+      const saved = existing ? await updateTaskByName(trimmed, config) : await saveTaskByName(trimmed, config);
+      if (!saved.ok) {
+        return { ok: false, error: saved.error };
+      }
+      setDialogOpen(false);
+      setAutoStartAfterClose(false);
+      cancelThumbnailWorker();
+      return { ok: true };
+    }
+
+    // 解析回城补给的附属配置(farm 开了补给才有);解析不出就直接返回 error 让用户先修配置
+    const auxRes = resolveAuxConfigs(config, taskHistory);
+    if (!auxRes.ok) {
+      return { ok: false, error: auxRes.error };
+    }
+
+    const res = existing ? await updateTaskByName(trimmed, config) : await saveTaskByName(trimmed, config);
     if (!res.ok) {
       // 重名或其他错误 — 返回 error,dialog 停留在 name 步骤让用户改名重试
       return { ok: false, error: res.error };
@@ -243,8 +281,13 @@ export function WindowCard({
     onApplyConfig(gameWindow.hwnd, config, trimmed);
     setDialogOpen(false);
     setAutoStartAfterClose(false);
-    // 把 taskType + taskConfig 一起发给 worker,worker 收到后覆盖 init 字段分派
-    const startRes = await onStartTask(gameWindow.hwnd, config.type, config);
+    // 只保存不启动:顺手把为拿缩略图 bootstrap 起来的 idle worker 收掉,别留孤儿
+    if (!shouldStart) {
+      cancelThumbnailWorker();
+      return { ok: true };
+    }
+    // 把 taskType + taskConfig + auxConfigs 一起发给 worker,worker 收到后覆盖 init 字段分派
+    const startRes = await onStartTask(gameWindow.hwnd, config.type, config, auxRes.auxConfigs);
     if (!startRes.ok) {
       // startTask 失败(worker 未 ready 超时等)— 提示用户
       alert(`已保存任务,但启动失败: ${startRes.error || '未知错误'}\n请稍后在 WindowCard 上重试`);
@@ -254,15 +297,43 @@ export function WindowCard({
 
   /**
    * "确认":仅写内存,不持久化 → 自动 startTask(关 app 丢)
+   * 配置型"任务"不能运行:只关 dialog(不写内存、不启动)
    */
   const handleTaskConfirm = async (config: TaskConfig) => {
+    if (isConfigOnlyTaskType(config.type)) {
+      setDialogOpen(false);
+      setAutoStartAfterClose(false);
+      cancelThumbnailWorker();
+      return;
+    }
+    const auxRes = resolveAuxConfigs(config, taskHistory);
+    if (!auxRes.ok) {
+      // onConfirm 没有返回通道 → 用 alert 提示,并保持 dialog 打开让用户回去改配置
+      alert(`无法启动: ${auxRes.error}`);
+      return;
+    }
     onApplyConfig(gameWindow.hwnd, config);
     setDialogOpen(false);
     setAutoStartAfterClose(false);
-    const startRes = await onStartTask(gameWindow.hwnd, config.type, config);
+    const startRes = await onStartTask(gameWindow.hwnd, config.type, config, auxRes.auxConfigs);
     if (!startRes.ok) {
       alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);
     }
+  };
+
+  /**
+   * pending 状态的"启动":worker 已 ready 但还没收到 start-task
+   * (上次因 race 暂存过 / 或 worker 还在 waitForConfig 等命令)
+   * 重新发一次 start-task(worker 那边 _startResolve / _pendingStart 都能接住),auxConfigs 一并带上
+   */
+  const handlePendingStart = async () => {
+    const auxRes = resolveAuxConfigs(taskConfig, taskHistory);
+    if (!auxRes.ok) {
+      setError(auxRes.error);
+      return;
+    }
+    const res = await onStartTask(gameWindow.hwnd, taskConfig?.type, taskConfig, auxRes.auxConfigs);
+    if (!res.ok) alert(`启动失败: ${res.error || '未知'}`);
   };
 
   /**
@@ -315,14 +386,7 @@ export function WindowCard({
           {(() => {
             const thumbnail = useStore.getState().thumbnails.get(gameWindow.hwnd);
             if (thumbnail) {
-              return (
-                <img
-                  src={thumbnail}
-                  alt={`hwnd ${gameWindow.hwnd}`}
-                  className="w-full h-full object-contain"
-                  draggable={false}
-                />
-              );
+              return <img src={thumbnail} alt={`hwnd ${gameWindow.hwnd}`} className="w-full h-full object-contain" draggable={false} />;
             }
             if (gameWindow.isMinimized) {
               return (
@@ -335,10 +399,7 @@ export function WindowCard({
             if (uiState === 'creating') {
               return (
                 <div className="text-text-muted text-xs text-center p-3">
-                  <Loader2
-                    size={24}
-                    className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan"
-                  />
+                  <Loader2 size={24} className="mx-auto mb-1.5 opacity-50 animate-spin text-accent-cyan" />
                   <div>正在连接游戏…</div>
                   <div className="text-text-muted/60 mt-1 text-[10px]">大漠绑定 + 截图</div>
                 </div>
@@ -358,10 +419,7 @@ export function WindowCard({
           {/* 右上角:状态标签 + 工具按钮 */}
           <div className="absolute top-1.5 right-1.5 flex items-center gap-1.5">
             {appliedTaskName && (
-              <span
-                className="px-1.5 py-0.5 bg-accent-cyan/20 text-accent-cyan rounded text-[10px] font-medium"
-                title="当前任务"
-              >
+              <span className="px-1.5 py-0.5 bg-accent-cyan/20 text-accent-cyan rounded text-[10px] font-medium" title="当前任务">
                 📋 {appliedTaskName}
               </span>
             )}
@@ -382,9 +440,7 @@ export function WindowCard({
                 if (res.ok && res.filePath) {
                   await window.fohelp.showItemInFolder(res.filePath);
                 } else {
-                  alert(
-                    `截图失败: ${res.error || '未知错误'}\n(该 hwnd 需要先点"创建任务"启动 worker)`,
-                  );
+                  alert(`截图失败: ${res.error || '未知错误'}\n(该 hwnd 需要先点"创建任务"启动 worker)`);
                 }
               }}
               className="p-1 bg-black/60 hover:bg-black/80 rounded text-text-muted hover:text-text-primary"
@@ -399,17 +455,12 @@ export function WindowCard({
         {isConfigured && (
           <div className="px-3 py-2 border-b border-border-base space-y-1">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium truncate">
-                {characterName || worker?.character?.name || '(未识别)'}
-              </span>
+              <span className="text-sm font-medium truncate">{characterName || worker?.character?.name || '(未识别)'}</span>
             </div>
             <div className="flex items-center justify-between">
               <StatusBadge status={status} animate={status === 'combat'} />
               {worker?.statusDetail && (
-                <span
-                  className="text-[10px] text-text-muted truncate max-w-[140px]"
-                  title={worker.statusDetail}
-                >
+                <span className="text-[10px] text-text-muted truncate max-w-[140px]" title={worker.statusDetail}>
                   {worker.statusDetail}
                 </span>
               )}
@@ -421,10 +472,7 @@ export function WindowCard({
         {error && (
           <div className="px-3 py-1.5 text-[11px] text-accent-red bg-accent-red/10 border-b border-accent-red/20">
             {error}
-            <button
-              onClick={() => setError(null)}
-              className="ml-2 text-text-muted hover:text-text-primary"
-            >
+            <button onClick={() => setError(null)} className="ml-2 text-text-muted hover:text-text-primary">
               ×
             </button>
           </div>
@@ -455,10 +503,7 @@ export function WindowCard({
           )}
 
           {uiState === 'creating' && (
-            <button
-              disabled
-              className="btn btn-primary flex-1 flex items-center justify-center gap-1 opacity-70"
-            >
+            <button disabled className="btn btn-primary flex-1 flex items-center justify-center gap-1 opacity-70">
               <Loader2 size={12} className="animate-spin" />
               连接中…
             </button>
@@ -476,17 +521,11 @@ export function WindowCard({
               >
                 <Settings size={12} />
               </button>
-              <button
-                onClick={handlePause}
-                className="btn btn-secondary flex-1 flex items-center justify-center gap-1"
-              >
+              <button onClick={handlePause} className="btn btn-secondary flex-1 flex items-center justify-center gap-1">
                 <Pause size={12} />
                 暂停
               </button>
-              <button
-                onClick={handleStop}
-                className="btn btn-danger flex-1 flex items-center justify-center gap-1"
-              >
+              <button onClick={handleStop} className="btn btn-danger flex-1 flex items-center justify-center gap-1">
                 <Square size={12} />
                 停止
               </button>
@@ -505,17 +544,11 @@ export function WindowCard({
               >
                 <Settings size={12} />
               </button>
-              <button
-                onClick={handleResume}
-                className="btn btn-primary flex-1 flex items-center justify-center gap-1"
-              >
+              <button onClick={handleResume} className="btn btn-primary flex-1 flex items-center justify-center gap-1">
                 <Play size={12} />
                 继续
               </button>
-              <button
-                onClick={handleStop}
-                className="btn btn-danger flex-1 flex items-center justify-center gap-1"
-              >
+              <button onClick={handleStop} className="btn btn-danger flex-1 flex items-center justify-center gap-1">
                 <Square size={12} />
                 停止
               </button>
@@ -533,24 +566,14 @@ export function WindowCard({
                 编辑配置
               </button>
               <button
-                onClick={async () => {
-                  // pending 状态:worker 已 ready 但还没收到 start-task
-                  //   (上次因 race 暂存过 / 或 worker 还在 waitForConfig 等命令)
-                  //   重新发一次 start-task,worker 那边 _startResolve / _pendingStart 都能接住
-                  const res = await onStartTask(gameWindow.hwnd, taskConfig?.type, taskConfig);
-                  if (!res.ok) alert(`启动失败: ${res.error || '未知'}`);
-                }}
+                onClick={() => void handlePendingStart()}
                 className="btn btn-primary flex-1 flex items-center justify-center gap-1"
                 title="向 worker 发送 start-task(bootstrap-race 兜底)"
               >
                 <Play size={12} />
                 启动
               </button>
-              <button
-                onClick={handleAbandon}
-                className="btn btn-danger flex items-center justify-center"
-                title="放弃当前任务"
-              >
+              <button onClick={handleAbandon} className="btn btn-danger flex items-center justify-center" title="放弃当前任务">
                 <Square size={12} />
               </button>
             </>
@@ -568,9 +591,9 @@ export function WindowCard({
               </button>
               <button
                 onClick={handleReselectHistory}
-                disabled={taskHistory.length === 0}
+                disabled={runnableHistoryCount === 0}
                 className="btn btn-secondary flex-1 flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                title={taskHistory.length === 0 ? '还没有保存过的任务' : '从历史任务中选择其他任务'}
+                title={runnableHistoryCount === 0 ? '还没有保存过的任务' : '从历史任务中选择其他任务'}
               >
                 <Settings size={12} />
                 历史任务
@@ -600,6 +623,13 @@ export function WindowCard({
             onClose={handleDialogClose}
             onSaved={handleTaskSaved}
             onConfirm={dialogMode === 'view' ? undefined : handleTaskConfirm}
+            onStartStored={(stored) => {
+              // 编辑器里点「启动」:关掉编辑器(不走 handleDialogClose 的 cancelBootstrap,
+              // 避免与 handleHistorySelect 的"停旧 worker + bootstrap"打架),交给它接管
+              setDialogOpen(false);
+              setAutoStartAfterClose(false);
+              void handleHistorySelect(stored);
+            }}
           />
         </Suspense>
       )}

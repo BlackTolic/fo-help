@@ -7,6 +7,8 @@ import type {
   TaskType,
   StoredTaskConfig,
   AppSettings,
+  StartTaskAuxConfigs,
+  WorkerPositionResult,
 } from '../../shared/types';
 
 interface LogEntry {
@@ -82,12 +84,16 @@ interface AppState {
     taskConfig?: TaskConfig,
   ) => Promise<{ ok: boolean; dataUrl?: string | null; characterName?: string; error?: string }>;
   /** 给已 bootstrap 的 worker 发 start-task(异步:会等 worker ready,最多 30s)
-   * taskType + taskConfig 由调用方在 dialog 保存后传入,worker 收到后覆盖 init 字段分派 */
+   * taskType + taskConfig 由调用方在 dialog 保存后传入,worker 收到后覆盖 init 字段分派
+   * auxConfigs = 城镇档案/对话配方/farm 地图名(farm 回城补给用),由 renderer/aux-configs.ts 解析 */
   startTask: (
     hwnd: number,
     taskType?: TaskType,
     taskConfig?: TaskConfig | null,
+    auxConfigs?: StartTaskAuxConfigs | null,
   ) => Promise<{ ok: boolean; error?: string }>;
+  /** 读某个游戏窗口当前的地图名/坐标(编辑器里的"采集当前坐标"用);失败时 result.error 有值 */
+  readWorkerPosition: (hwnd: number) => Promise<WorkerPositionResult>;
   /** 取消 bootstrap:通过 hwnd 停掉 worker(用于 dialog 关闭但没保存) */
   cancelBootstrap: (hwnd: number) => Promise<void>;
   stopWorker: (workerId: string) => Promise<void>;
@@ -271,10 +277,18 @@ export const useStore = create<AppState>((set) => ({
     }
     return res;
   },
-  startTask: async (hwnd, taskType, taskConfig) => {
+  startTask: async (hwnd, taskType, taskConfig, auxConfigs) => {
     if (!window.fohelp) return { ok: false, error: 'IPC 未就绪' };
     console.log('startTask - 任务启动', hwnd, taskType);
-    return await window.fohelp.startTask(hwnd, taskType, taskConfig);
+    return await window.fohelp.startTask(hwnd, taskType, taskConfig, auxConfigs);
+  },
+  readWorkerPosition: async (hwnd) => {
+    if (!window.fohelp) return { map: null, x: 0, y: 0, error: 'IPC 未就绪' };
+    try {
+      return await window.fohelp.readWorkerPosition(hwnd);
+    } catch (e: any) {
+      return { map: null, x: 0, y: 0, error: `读取坐标失败: ${e?.message || e}` };
+    }
   },
   cancelBootstrap: async (hwnd) => {
     if (!window.fohelp) return;

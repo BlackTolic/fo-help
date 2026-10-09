@@ -1,0 +1,66 @@
+{
+  "id": "task-云泽秘径-1791553162653",
+  "name": "云泽秘径",
+  "taskType": "town-profile",
+  "config": {
+    "type": "town-profile",
+    "mapName": "云荒部落",
+    "revivePoint": {
+      "x": 142,
+      "y": 197
+    },
+    "npcs": [
+      {
+        "id": "npc-1791553010556-srns",
+        "kind": "item-merchant",
+        "name": "仓库管理",
+        "position": {
+          "x": 198,
+          "y": 98
+        }
+      },
+      {
+        "id": "npc-1791553316489-d7qu",
+        "kind": "ssss",
+        "name": "阿萨",
+        "position": {
+          "x": 0,
+          "y": 0
+        }
+      }
+    ],
+    "routes": [
+      {
+        "id": "route-1791553062848-pktj",
+        "from": "revive",
+        "to": "npc-1791553010556-srns",
+        "waypoints": [
+          {
+            "x": 156,
+            "y": 101
+          },
+          {
+            "x": 171,
+            "y": 101
+          },
+          {
+            "x": 185,
+            "y": 100
+          }
+        ]
+      }
+    ],
+    "exits": [
+      {
+        "id": "exit-1791553118167-ipeu",
+        "toMap": "云泽秘径",
+        "position": {
+          "x": 263,
+          "y": 120
+        }
+      }
+    ]
+  },
+  "createdAt": 1791553162653,
+  "updatedAt": 1791555242735
+}

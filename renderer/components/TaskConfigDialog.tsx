@@ -12,6 +12,7 @@ import type {
   FarmCastMode,
   FarmWatchdogConfig,
   FarmPickupConfig,
+  FarmResupplyConfig,
   SkillCastMethod,
   TeamInviteAction,
   Waypoint,
@@ -19,8 +20,15 @@ import type {
   DefaultSkillTaskConfig,
   DefaultSkillStep,
   ScreenRect,
+  TownProfileConfig,
+  DialogRecipeConfig,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
+import { FARM_MAPS } from '../farm-maps';
+import { isConfigOnlyTaskType, referencedByFarmTasks } from '../aux-configs';
+import { FarmResupplySection, DEFAULT_RESUPPLY, normalizeResupply } from './FarmResupplySection';
+import { TownProfileForm } from './TownProfileForm';
+import { DialogRecipeForm } from './DialogRecipeForm';
 import {
   COLOR_WHITE,
   COLOR_RED,
@@ -47,17 +55,17 @@ const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; 
   { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
   { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
   { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
+  // 配置型"任务":可存储/编辑/被 farm 的回城补给引用,但不可作为任务运行(保存后不启动 worker)
+  { type: 'town-profile', name: '城镇档案', icon: '🏙', desc: '复活点 / 道具商人 / 出城口 + 寻路路线(供死亡回城补给用)', ready: true },
+  { type: 'dialog-recipe', name: '对话配方', icon: '💬', desc: '与某类 NPC 对话的步骤脚本(修理 / 买药;供死亡回城补给用)', ready: true },
 ];
 
-const FARM_MAPS = [
-  { id: 'chang-an', name: '长安城周边' },
-  { id: 'hu-ya-shan', name: '狐牙山' },
-  { id: 'xue-yuan', name: '雪原' },
-  { id: 'sha-mo', name: '沙漠' },
-  { id: 'lan-yue', name: '蓝月谷' },
-  { id: 'tian-yuan', name: '桃源村' },
-  { id: 'custom', name: '自定义...' },
-];
+/** 配置型"任务"提示(城镇档案/对话配方:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
+const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「死亡回城补给」引用,不会启动 worker';
+
+/** footer 主操作按钮(实心 cyan,与历史任务列表里的「启动」一致) */
+const PRIMARY_BTN_CLS =
+  'rounded px-3 py-1.5 text-sm font-semibold transition-colors bg-accent-cyan text-bg-base hover:bg-accent-cyan/90 flex items-center justify-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed';
 
 /** 定点识别的怪名颜色可选值(取自 core/constant-ocr/color.ts;可多选) */
 const MONSTER_COLOR_OPTIONS: { value: string; label: string }[] = [
@@ -110,6 +118,23 @@ const DEFAULT_PICKUP: PickupUiState = {
   range: { x: 0, y: 0, w: 0, h: 0 },
   rules: [{ colors: [], nameKeywords: '' }],
   clickOffset: { x: 0, y: 0 },
+};
+
+/** 新建城镇档案的默认值(空的,让用户自己加 NPC/出口 —— 至少 1 个 NPC 才能保存) */
+const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
+  type: 'town-profile',
+  mapName: '',
+  revivePoint: { x: 0, y: 0 },
+  npcs: [],
+  routes: [],
+  exits: [],
+};
+
+/** 新建对话配方的默认值(npcKind 默认 item-merchant:当前补给流程只认它) */
+const DEFAULT_DIALOG_RECIPE: DialogRecipeConfig = {
+  type: 'dialog-recipe',
+  npcKind: 'item-merchant',
+  steps: [],
 };
 
 /**
@@ -184,10 +209,8 @@ interface Props {
   hwnd: number;
   initialConfig?: TaskConfig | null;
   /**
-   * 编辑历史任务时锁定任务名。设了之后:
-   * - taskName 默认填这个值,且 name 步骤里 input disabled
-   * - onSaved 收到的是该值,用户改不动
-   * (新建设置空,允许改名)
+   * 初始正在编辑的历史任务名(编辑态初值,之后由内部 editingName 状态接管)。
+   * 设了之后 footer 走"保存 / 保存并启动 / 另存为…"矩阵,缺省(新建)走"存为记忆 + 仅本次运行"。
    */
   initialTaskName?: string;
   /** 当前窗口的实时截图(bootstrap 阶段推送) */
@@ -203,10 +226,21 @@ interface Props {
   /** true = 只读模式(运行时查看):所有控件禁用,只显示关闭按钮 */
   readOnly?: boolean;
   onClose: () => void;
-  /** "保存配置"按钮:持久化到磁盘(返回 Promise,失败时 dialog 保持打开) */
-  onSaved: (config: TaskConfig, name: string) => Promise<{ ok: boolean; error?: string }> | void;
-  /** "确认"按钮:仅写内存,关闭 app 丢(不传 = 隐藏按钮,如只读模式) */
+  /**
+   * 保存按钮:持久化到磁盘(返回 Promise,失败时 dialog 保持打开)
+   * opts.existing=true → 覆盖保存这条同名历史任务(否则新建,重名拒绝)
+   * opts.start=false   → 只保存不启动 worker(缺省/true = 保存后启动)
+   * 不传 opts 时保持旧语义(新建 + 启动),name 步骤的"确认保存"走的就是这条
+   */
+  onSaved: (
+    config: TaskConfig,
+    name: string,
+    opts?: { existing?: boolean; start?: boolean },
+  ) => Promise<{ ok: boolean; error?: string }> | void;
+  /** "仅本次运行"按钮:仅写内存,关闭 app 丢(不传 = 隐藏按钮,如只读模式) */
   onConfirm?: (config: TaskConfig) => void;
+  /** 可选:透传给内嵌「从历史任务中选择」列表的「启动」按钮(这条历史任务直接应用并启动) */
+  onStartStored?: (stored: StoredTaskConfig) => void;
 }
 
 export function TaskConfigDialog({
@@ -219,19 +253,39 @@ export function TaskConfigDialog({
   onClose,
   onSaved,
   onConfirm,
+  onStartStored,
 }: Props) {
   const [step, setStep] = useState<'select' | 'config' | 'name'>(initialConfig ? 'config' : 'select');
   const [taskName, setTaskName] = useState(initialTaskName ?? '');
+  /**
+   * 正在编辑的历史任务名:
+   * - 初值 = initialTaskName(历史任务弹框的「编辑」子对话框)
+   * - 「从历史任务中选择 → 载入到编辑器」时由 handleHistoryApply 设成该条任务名
+   * - 非空 → footer 走"保存(覆盖)/ 保存并启动 / 另存为…";空 → 新建(命名 + 存为记忆)
+   */
+  const [editingName, setEditingName] = useState<string | null>(initialTaskName ?? null);
   const [nameError, setNameError] = useState<string | null>(null);
   // config 步骤直接保存(编辑模式)的错误显示 — name 步骤走的是 nameError,这里独立
   const [saveError, setSaveError] = useState<string | null>(null);
   // 编辑模式直接保存时的 loading,防用户连点
   const [saving, setSaving] = useState(false);
+  // 配置型任务(城镇档案/对话配方)删除时的 loading,防连点
+  const [deleting, setDeleting] = useState(false);
   const [taskType, setTaskType] = useState<TaskType | null>(initialConfig?.type ?? null);
   // 内嵌"历史任务"弹窗(只读模式下不显示入口)
   const [historyOpen, setHistoryOpen] = useState(false);
   // 历史任务列表(全局,store.taskHistory)
   const taskHistory = useStore((s) => s.taskHistory);
+  const deleteTaskByName = useStore((s) => s.deleteTaskByName);
+  /** 死亡回城补给可选的城镇档案名(历史任务里所有 town-profile,按 name 存/取) */
+  const townProfileNames = taskHistory.filter((h) => h.config.type === 'town-profile').map((h) => h.name);
+  /** 是否已有道具商人的对话配方(补给流程只认 npcKind='item-merchant') —— 只用于提示,不阻断保存 */
+  const hasMerchantRecipe = taskHistory.some((h) => h.config.type === 'dialog-recipe' && h.config.npcKind === 'item-merchant');
+  /** 已保存的城镇档案 / 对话配方(配置型任务在各自卡片里管理,不进历史任务) */
+  const savedTownProfiles = taskHistory.filter((h) => h.config.type === 'town-profile');
+  const savedDialogRecipes = taskHistory.filter((h) => h.config.type === 'dialog-recipe');
+  /** 历史任务里可运行的任务条数(配置型任务不进历史任务) */
+  const runnableHistoryCount = taskHistory.filter((h) => !isConfigOnlyTaskType(h.config.type)).length;
 
   // 挂机打怪配置
   const [mapId, setMapId] = useState('hu-ya-shan');
@@ -243,7 +297,7 @@ export function TaskConfigDialog({
   // 找怪关键字:定点识别下留空 = 纯 OCR(范围内任意文字都算怪名),不强制默认值
   const [nameKeywords, setNameKeywords] = useState('');
   // 找怪相关:怪名颜色(多选) / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 角色移动间隔
-  const [mobNameColors, setMobNameColors] = useState<string[]>([COLOR_WHITE]);
+  const [mobNameColors, setMobNameColors] = useState<string[]>([COLOR_GREY_WHITE]);
   const [ocrRange, setOcrRange] = useState<ScreenRect>({ x: 0, y: 0, w: 0, h: 0 });
   const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
@@ -252,13 +306,97 @@ export function TaskConfigDialog({
   const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
   // 物品拾取:打怪间隙捡掉落物(范围/颜色/名称;关掉 = worker 不产生任何扫描开销)
   const [pickup, setPickup] = useState<PickupUiState>(DEFAULT_PICKUP);
+  // 死亡回城补给(farm 专属):引用已保存的城镇档案 + 全部对话配方(启动时解析成 auxConfigs)
+  const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
   const [note, setNote] = useState('');
+
+  // 城镇档案 / 对话配方(配置型"任务":只存储/编辑,保存后不启动 worker)
+  const [townProfile, setTownProfile] = useState<TownProfileConfig>(DEFAULT_TOWN_PROFILE);
+  const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
 
   // 缺省技能配置
   const [skillSteps, setSkillSteps] = useState<DefaultSkillStep[]>([]);
   const [skillLoopCount, setSkillLoopCount] = useState(0); // 0 = 无限
   const [skillLoopIntervalMs, setSkillLoopIntervalMs] = useState(1000);
   const [skillNote, setSkillNote] = useState('');
+
+  // ---- 配置型任务(城镇档案/对话配方)的卡片内管理:新建 / 载入 / 删除 ----
+
+  /** 重置为「新建城镇档案」 */
+  const newTownProfile = () => {
+    setTownProfile(DEFAULT_TOWN_PROFILE);
+    setEditingName(null);
+    setSaveError(null);
+  };
+  /** 重置为「新建对话配方」 */
+  const newDialogRecipe = () => {
+    setDialogRecipe(DEFAULT_DIALOG_RECIPE);
+    setEditingName(null);
+    setSaveError(null);
+  };
+  /** 把一条已保存的城镇档案载入表单(编辑态,保存时覆盖它) */
+  const loadTownProfile = (stored: StoredTaskConfig) => {
+    const town = stored.config as TownProfileConfig;
+    setTownProfile({
+      type: 'town-profile',
+      mapName: town.mapName ?? '',
+      revivePoint: town.revivePoint ?? { x: 0, y: 0 },
+      npcs: town.npcs ?? [],
+      routes: town.routes ?? [],
+      exits: town.exits ?? [],
+    });
+    setEditingName(stored.name);
+    setSaveError(null);
+  };
+  /** 把一条已保存的对话配方载入表单(编辑态,保存时覆盖它) */
+  const loadDialogRecipe = (stored: StoredTaskConfig) => {
+    const recipe = stored.config as DialogRecipeConfig;
+    setDialogRecipe({ type: 'dialog-recipe', npcKind: recipe.npcKind ?? 'item-merchant', steps: recipe.steps ?? [] });
+    setEditingName(stored.name);
+    setSaveError(null);
+  };
+  /** 删除当前正在编辑的城镇档案(带 farm 引用提示) */
+  const deleteSelectedTownProfile = async () => {
+    const stored = savedTownProfiles.find((p) => p.name === editingName);
+    if (!stored || deleting) return;
+    const refs = referencedByFarmTasks(stored, taskHistory);
+    if (refs.length > 0) {
+      const ok = confirm(
+        `任务 ${refs.map((n) => `「${n}」`).join('、')} 的回城补给引用了「${stored.name}」,\n删除后这些任务会启动失败。\n\n确定删除?`,
+      );
+      if (!ok) return;
+    }
+    setDeleting(true);
+    const res = await deleteTaskByName(stored.name);
+    setDeleting(false);
+    if (res.ok) newTownProfile();
+    else alert(`删除失败: ${res.error || '未知错误'}`);
+  };
+  /** 删除当前正在编辑的对话配方(带 farm 引用提示) */
+  const deleteSelectedDialogRecipe = async () => {
+    const stored = savedDialogRecipes.find((p) => p.name === editingName);
+    if (!stored || deleting) return;
+    const refs = referencedByFarmTasks(stored, taskHistory);
+    if (refs.length > 0) {
+      const ok = confirm(
+        `任务 ${refs.map((n) => `「${n}」`).join('、')} 的回城补给引用了「${stored.name}」,\n删除后这些任务会启动失败。\n\n确定删除?`,
+      );
+      if (!ok) return;
+    }
+    setDeleting(true);
+    const res = await deleteTaskByName(stored.name);
+    setDeleting(false);
+    if (res.ok) newDialogRecipe();
+    else alert(`删除失败: ${res.error || '未知错误'}`);
+  };
+  /** 选择任务类型卡片:配置型任务先重置表单(卡片内新建),其余直接进 config 步骤 */
+  const selectTaskType = (type: TaskType) => {
+    if (type === 'town-profile') newTownProfile();
+    else if (type === 'dialog-recipe') newDialogRecipe();
+    setTaskType(type);
+    setSaveError(null);
+    setStep('config');
+  };
 
   /**
    * 统一的"把 cfg 灌进 dialog state"函数,用于:
@@ -309,6 +447,8 @@ export function TaskConfigDialog({
         rules: toPickupRulesUi(farm.pickup),
         clickOffset: farm.pickup?.clickOffset ?? { x: 0, y: 0 },
       });
+      // 旧配置没有 resupply 字段:回显成"不开启"
+      setResupply(normalizeResupply(farm.resupply));
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -316,6 +456,19 @@ export function TaskConfigDialog({
       setSkillLoopCount(skill.loopCount ?? 0);
       setSkillLoopIntervalMs(skill.loopIntervalMs ?? 1000);
       setSkillNote(skill.note || '');
+    } else if (cfg.type === 'town-profile') {
+      const town = cfg as TownProfileConfig;
+      setTownProfile({
+        type: 'town-profile',
+        mapName: town.mapName ?? '',
+        revivePoint: town.revivePoint ?? { x: 0, y: 0 },
+        npcs: town.npcs ?? [],
+        routes: town.routes ?? [],
+        exits: town.exits ?? [],
+      });
+    } else if (cfg.type === 'dialog-recipe') {
+      const recipe = cfg as DialogRecipeConfig;
+      setDialogRecipe({ type: 'dialog-recipe', npcKind: recipe.npcKind ?? 'item-merchant', steps: recipe.steps ?? [] });
     }
   };
 
@@ -444,6 +597,8 @@ export function TaskConfigDialog({
               ? { x: pickup.clickOffset?.x ?? 0, y: pickup.clickOffset?.y ?? 0 }
               : undefined,
         },
+        // 回城补给:整份保存(没开启也留着引用与参数,下次勾上不用重填)
+        resupply: normalizeResupply(resupply),
         note: note || undefined,
       };
     }
@@ -467,25 +622,94 @@ export function TaskConfigDialog({
         note: skillNote || undefined,
       };
     }
+    if (taskType === 'town-profile') {
+      return {
+        type: 'town-profile',
+        mapName: townProfile.mapName.trim(),
+        revivePoint: { x: (townProfile.revivePoint?.x ?? 0) | 0, y: (townProfile.revivePoint?.y ?? 0) | 0 },
+        // id / 名字全空的记录丢掉(留着只会让 worker 白走一趟);kind 留空按 item-merchant 兜底
+        npcs: townProfile.npcs
+          .filter((n) => (n.id ?? '').trim() || (n.name ?? '').trim())
+          .map((n) => ({
+            id: (n.id ?? '').trim(),
+            kind: (n.kind ?? '').trim() || 'item-merchant',
+            name: (n.name ?? '').trim(),
+            position: { x: (n.position?.x ?? 0) | 0, y: (n.position?.y ?? 0) | 0 },
+          })),
+        // 起点/终点没填的路线丢掉(worker 的 resolveRoute 按 from/to 精确匹配,空值永远不会命中)
+        routes: townProfile.routes
+          .filter((r) => (r.from ?? '').trim() && (r.to ?? '').trim())
+          .map((r) => ({
+            id: r.id,
+            from: r.from.trim(),
+            to: r.to.trim(),
+            waypoints: (r.waypoints ?? []).map((w) => ({ x: (w.x ?? 0) | 0, y: (w.y ?? 0) | 0 })),
+          })),
+        exits: townProfile.exits
+          .filter((e) => (e.id ?? '').trim() || (e.toMap ?? '').trim())
+          .map((e) => ({
+            id: (e.id ?? '').trim(),
+            toMap: (e.toMap ?? '').trim(),
+            position: { x: (e.position?.x ?? 0) | 0, y: (e.position?.y ?? 0) | 0 },
+          })),
+      };
+    }
+    if (taskType === 'dialog-recipe') {
+      return {
+        type: 'dialog-recipe',
+        npcKind: dialogRecipe.npcKind.trim() || 'item-merchant',
+        // 步骤原样保存(每步的字段由它的 kind 决定,界面已保证必填项存在)
+        steps: dialogRecipe.steps,
+      };
+    }
     return { type: taskType } as any;
   };
 
   /**
-   * "保存配置"按钮(footer):
-   * - 新建模式 → 跳到 name 步骤让用户起名字(Electron 不支持 window.prompt)
-   * - 编辑模式(initialTaskName) → 名字已锁定,跳过 name,**直接调 onSaved 持久化**
-   *   失败时 setSaveError 在 config 步骤顶部展示红色 banner
-   *   成功由父组件(HistoryTaskDialog)关 dialog + 刷新 history 列表
+   * 保存/确认前的配置校验(返回 null = 通过)。
+   * 两条保存路径都走它:「存为记忆」(新建,后面还要去 name 步骤)与「保存」(编辑,直接覆盖落盘)
    */
-  const handleSave = async () => {
+  const validateConfig = (): string | null => {
+    if (taskType === 'farm' && resupply.enabled === true && !String(resupply.townProfileName ?? '').trim()) {
+      return '已开启死亡回城补给,但没有选择城镇档案(没有的话先建一份「城镇档案」并保存)';
+    }
+    if (taskType === 'town-profile') {
+      const cfg = buildConfig();
+      if ((cfg.type === 'town-profile' ? cfg.npcs : []).length === 0) {
+        return '城镇档案至少需要 1 个 NPC(补给流程靠它找到道具商人)';
+      }
+    }
+    if (taskType === 'dialog-recipe') {
+      const cfg = buildConfig();
+      if ((cfg.type === 'dialog-recipe' ? cfg.steps : []).length === 0) {
+        return '对话配方至少需要 1 个步骤';
+      }
+    }
+    return null;
+  };
+
+  /**
+   * config 步骤的保存按钮:
+   * - 新建(editingName 空) → 跳到 name 步骤让用户起名字(Electron 不支持 window.prompt)
+   * - 编辑历史任务(editingName 有值) → 直接调 onSaved 覆盖持久化,启动与否由 opts.start 决定
+   *   失败时 setSaveError 在 config 步骤顶部展示红色 banner
+   *   成功由父组件(WindowCard / HistoryTaskDialog)关 dialog + 刷新 history 列表
+   */
+  const handleSave = async (opts?: { start?: boolean }) => {
     if (readOnly || saving) return;
     setSaveError(null);
-    if (initialTaskName) {
-      // 编辑历史任务:跳过命名步骤,直接持久化(不启动 worker)
+    // 校验不过就留在 config 步骤显示红条(新建时也不要进 name 步骤,免得起好名字才发现配错了)
+    const cfgErr = validateConfig();
+    if (cfgErr) {
+      setSaveError(cfgErr);
+      return;
+    }
+    if (editingName) {
+      // 编辑历史任务:覆盖保存,不跳命名步骤;是否启动 worker 由调用方(opts.start)决定
       setSaving(true);
       try {
         const config = buildConfig();
-        const res = await onSaved(config, initialTaskName);
+        const res = await onSaved(config, editingName, { existing: true, start: opts?.start ?? false });
         if (res && res.ok === false) {
           setSaveError(res.error || '保存失败');
         }
@@ -501,6 +725,20 @@ export function TaskConfigDialog({
   };
 
   /**
+   * 「另存为…」:脱离当前历史任务(清掉 editingName),带着"{原名} 副本"进入新建命名步骤,
+   * 避免覆盖原任务
+   */
+  const handleSaveAs = () => {
+    if (readOnly) return;
+    const base = editingName;
+    setEditingName(null);
+    setSaveError(null);
+    setNameError(null);
+    setTaskName(base ? `${base} 副本` : `任务-${hwnd}-${new Date().toLocaleDateString()}`);
+    setStep('name');
+  };
+
+  /**
    * 在 name 步骤点"确认保存":
    * 1. 校验名字(trim + 非空)
    * 2. 调 onSaved(config, name) — WindowCard.handleTaskSaved 负责 saveByName + startTask
@@ -511,6 +749,14 @@ export function TaskConfigDialog({
     const trimmed = taskName.trim();
     if (!trimmed) {
       setNameError('任务名不能为空');
+      return;
+    }
+    // 校验:城镇档案 / 对话配方至少要有 1 个 NPC / 1 个步骤(空配置保存下来也跑不了)
+    const cfgErr = validateConfig();
+    if (cfgErr) {
+      // 自动跳回 config 步骤 + 顶部红色 banner
+      setStep('config');
+      setSaveError(cfgErr);
       return;
     }
     // 校验:缺省技能必须至少 1 个启用的步骤(空配置启动会被 worker 直接结束,UI 提前拦截)
@@ -540,15 +786,19 @@ export function TaskConfigDialog({
   };
 
   /**
-   * 从历史任务加载:把 cfg 灌进 dialog state
+   * 从历史任务加载:把 cfg 灌进 dialog state,并进入"编辑这条历史任务"态
    * - farm / default-skill:全字段回显 + 跳 step 2
    * - 其他:只设置 type,跳 step 2
+   * - 设 editingName = 这条任务名 → footer 的保存会默认覆盖它(想存新的走「另存为…」)
    */
   const handleHistoryApply = (stored: StoredTaskConfig) => {
     setHistoryOpen(false);
     const cfg = stored.config;
     applyConfig(cfg);
     setTaskType(cfg.type);
+    setEditingName(stored.name);
+    setSaveError(null);
+    setNameError(null);
     setStep('config');
   };
 
@@ -614,8 +864,8 @@ export function TaskConfigDialog({
         <div className="flex-1 overflow-y-auto p-5">
           {step === 'select' && (
             <>
-              {/* 历史任务入口(放在选任务类型之前,只读模式下不显示) */}
-              {!readOnly && taskHistory.length > 0 && (
+              {/* 历史任务入口(放在选任务类型之前,只读模式下不显示;配置型任务不在这里) */}
+              {!readOnly && runnableHistoryCount > 0 && (
                 <button
                   onClick={() => setHistoryOpen(true)}
                   className="w-full mb-3 p-2.5 rounded border border-accent-cyan/40 bg-accent-cyan/10 hover:bg-accent-cyan/20 flex items-center gap-2 text-sm transition-colors"
@@ -623,7 +873,7 @@ export function TaskConfigDialog({
                 >
                   <History size={14} className="text-accent-cyan" />
                   <span className="font-medium">从历史任务中选择</span>
-                  <span className="ml-auto text-[11px] text-text-muted">{taskHistory.length} 条</span>
+                  <span className="ml-auto text-[11px] text-text-muted">{runnableHistoryCount} 条</span>
                 </button>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -632,10 +882,7 @@ export function TaskConfigDialog({
                     key={opt.type}
                     disabled={!opt.ready}
                     onClick={() => {
-                      if (opt.ready) {
-                        setTaskType(opt.type);
-                        setStep('config');
-                      }
+                      if (opt.ready) selectTaskType(opt.type);
                     }}
                     className={`
                     p-4 rounded-lg border text-left transition-all
@@ -664,6 +911,13 @@ export function TaskConfigDialog({
           {step === 'config' && saveError && (
             <div className="mb-3 text-[12px] text-accent-red bg-accent-red/10 border border-accent-red/30 rounded px-3 py-2">
               {saveError}
+            </div>
+          )}
+
+          {/* 编辑态提示:告诉用户"保存 = 覆盖这条",想新建走「另存为…」 */}
+          {step === 'config' && editingName && (
+            <div className="mb-3 text-[12px] text-text-secondary bg-bg-input border border-border-base rounded px-3 py-2">
+              正在编辑「{editingName}」:点「保存」会覆盖它,想存成新的点「另存为…」。
             </div>
           )}
 
@@ -700,6 +954,10 @@ export function TaskConfigDialog({
               setWatchdog={setWatchdog}
               pickup={pickup}
               setPickup={setPickup}
+              resupply={resupply}
+              setResupply={setResupply}
+              townProfileNames={townProfileNames}
+              hasMerchantRecipe={hasMerchantRecipe}
               note={note}
               setNote={setNote}
             />
@@ -719,20 +977,119 @@ export function TaskConfigDialog({
             />
           )}
 
-          {step === 'config' && taskType && taskType !== 'farm' && taskType !== 'default-skill' && (
-            <div className="text-center py-12 text-text-secondary">
-              <div className="text-4xl mb-3 opacity-30">{TASK_OPTIONS.find((o) => o.type === taskType)?.icon}</div>
-              <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
-              <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
-            </div>
+          {step === 'config' && taskType === 'town-profile' && (
+            <>
+              <div className="mb-3 text-[12px] text-accent-cyan bg-accent-cyan/10 border border-accent-cyan/30 rounded px-3 py-2">
+                {CONFIG_ONLY_HINT}
+              </div>
+              {/* 卡片内管理:选择已保存的城镇档案查看/修改,或新建、删除 */}
+              <div className="mb-3 p-2.5 rounded border border-border-base bg-bg-input/40 flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-secondary shrink-0">已保存的城镇档案</span>
+                <select
+                  value={editingName ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    if (!name) newTownProfile();
+                    else {
+                      const stored = savedTownProfiles.find((p) => p.name === name);
+                      if (stored) loadTownProfile(stored);
+                    }
+                  }}
+                  className="bg-bg-card border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">＋ 新建城镇档案</option>
+                  {savedTownProfiles.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {editingName && !readOnly && (
+                  <button
+                    onClick={() => void deleteSelectedTownProfile()}
+                    disabled={deleting}
+                    className="text-xs px-2 py-1 rounded bg-accent-red/10 hover:bg-accent-red/20 text-accent-red flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={`删除「${editingName}」(不可撤销)`}
+                  >
+                    {deleting ? '删除中...' : '删除'}
+                  </button>
+                )}
+                <span className="ml-auto text-[10px] text-text-muted">
+                  {editingName ? `正在编辑「${editingName}」` : '新建(保存时命名)'}
+                </span>
+              </div>
+              <TownProfileForm readOnly={readOnly} value={townProfile} onChange={setTownProfile} hwnd={hwnd} />
+            </>
           )}
+
+          {step === 'config' && taskType === 'dialog-recipe' && (
+            <>
+              <div className="mb-3 text-[12px] text-accent-cyan bg-accent-cyan/10 border border-accent-cyan/30 rounded px-3 py-2">
+                {CONFIG_ONLY_HINT}
+              </div>
+              {/* 卡片内管理:选择已保存的对话配方查看/修改,或新建、删除 */}
+              <div className="mb-3 p-2.5 rounded border border-border-base bg-bg-input/40 flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-secondary shrink-0">已保存的对话配方</span>
+                <select
+                  value={editingName ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    if (!name) newDialogRecipe();
+                    else {
+                      const stored = savedDialogRecipes.find((p) => p.name === name);
+                      if (stored) loadDialogRecipe(stored);
+                    }
+                  }}
+                  className="bg-bg-card border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">＋ 新建对话配方</option>
+                  {savedDialogRecipes.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {editingName && !readOnly && (
+                  <button
+                    onClick={() => void deleteSelectedDialogRecipe()}
+                    disabled={deleting}
+                    className="text-xs px-2 py-1 rounded bg-accent-red/10 hover:bg-accent-red/20 text-accent-red flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={`删除「${editingName}」(不可撤销)`}
+                  >
+                    {deleting ? '删除中...' : '删除'}
+                  </button>
+                )}
+                <span className="ml-auto text-[10px] text-text-muted">
+                  {editingName ? `正在编辑「${editingName}」` : '新建(保存时命名)'}
+                </span>
+              </div>
+              <DialogRecipeForm readOnly={readOnly} value={dialogRecipe} onChange={setDialogRecipe} />
+            </>
+          )}
+
+          {step === 'config' &&
+            taskType &&
+            taskType !== 'farm' &&
+            taskType !== 'default-skill' &&
+            taskType !== 'town-profile' &&
+            taskType !== 'dialog-recipe' && (
+              <div className="text-center py-12 text-text-secondary">
+                <div className="text-4xl mb-3 opacity-30">{TASK_OPTIONS.find((o) => o.type === taskType)?.icon}</div>
+                <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
+                <div className="text-xs text-text-muted">配置项留白,后续版本提供</div>
+              </div>
+            )}
 
           {/* 命名步骤(替代 Electron 不支持的 window.prompt) — 创建流程专属 */}
           {step === 'name' && (
             <div className="space-y-4 py-2">
               <div className="rounded border border-accent-cyan/40 bg-accent-cyan/5 p-4 space-y-3">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium">为这个任务起个名字</span>
+                  <span className="text-sm font-medium">
+                    {isConfigOnlyTaskType(taskType) ? '为这份配置起个名字' : '为这个任务起个名字'}
+                  </span>
                   <span className="text-[11px] text-text-muted">(全局唯一,跨窗口复用)</span>
                 </div>
                 <input
@@ -751,13 +1108,17 @@ export function TaskConfigDialog({
                   }}
                   autoFocus
                   placeholder="任务名(全局唯一)"
-                  readOnly={!!initialTaskName}
-                  disabled={!!initialTaskName}
-                  title={initialTaskName ? '编辑模式下任务名锁定' : ''}
+                  readOnly={!!editingName}
+                  disabled={!!editingName}
+                  title={editingName ? '编辑模式下任务名锁定' : ''}
                   className="w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
                 />
                 {nameError && <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">{nameError}</div>}
-                <div className="text-[11px] text-text-muted">💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口</div>
+                <div className="text-[11px] text-text-muted">
+                  {isConfigOnlyTaskType(taskType)
+                    ? '💡 保存后这份配置会出现在「选择任务」里对应的卡片中,供挂机打怪的「死亡回城补给」引用'
+                    : '💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口'}
+                </div>
                 {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-accent-cyan/20">
                   <button
@@ -781,7 +1142,14 @@ export function TaskConfigDialog({
 
         {/* 内嵌历史任务 dialog */}
         {historyOpen && (
-          <HistoryTaskDialog history={taskHistory} currentHwnd={hwnd} onClose={() => setHistoryOpen(false)} onApply={handleHistoryApply} />
+          <HistoryTaskDialog
+            history={taskHistory}
+            currentHwnd={hwnd}
+            variant="load"
+            onClose={() => setHistoryOpen(false)}
+            onApply={handleHistoryApply}
+            onStart={onStartStored}
+          />
         )}
 
         {/* 底部 */}
@@ -798,8 +1166,11 @@ export function TaskConfigDialog({
               <button
                 onClick={() => {
                   if (step === 'config') {
+                    // 回到任务类型选择 = 放弃当前编辑,清掉 editingName 避免误覆盖历史任务
                     setStep('select');
                     setTaskType(null);
+                    setEditingName(null);
+                    setSaveError(null);
                   } else if (step === 'name') {
                     setStep('config');
                     setNameError(null);
@@ -813,26 +1184,69 @@ export function TaskConfigDialog({
               </button>
               {step === 'config' && (
                 <div className="flex items-center gap-2">
-                  {/* "保存配置" / "确定"按钮:持久化到磁盘
-                      - 新建模式:文案"保存配置",会跳到 name 步骤让用户起名字
-                      - 编辑模式(initialTaskName):文案"确定",直接保存 + 关闭 */}
-                  <button
-                    onClick={() => void handleSave()}
-                    disabled={saving}
-                    className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
-                    title={initialTaskName ? '保存修改后的历史任务(不启动 worker)' : '执行并保存当前任务，以便下次直接在“历史任务”中使用'}
-                  >
-                    {initialTaskName ? (saving ? '保存中...' : '确定') : '存为记忆'}
-                  </button>
-                  {/* "确认"按钮:仅写内存,不持久化(关闭 app 丢,新流程会启动 worker) */}
-                  {onConfirm && (
-                    <button
-                      onClick={handleConfirm}
-                      className="btn btn-secondary flex items-center gap-1.5"
-                      title="不保存到磁盘,只在当前会话记住这个配置(关 app 后丢)"
-                    >
-                      确认
-                    </button>
+                  {editingName ? (
+                    <>
+                      {/* 另存为…:脱离当前历史任务,走新建命名路径(避免误覆盖) */}
+                      <button
+                        onClick={handleSaveAs}
+                        className="btn btn-secondary flex items-center gap-1.5"
+                        title={`把当前配置存成一条新任务(默认名「${editingName} 副本」),不改动原任务`}
+                      >
+                        另存为…
+                      </button>
+                      {/* 保存:覆盖写回这条历史任务(不启动);配置型不可运行 → 它才是主按钮 */}
+                      <button
+                        onClick={() => void handleSave({ start: false })}
+                        disabled={saving}
+                        className={
+                          isConfigOnlyTaskType(taskType)
+                            ? PRIMARY_BTN_CLS
+                            : 'btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed'
+                        }
+                        title="覆盖保存「{editingName}」(不启动 worker)"
+                      >
+                        {saving ? '保存中...' : '保存'}
+                      </button>
+                      {/* 保存并启动:覆盖保存 + 立即启动;配置型"任务"不可运行 → 不渲染 */}
+                      {!isConfigOnlyTaskType(taskType) && (
+                        <button
+                          onClick={() => void handleSave({ start: true })}
+                          disabled={saving}
+                          className={PRIMARY_BTN_CLS}
+                          title="覆盖保存这条历史任务,并立即在当前窗口启动 worker"
+                        >
+                          保存并启动
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {/* 新建:文案"存为记忆"会跳到 name 步骤起名字(保存 + 启动)
+                          配置型"任务"文案为「保存配置」,只落盘、不启动 */}
+                      <button
+                        onClick={() => void handleSave()}
+                        disabled={saving}
+                        className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                        title={
+                          isConfigOnlyTaskType(taskType)
+                            ? '把这份配置保存到对应卡片,供挂机打怪的「死亡回城补给」引用'
+                            : '执行并保存当前任务，以便下次直接在“历史任务”中使用'
+                        }
+                      >
+                        {saving ? '保存中...' : isConfigOnlyTaskType(taskType) ? '保存配置' : '存为记忆'}
+                      </button>
+                      {/* "仅本次运行":仅写内存,不持久化(关 app 丢,新流程会启动 worker)
+                          配置型"任务"不提供:它们必须保存到历史任务里才能被 farm 引用 */}
+                      {onConfirm && !isConfigOnlyTaskType(taskType) && (
+                        <button
+                          onClick={handleConfirm}
+                          className="btn btn-secondary flex items-center gap-1.5"
+                          title="不保存到磁盘,只运行这一次(关 app 后丢)"
+                        >
+                          仅本次运行
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -989,6 +1403,13 @@ interface FarmConfigProps {
   /** 物品拾取配置(nameKeywords 在界面里是逗号分隔文本) */
   pickup: PickupUiState;
   setPickup: (v: PickupUiState | ((prev: PickupUiState) => PickupUiState)) => void;
+  /** 死亡回城补给(引用已保存的城镇档案;启动 farm 时由 WindowCard 解析成 auxConfigs 下发) */
+  resupply: FarmResupplyConfig;
+  setResupply: (v: FarmResupplyConfig | ((prev: FarmResupplyConfig) => FarmResupplyConfig)) => void;
+  /** 可选城镇档案名(历史任务里所有 town-profile 的 name) */
+  townProfileNames: string[];
+  /** 是否已有 npcKind='item-merchant' 的对话配方(提示用,不阻断保存) */
+  hasMerchantRecipe: boolean;
   note: string;
   setNote: (v: string) => void;
 }
@@ -1026,6 +1447,10 @@ function FarmConfig(props: FarmConfigProps) {
     setWatchdog,
     pickup,
     setPickup,
+    resupply,
+    setResupply,
+    townProfileNames,
+    hasMerchantRecipe,
     note,
     setNote,
   } = props;
@@ -1992,6 +2417,15 @@ function FarmConfig(props: FarmConfigProps) {
           <div className="text-[10px] text-text-muted">看门狗与打怪循环并发运行;四项全部不勾选时 worker 不会启动看门狗</div>
         </div>
       </div>
+
+      {/* 死亡回城补给:死亡后复活 → 检查耐久/药水 → 回城找道具商人 → 返回野外 */}
+      <FarmResupplySection
+        readOnly={readOnly}
+        value={resupply}
+        onChange={setResupply}
+        townProfileNames={townProfileNames}
+        hasMerchantRecipe={hasMerchantRecipe}
+      />
 
       {/* 备注 */}
       <div>

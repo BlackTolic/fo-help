@@ -6,9 +6,14 @@
 //   统一置位 ctx 上的运行标志(ctx.skill 缺省技能 / ctx.moveAttack 挂机打怪),
 //   由各自的任务循环 await 解除暂停。
 import { dmApi } from '../../../core/platform/damoo/dm-api';
+import { DamooVisionProvider } from '../../../core/platform/vision/damoo/DamooProvider';
+import { MapCoordReader } from '../../../core/perception/MapCoordReader';
+import type { MapCoordConfig } from '../../../core/perception/types';
+import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
+import { COLOR_WHITE } from '../../../core/constant-ocr/color';
 import type { WorkerContext } from './context';
 import { handleScreenshot, takeAndSendThumbnailTest } from './thumbnail';
-import { stopInterruptWatcher, syncInterruptWatcher } from './interrupts';
+import { stopInterruptWatcher, syncInterruptWatcher, resolveWindowSizeKey } from './interrupts';
 
 export function registerCommandHandlers(ctx: WorkerContext): void {
   process.parentPort!.on('message', (event: any) => {
@@ -16,10 +21,7 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
     //   { data: <payload>, ports: [] }
     // 这跟 Node 标准 worker_threads.parentPort API 不一致(Node 应当 unwrap),
     // 解包一下保持正常使用
-    const msg =
-      event && typeof event === 'object' && 'data' in event && 'ports' in event
-        ? event.data
-        : event;
+    const msg = event && typeof event === 'object' && 'data' in event && 'ports' in event ? event.data : event;
     if (msg?.type === 'command') {
       switch (msg.command) {
         case 'start-task':
@@ -33,6 +35,14 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
           if (msg.taskConfig) {
             ctx.init.taskConfig = msg.taskConfig;
             ctx.sendLog('info', `覆盖 init.taskConfig = type=${ctx.init.taskConfig?.type}`);
+          }
+          // 附属配置(城镇档案/对话配方/farm 地图名)以 start-task 下发的为准,与 taskConfig 同生命周期
+          if (msg.auxConfigs) {
+            ctx.init.auxConfigs = msg.auxConfigs;
+            ctx.sendLog(
+              'info',
+              `覆盖 init.auxConfigs (townProfile=${msg.auxConfigs.townProfile?.mapName ?? '无'}, recipes=${msg.auxConfigs.recipes?.length ?? 0} 条, farmMapName=${msg.auxConfigs.farmMapName ?? '无'})`,
+            );
           }
           // 配置(看门狗开关)以 start-task 下发的为准:重新同步一次看门狗
           syncInterruptWatcher(ctx);
@@ -115,14 +125,43 @@ export function registerCommandHandlers(ctx: WorkerContext): void {
         case 'screenshot':
           handleScreenshot(ctx).catch((e) => ctx.sendLog('error', `截图失败: ${e.message}`));
           break;
+        case 'read-position':
+          handleReadPosition(ctx).catch((e) => ctx.sendLog('error', `读取坐标失败: ${e.message}`));
+          break;
         case 'screenshot-test':
-          takeAndSendThumbnailTest(ctx, ctx.init.hwnd).catch((e) =>
-            ctx.sendLog('error', `测试截图失败: ${e.message}`),
-          );
+          takeAndSendThumbnailTest(ctx, ctx.init.hwnd).catch((e) => ctx.sendLog('error', `测试截图失败: ${e.message}`));
           break;
       }
     }
   });
+}
+
+/**
+ * 'read-position' 命令:读当前窗口的地图名/坐标,一次性回传 { type:'position', hwnd, position|error }
+ * 坐标 ROI/颜色用现有 constant-ocr 常量(与移动测试 testMapCoordConfig 一致,按分辨率档位取);
+ * 地图名把分辨率档位传给 MapCoordReader,由它按档位取内置 MAP_NAME_ROI 常量
+ */
+async function handleReadPosition(ctx: WorkerContext): Promise<void> {
+  const hwnd = ctx.init.hwnd;
+  const report = (payload: Record<string, unknown>) => ctx.postMessage({ type: 'position', hwnd, ...payload });
+  try {
+    const vision = new DamooVisionProvider();
+    vision.bind(hwnd);
+    const size = resolveWindowSizeKey(hwnd, ctx.init.settings?.resolution);
+    const coordConfig: MapCoordConfig = {
+      coordRoi: DEFAULT_ROLE_POSITION[size],
+      coordColor: COLOR_WHITE,
+      similarity: DEFAULT_SIM,
+    };
+    const position = await new MapCoordReader(vision, coordConfig, size).read();
+    if (!position) {
+      report({ error: '坐标 OCR 失败(检查设置里的分辨率与坐标区域/颜色是否匹配)' });
+      return;
+    }
+    report({ position });
+  } catch (e: any) {
+    report({ error: e.message });
+  }
 }
 
 /**

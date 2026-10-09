@@ -33,8 +33,17 @@
 // ── 结束条件 ────────────────────────────────────────────────────────────
 //   stop 命令 / 跑满最大圈数(END_CONDITIONS.maxLoops,当前不限)/ 角色死亡(isCharacterDead)
 //
+// ── 死亡回城补给 / 开工补给(taskConfig.resupply,见 resupply/resupply-runner.ts)──
+//   死亡检查 = core/perception/DeathDetector(OCR 死亡弹框标题),两个检查点共用 checkDeath
+//   配了补给(resupply.enabled + auxConfigs.townProfile)= 复活 → 检查耐久/药水 → 按需找道具商人
+//     跑对话配方 → 走回野外图,然后继续挂机;补给失败才结束任务(原因写进 detail)
+//   同一段流程的第二个触发器 = 任务启动(resupply.runOnStart,见 runStartupResupply):
+//     进主循环之前先跑一遍(不复活,位置已在挂机图则整段跳过),成功后才开始挂机
+//   没配补给 = 老行为:检测到死亡即结束任务
+//
 // ── 配置来源与兼容 ──────────────────────────────────────────────────────
 //   ctx.init.taskConfig(「挂机打怪」弹窗保存后经 start-task 下发);
+//   附属配置(城镇档案/对话配方/挂机地图名)走 ctx.init.auxConfigs,同样由 start-task 下发;
 //   非 farm 配置或字段缺失一律回退内置默认值 —— 见 resolveConfig 一节
 //
 // ── 暂停/继续/停止 ──────────────────────────────────────────────────────
@@ -53,17 +62,22 @@
 
 import { DamooVisionProvider } from '../../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../../core/platform/input/damoo/DamooInputProvider';
+import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
 import { MonsterNameDetector } from '../../../../core/perception/MonsterNameDetector';
 import { ItemNameDetector } from '../../../../core/perception/ItemNameDetector';
 import type { DetectedItem, ItemPickupRule } from '../../../../core/perception/ItemNameDetector';
+import { isDead } from '../../../../core/perception/DeathDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
 import type { Point, Rect } from '../../../../core/platform/vision/IVisionProvider';
 import type { MapPosition, MapCoordConfig } from '../../../../core/perception/types';
+import type { WindowSizeKey } from '../../../../core/constant-ocr/popup';
 import type { WorkerContext } from '../context';
 import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from '../interrupts';
+import { resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
+import type { ResolvedResupply } from '../resupply/resupply-runner';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
@@ -146,6 +160,8 @@ interface ResolvedConfig {
   stepIntervalMs: number;
   /** 物品拾取 */
   pickup: ResolvedPickup;
+  /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
+  resupply: ResolvedResupply;
   /** 最多跑多少圈;null = 不限 */
   maxLoops: number | null;
 }
@@ -178,8 +194,19 @@ interface FarmRun {
   conf: ResolvedConfig;
   /** 日志前缀 / 卡片状态文案里的任务名(挂机打怪 / 移动攻击) */
   label: string;
-  /** 移动方式:目标地图坐标 → 屏幕点单击 */
+  /** 移动方式:目标地图坐标 → 屏幕点单击(挂机主循环用) */
   movement: MovementControllerByPrecisePoint;
+  /**
+   * 补给专用的移动实例:坐标 reader 带分辨率档位(能读出地图名),
+   * 让 RouteTraveler「目标图与当前图不同就停」的守卫生效 —— 踩上出城口切图后立即收手,
+   * 不会照着旧地图坐标继续走(否则可能来回穿图/长时间卡住)。
+   * 主循环那份 reader 不带档位(地图名恒 null),挂机行为完全不受影响。
+   */
+  travelMovement: MovementControllerByPrecisePoint;
+  /** 该窗口的分辨率档位(感知层区域常量按档位取;死亡检测也要用) */
+  size: WindowSizeKey;
+  /** 读当前地图名(OCR 中文名,读不到返回空串)—— 补给用来确认城镇 / 开工补给确认位置 / 返程等切图 */
+  readMapName: () => Promise<string>;
   /** 怪名识别器(定点识别用) */
   monster: MonsterNameDetector;
   /** 拾取状态 */
@@ -214,6 +241,12 @@ export interface FarmLoopResult {
 export interface FarmLoopOptions {
   /** 默认 '挂机打怪';screenshot-test 测试路径传 '移动攻击' */
   label?: string;
+  /**
+   * 是否允许"开工补给"(resupply.runOnStart):缺省 true(正式任务路径)。
+   * 移动攻击测试传 false —— 测试只想看走位/打怪,不该顺带跑一趟城镇补给
+   * (测试路径沿用上一次 start-task 留下的 taskConfig,否则会被开工补给带走)。
+   */
+  allowStartupResupply?: boolean;
 }
 
 // ===== 可调常量(真机调试基本就改这一段)=====
@@ -486,23 +519,108 @@ async function waitWhilePaused(ctx: WorkerContext, label: string): Promise<void>
 }
 
 /**
- * 角色是否死亡(打怪循环的退出条件之一,与 maxLoops 并列)。
- * TODO: 死亡判断由你决定(如识别复活按钮图色 / 血量 OCR 归零),
- * 目前恒返回 false = 不启用该退出条件;实现后返回 true 即退出打怪循环。
+ * 角色是否死亡:死亡弹框「死亡」标题 OCR 命中(见 core/perception/DeathDetector)。
+ * 打怪循环的退出条件之一(与 maxLoops 并列);同步语义 —— 调用处(checkDeath)不做 await 判别。
  */
-function isCharacterDead(): boolean {
-  return false;
+function isCharacterDead(run: FarmRun): boolean {
+  return isDead(dmApi, run.size);
 }
 
 /**
  * 角色死亡就返回退出结果,否则返回 null。
  * 统一封装是为了让"两个检查点"共用同一句文案,也免得调用处各写一段死分支。
+ *
+ * 配了回城补给(resupply.enabled + auxConfigs.townProfile)时改走补给流程:
+ *   补给成功 → 返回 null(调用处继续跑主循环,相当于"死后重生了接着挂")
+ *   补给失败 → 返回 ok:false 的结果(带上失败原因,任务按原方式结束)
+ * 没配补给 = 保持原行为(检测到死亡就结束任务)。
  */
-function checkDeath(run: FarmRun, loop: number, where: string): FarmLoopResult | null {
-  if (!isCharacterDead()) return null;
-  const detail = `第 ${loop} 圈${where}检测到角色死亡,退出打怪循环`;
-  run.ctx.sendLog('warn', `[${run.label}] ${detail}`);
+async function checkDeath(run: FarmRun, loop: number, where: string): Promise<FarmLoopResult | null> {
+  if (!isCharacterDead(run)) return null;
+
+  const { ctx, label, conf } = run;
+  const place = `第 ${loop} 圈${where}`;
+  // 死亡计数(随 ctx.setStatus 上报主进程,主面板显示"死亡 N")
+  ctx.stats.deathCount++;
+  ctx.sendLog('warn', `[${label}] ${place}检测到角色死亡(累计死亡 ${ctx.stats.deathCount} 次)`);
+
+  const townProfile = ctx.init.auxConfigs?.townProfile;
+  if (conf.resupply.enabled && townProfile) {
+    ctx.sendLog(
+      'info',
+      `[${label}] 开始回城补给(档案=${conf.resupply.townProfileName || townProfile.mapName},复活=${conf.resupply.reviveMode})`,
+    );
+    const result = await runResupplyFlow(
+      ctx,
+      {
+        client: dmApi,
+        size: run.size,
+        // 用带地图名的 travelMovement(reader 带分辨率档位):RouteTraveler 靠它判断"切图即停"
+        movement: run.travelMovement,
+        readMapName: run.readMapName,
+      },
+      { label: '回城补给' },
+    );
+    if (result.ok) {
+      ctx.sendLog('info', `[${label}] 回城补给完成(${result.detail ?? '已回到挂机地图'}),继续挂机`);
+      return null; // 回到主循环:接着走路径点挂机
+    }
+    const detail = `${place}死亡回城补给失败: ${result.detail ?? '未知原因'},退出打怪循环`;
+    ctx.sendLog('warn', `[${label}] ${detail}`);
+    return { ok: false, detail };
+  }
+
+  if (conf.resupply.enabled && !townProfile) {
+    ctx.sendLog('warn', `[${label}] 开了回城补给但没下发城镇档案(auxConfigs.townProfile),本次按不开启处理`);
+  }
+  const detail = `${place}检测到角色死亡,退出打怪循环`;
+  ctx.sendLog('warn', `[${label}] ${detail}`);
   return { ok: true, detail };
+}
+
+/**
+ * 开工补给(resupply.runOnStart):任务启动、进主循环之前先跑一遍同一条补给流程 ——
+ * 检查耐久/药水 → (按需)找道具商人修理/买药 → 走到出城口切回挂机地图,然后才开始打怪。
+ *
+ * 与死亡回城共用 runResupplyFlow,区别只在触发器和"复活阶段"(mode='start',见 resupply-runner):
+ *   - 人还活着:不复活,位置由流程自己确认(已在挂机地图 = 整段跳过;不在城镇 = 失败)
+ *   - 成功 = 角色已经在挂机地图里 → 返回 null,调用处继续进主循环
+ *   - 失败 = 返回 ok:false 的结果(起点没确认好,硬跑只会沿着错的坐标乱走)
+ *
+ * 依赖与 checkDeath 完全一致(同一份 client/size/移动实例/读图名函数):
+ *   movement 必须用 travelMovement —— 它带地图名,RouteTraveler 的"切图即停"才生效。
+ */
+async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> {
+  const { ctx, label, conf } = run;
+  if (!conf.resupply.enabled || !conf.resupply.runOnStart) return null;
+
+  const townProfile = ctx.init.auxConfigs?.townProfile;
+  if (!townProfile) {
+    // 理论上 renderer(aux-configs.ts)在启动前就拦住了;真发生也只能继续跑,记一条日志说清楚
+    ctx.sendLog('warn', `[${label}] 开了开工补给但没下发城镇档案(auxConfigs.townProfile),本次跳过开工补给`);
+    return null;
+  }
+
+  ctx.sendLog('info', `[${label}] 开始开工补给(档案=${conf.resupply.townProfileName || townProfile.mapName}),完成后进入打怪循环`);
+  const result = await runResupplyFlow(
+    ctx,
+    {
+      client: dmApi,
+      size: run.size,
+      // 与 checkDeath 用同一个带地图名的 travelMovement(reader 带分辨率档位)
+      movement: run.travelMovement,
+      readMapName: run.readMapName,
+    },
+    { label: '开工补给', mode: 'start' },
+  );
+  if (result.ok) {
+    ctx.sendLog('info', `[${label}] 开工补给完成(${result.detail ?? '可以开始挂机'}),进入打怪循环`);
+    return null;
+  }
+
+  const detail = `开工补给失败: ${result.detail ?? '未知原因'},退出打怪循环`;
+  ctx.sendLog('warn', `[${label}] ${detail}`);
+  return { ok: false, detail };
 }
 
 // ===== 配置解析(把 taskConfig 变成 ResolvedConfig)=====
@@ -531,6 +649,9 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     ...resolveDetectAreas(cfg, view),
     stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
     pickup: resolvePickup(ctx, cfg, view),
+    // 回城补给:清洗交给 resupply 模块(默认值与补给流程共用同一份,见 resolveResupplyConfig)
+    // runOnStart 也在那份清洗里(缺省 false,旧配置不受影响),主循环开工时读它
+    resupply: resolveResupplyConfig(cfg?.resupply),
     maxLoops: END_CONDITIONS.maxLoops,
   };
 }
@@ -687,9 +808,20 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
       ` 移动间隔=${conf.stepIntervalMs}ms 最大圈数=${conf.maxLoops ?? '不限'}`,
   );
   ctx.sendLog('info', `[${label}] 找怪=[${conf.monsterKeywords.join(',') || '不限(纯OCR)'}] 颜色=${conf.monsterColor} 拾取=${pickup}`);
+  ctx.sendLog('info', `[${label}] 回城补给=${formatResupply(conf.resupply)}`);
   if (ctx.init.taskConfig?.type !== 'farm') {
     ctx.sendLog('warn', `[${label}] taskConfig 不是 farm 配置(或未下发),本次全部用内置默认值`);
   }
+}
+
+/** 回城补给配置在日志里的写法(排查"死了之后为什么没回城"先看这一行) */
+function formatResupply(r: ResolvedResupply): string {
+  if (!r.enabled) return '关闭';
+  return (
+    `开启(档案=${r.townProfileName || '未指定'} 复活=${r.reviveMode}` +
+    ` 复活超时=${Math.round(r.reviveTimeoutMs / 1000)}s 耐久检查=${r.checkDurability ? '是' : '否'}` +
+    ` 药水阈值=${r.potionThreshold ?? '不检查'} 开工补给=${r.runOnStart ? '是' : '否'})`
+  );
 }
 
 // ===== 移动与瞄准 =====
@@ -1290,14 +1422,14 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
     const loopDesc = conf.maxLoops === null ? `第 ${loop} 圈` : `第 ${loop}/${conf.maxLoops} 圈`;
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
-    const deadAtStart = checkDeath(run, loop, '开始时');
-    // 死亡时退出循环
+    // 死亡检查(可能内含"回城补给":补给成功返回 null,继续挂机)
+    const deadAtStart = await checkDeath(run, loop, '开始时');
     if (deadAtStart) return deadAtStart;
 
     for (const wp of conf.waypoints) {
       if (!ctrl.running) break;
       // 移动前再查一次死亡(挂机点之间移动耗时较长,避免死后还跑完整圈)
-      const dead = checkDeath(run, loop, '途中');
+      const dead = await checkDeath(run, loop, '途中');
       if (dead) return dead;
 
       // 移动前先把能捡的捡掉(移动本身是连续左键点击,拾取点击会和它抢鼠标):
@@ -1389,7 +1521,17 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
 
     // 画面几何(坐标区/角色脚下)、坐标读取、移动方式(精确点,标定见 MAP_CALIBRATION)
     const view = viewGeometry(ctx.init.settings?.resolution);
+    const size = resolveWindowSizeKey(hwnd, ctx.init.settings?.resolution);
+    // movement 内部的坐标 reader 不带分辨率档位(读的是坐标,map 恒为 null,避免触发跨图分支):
+    // 挂机主循环 moveTo 的目标图/当前图都判不出来,跨图守卫保持失效,行为与改动前一致
     const movement = new MovementControllerByPrecisePoint(input, new MapCoordReader(vision, mapCoordConfig(ctx)), buildCalibration(view));
+    const mapNameReader = new MapCoordReader(vision, mapCoordConfig(ctx), size);
+    // 回城补给专用:reader 带分辨率档位 → 能读出当前地图名,RouteTraveler 的跨图守卫才生效
+    const travelMovement = new MovementControllerByPrecisePoint(
+      input,
+      new MapCoordReader(vision, mapCoordConfig(ctx), size),
+      buildCalibration(view),
+    );
 
     const start = await movement.readPosition();
     if (!start) {
@@ -1407,6 +1549,9 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       conf,
       label,
       movement,
+      travelMovement,
+      size,
+      readMapName: () => mapNameReader.readMapName(),
       // 怪名识别器(定点识别用;配置来自 taskConfig.mobFilter)
       monster: new MonsterNameDetector({
         roi: conf.ocrRange,
@@ -1432,7 +1577,32 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       corpses: new Map(),
     };
 
-    return await walkWaypoints(run, start);
+    // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
+    // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),
+    // 且只跑这一次 —— 循环里不会重复触发。补给途中角色是活的,死亡检查不会被误触发。
+    // 移动攻击测试路径由 opts 关掉(见 FarmLoopOptions.allowStartupResupply)
+    const useStartupResupply = opts?.allowStartupResupply !== false && conf.resupply.enabled && conf.resupply.runOnStart;
+    if (useStartupResupply) {
+      const startup = await runStartupResupply(run);
+      if (startup) return startup;
+    }
+
+    // 起点重读:开工补给把角色从城镇一路带到挂机地图(走位 + 切图),上面读到的 start 已经过期 ——
+    // 拿旧坐标进主循环会让定点打怪的"移动反方向"算歪、moveTo 的目标图也可能判成跨图。
+    // 没开开工补给(或被测试路径关掉)时不重读,保持原行为(少一次 OCR)
+    let loopStart = start;
+    if (useStartupResupply) {
+      const after = await movement.readPosition();
+      if (!after) {
+        const detail = '开工补给后读不到当前位置(检查设置里的分辨率,以及坐标区域/颜色是否匹配)';
+        ctx.sendLog('warn', `[${label}] ${detail}`);
+        return { ok: false, detail };
+      }
+      loopStart = after;
+      ctx.sendLog('info', `[${label}] 补给后的起点: (${after.x}, ${after.y}) 地图=${after.map ?? '未知'}`);
+    }
+
+    return await walkWaypoints(run, loopStart);
   } catch (e: any) {
     const detail = `异常: ${e.message}`;
     ctx.sendLog('warn', `[${label}] ${detail}`);

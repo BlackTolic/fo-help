@@ -16,6 +16,8 @@ import type {
   StoredTaskConfig,
   WorkerState,
   AppSettings,
+  StartTaskAuxConfigs,
+  WorkerPositionResult,
 } from '../shared/types';
 
 type Unsubscribe = () => void;
@@ -93,13 +95,19 @@ const api = {
 
   /** 给已 bootstrap 的 worker 发送开始命令，进入战斗/任务流程。
    * taskType + taskConfig 由调用方在 dialog 保存后才确定,worker 收到后覆盖 init 字段分派
+   * auxConfigs = 城镇档案/对话配方/farm 地图名(farm 回城补给用),随 start-task 一并下发
    */
   startTask: (
     hwnd: number,
     taskType?: TaskType,
     taskConfig?: TaskConfig | null,
+    auxConfigs?: StartTaskAuxConfigs | null,
   ): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(RequestChannel.StartTask, { hwnd, taskType, taskConfig }),
+    ipcRenderer.invoke(RequestChannel.StartTask, { hwnd, taskType, taskConfig, auxConfigs }),
+
+  /** 同步读取某游戏窗口(worker)当前地图名/坐标;失败/超时时返回 { error } */
+  readWorkerPosition: (hwnd: number): Promise<WorkerPositionResult> =>
+    ipcRenderer.invoke(RequestChannel.ReadWorkerPosition, hwnd),
 
   /** 通过窗口句柄停止 worker，常用于取消 bootstrap。 */
   stopWorkerByHwnd: (hwnd: number): Promise<{ ok: boolean }> =>

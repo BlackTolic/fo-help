@@ -23,6 +23,8 @@ export { default as History } from 'lucide-react/dist/esm/icons/history';
 export { default as KeyRound } from 'lucide-react/dist/esm/icons/key-round';
 export { default as Keyboard } from 'lucide-react/dist/esm/icons/keyboard';
 export { default as Loader2 } from 'lucide-react/dist/esm/icons/loader-2';
+export { default as MapPin } from 'lucide-react/dist/esm/icons/map-pin';
+export { default as MessageSquare } from 'lucide-react/dist/esm/icons/message-square';
 export { default as Monitor } from 'lucide-react/dist/esm/icons/monitor';
 export { default as PawPrint } from 'lucide-react/dist/esm/icons/paw-print';
 export { default as Pause } from 'lucide-react/dist/esm/icons/pause';

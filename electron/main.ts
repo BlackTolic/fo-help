@@ -4,7 +4,14 @@ import { app, BrowserWindow, ipcMain, shell, protocol, net } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { RequestChannel } from '../shared/ipc-channels';
-import type { GameWindow, TaskType, TaskConfig, WorkerState, AppSettings } from '../shared/types';
+import type {
+  GameWindow,
+  TaskType,
+  TaskConfig,
+  WorkerState,
+  AppSettings,
+  StartTaskAuxConfigs,
+} from '../shared/types';
 import { listGameWindows } from './services/window-registry';
 import { WorkerManager } from './services/worker-manager';
 import { TaskConfigService } from './services/task-config-service';
@@ -274,18 +281,29 @@ function setupIpc() {
   );
 
   /** 给已 bootstrap 的 worker 发 start-task 命令,进入战斗循环(等 worker ready 后再发)
-   * payload: { hwnd, taskType?, taskConfig? }
+   * payload: { hwnd, taskType?, taskConfig?, auxConfigs? }
    * - taskType + taskConfig 可选:由调用方在 dialog 保存后才确定,worker 收到覆盖 init 字段
+   * - auxConfigs 可选:城镇档案/对话配方/farm 地图名(farm 回城补给用),随命令存到 ctx.init.auxConfigs
    */
   ipcMain.handle(
     RequestChannel.StartTask,
     async (
       _e,
-      payload: { hwnd: number; taskType?: TaskType; taskConfig?: TaskConfig | null },
+      payload: {
+        hwnd: number;
+        taskType?: TaskType;
+        taskConfig?: TaskConfig | null;
+        auxConfigs?: StartTaskAuxConfigs | null;
+      },
     ): Promise<{ ok: boolean; error?: string }> => {
       console.log(`[IPC] StartTask hwnd=${payload?.hwnd} task=${payload?.taskType}`);
       if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
-      return await workerManager.startTask(payload.hwnd, payload.taskType, payload.taskConfig);
+      return await workerManager.startTask(
+        payload.hwnd,
+        payload.taskType,
+        payload.taskConfig,
+        payload.auxConfigs,
+      );
     },
   );
 
@@ -303,6 +321,16 @@ function setupIpc() {
   ipcMain.handle('worker:capture-test', async (_e, hwnd: number) => {
     if (!workerManager) return { ok: false, error: 'WorkerManager 未初始化' };
     return await workerManager.captureTest(hwnd);
+  });
+
+  /**
+   * 同步读取某游戏窗口(worker)当前地图名/坐标
+   * renderer 传 hwnd → main 向对应 worker 发 'read-position' 命令 → worker OCR 读取
+   * → 回传 { map, x, y };OCR 失败 / worker 不存在 / 超时(10s)时返回 { error }
+   */
+  ipcMain.handle(RequestChannel.ReadWorkerPosition, async (_e, hwnd: number) => {
+    if (!workerManager) return { map: null, x: 0, y: 0, error: 'WorkerManager 未初始化' };
+    return await workerManager.readPosition(hwnd);
   });
 
   /** 在 Windows 资源管理器里高亮显示某个文件 */
