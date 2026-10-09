@@ -9,26 +9,44 @@
       {
         "id": "step-1791553336515-w1es",
         "kind": "click-text",
-        "text": "仓库管理员",
-        "offsetY": 50,
-        "onMissing": "skip"
-      },
-      {
-        "id": "step-1791553447014-1ltb",
-        "kind": "click-text",
         "text": "使用仓库",
         "offsetY": 0,
-        "onMissing": "skip"
+        "onMissing": "fail",
+        "offsetX": 50
       },
       {
         "id": "step-1791553494155-nx10",
         "kind": "click-at",
-        "x": 0,
-        "y": 0,
-        "note": "取钱"
+        "x": 1171,
+        "y": 285,
+        "note": "存钱"
+      },
+      {
+        "id": "step-1791560290808-caes",
+        "kind": "key",
+        "key": "9"
+      },
+      {
+        "id": "step-1791560313198-yysw",
+        "kind": "key",
+        "key": "9"
+      },
+      {
+        "id": "step-1791560346493-cl9o",
+        "kind": "click-at",
+        "x": 1198,
+        "y": 267,
+        "note": "点击输入"
+      },
+      {
+        "id": "step-1791560399994-vo4x",
+        "kind": "click-at",
+        "x": 1227,
+        "y": 40,
+        "note": "关闭仓库"
       }
     ]
   },
   "createdAt": 1791553552584,
-  "updatedAt": 1791553552584
+  "updatedAt": 1791560589640
 }

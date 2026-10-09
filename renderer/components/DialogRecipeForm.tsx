@@ -33,7 +33,7 @@ function makeStep(kind: DialogStep['kind'], id: string, prev?: DialogStep): Dial
   const text = prev && 'text' in prev ? prev.text : '';
   switch (kind) {
     case 'click-text':
-      return { id, kind, text, offsetY: 0, onMissing: 'skip' };
+      return { id, kind, text, offsetX: 0, offsetY: 0, onMissing: 'skip' };
     case 'click-at':
       return { id, kind, x: 0, y: 0 };
     case 'key':
@@ -191,6 +191,15 @@ export function DialogRecipeForm(props: DialogRecipeFormProps) {
                         disabled={readOnly}
                         placeholder="要点中的选项文字(含即可)"
                         className={`w-44 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                      />
+                      <span className="text-text-muted text-[10px]">横向偏移</span>
+                      <input
+                        type="number"
+                        value={step.offsetX ?? 0}
+                        onChange={(e) => patchStep(step.id, { offsetX: parseInt(e.target.value) || 0 })}
+                        disabled={readOnly}
+                        className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                        title="点击位置的横向偏移(像素;0 = 点在文字上),点不中时左右调"
                       />
                       <span className="text-text-muted text-[10px]">纵向偏移</span>
                       <input

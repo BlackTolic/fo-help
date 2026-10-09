@@ -182,19 +182,33 @@ export function WindowCard({
       return;
     }
 
-    if (worker) {
-      // 切任务前先停掉旧 worker(stop handler 跑 dmApi.unbindWindow() + setTimeout(exit, 300))
-      onStop(worker.workerId);
-      // 等 worker exit 事件 + byHwnd.delete 回调跑完(~500ms)
-      await new Promise<void>((r) => setTimeout(r, 500));
+    // 现有 worker 的处理:
+    //   - status === 'pending'(bootstrap 完成、正等 start-task)→ 直接复用,不重开进程
+    //   - 其余(运行/暂停/异常/即将退出)→ 停掉,并**等它真正从 store 消失**再重新 bootstrap,
+    //     避免 bootstrap 命中"已有 worker"分支而只截图、没换任务(原固定 500ms 等待不可靠)
+    const canReuse = worker?.status === 'pending';
+    if (worker && !canReuse) {
+      const oldWorkerId = worker.workerId;
+      onStop(oldWorkerId);
+      const deadline = Date.now() + 10000;
+      while (useStore.getState().workers.has(oldWorkerId) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
+      if (!res.ok) {
+        setError(res.error || '启动 worker 失败');
+        return;
+      }
+    } else if (!worker) {
+      // 无 worker → 全新 bootstrap
+      const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
+      if (!res.ok) {
+        setError(res.error || '启动 worker 失败');
+        return;
+      }
     }
 
-    // 走"无 worker"路径:bootstrap + 自动 startTask
-    const res = await onBootstrap(gameWindow.hwnd, characterName || '角色');
-    if (!res.ok) {
-      setError(res.error || '启动 worker 失败');
-      return;
-    }
+    // 复用 pending worker / 刚 bootstrap 完 → 发 start-task
     const startRes = await onStartTask(gameWindow.hwnd, stored.config.type, stored.config, auxRes.auxConfigs);
     if (!startRes.ok) {
       alert(`已应用配置,但启动失败: ${startRes.error || '未知错误'}\n请稍后重试`);

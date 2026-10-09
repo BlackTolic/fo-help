@@ -10,7 +10,7 @@ import { DIALOG_CLOSE_BTN, DIALOG_OPTIONS_ROI, NPC_SCAN_BOX } from '../constant-
 import type { WindowSizeKey } from '../constant-ocr/popup';
 import type { DamooClient } from '../platform/damoo/dm-api';
 import type { Point } from '../platform/vision/IVisionProvider';
-import { parseFindColor } from '../utils/parse';
+import { parseFindColor, parseTextPos } from '../utils/parse';
 import { sleep } from '../utils/sleep';
 
 export interface NpcFindOptions {
@@ -28,11 +28,13 @@ export class NpcDialog {
   ) {}
 
   /** 在全屏扫描区找 NPC 名字,返回 名字坐标+偏移 后的点击位置;找不到返回 undefined */
-  findNpc(name: string, opts?: NpcFindOptions): Point | undefined {
+  async findNpc(name: string, opts?: NpcFindOptions): Promise<Point | undefined> {
+    // 找到NPC之前,先等待 500ms,确保名字显示出来
+    await sleep(500);
     const box = NPC_SCAN_BOX[this.size];
-    const found = parseFindColor(this.client.findStrE(box.x1, box.y1, box.x2, box.y2, name, box.color, box.sim));
+    const found = parseTextPos(this.client.findStrE(box.x1, box.y1, box.x2, box.y2, name, box.color, box.sim));
     if (!found) return undefined;
-    const offset = opts?.offset ?? { x: 0, y: 50 };
+    const offset = opts?.offset ?? { x: 30, y: 50 };
     return { x: found.x + offset.x, y: found.y + offset.y };
   }
 
@@ -41,7 +43,7 @@ export class NpcDialog {
     this.client.moveTo(pos.x, pos.y);
     await sleep(200);
     this.client.leftClick();
-    await sleep(2500); // 旧项目实测:对话展开约 2.5s
+    await sleep(2000); // 旧项目实测:对话展开约 2s
     return this.findCloseButton() !== undefined;
   }
 
@@ -49,14 +51,14 @@ export class NpcDialog {
   findOption(text: string): Point | undefined {
     const roi = DIALOG_OPTIONS_ROI[this.size];
     const found = this.client.findStrE(roi.x1, roi.y1, roi.x2, roi.y2, text, roi.color, roi.sim);
-    return parseFindColor(found) ?? undefined;
+    return parseTextPos(found) ?? undefined;
   }
 
-  /** 找选项并点击(offsetY 默认 5,点文字下方一点);未找到返回 false */
-  async clickOption(text: string, offsetY = 5): Promise<boolean> {
+  /** 找选项并点击(offsetX 默认 0、offsetY 默认 5,点文字下方一点);未找到返回 false */
+  async clickOption(text: string, offsetX = 0, offsetY = 5): Promise<boolean> {
     const pos = this.findOption(text);
     if (!pos) return false;
-    this.client.moveTo(pos.x, pos.y + offsetY);
+    this.client.moveTo(pos.x + offsetX, pos.y + offsetY);
     await sleep(200);
     this.client.leftClick();
     await sleep(600);
@@ -64,7 +66,7 @@ export class NpcDialog {
   }
 
   /**
-   * 关对话:找 '@X' 点击;找不到按 Esc 兜底。
+   * 关对话:找 '@X' 点击
    * 返回是否确认处理(点到 '@X' = true;只发了 Esc 没法确认 = false)。
    */
   async closeDialog(): Promise<boolean> {
@@ -76,8 +78,8 @@ export class NpcDialog {
       await sleep(600);
       return true;
     }
-    this.client.keyPress(27); // Esc 兜底
-    await sleep(500);
+    // this.client.keyPress(27); // Esc 兜底
+    // await sleep(500);
     return false;
   }
 
@@ -85,6 +87,6 @@ export class NpcDialog {
   private findCloseButton(): Point | undefined {
     const roi = DIALOG_CLOSE_BTN[this.size];
     const found = this.client.findStrE(roi.x1, roi.y1, roi.x2, roi.y2, '@X', roi.color, roi.sim);
-    return parseFindColor(found) ?? undefined;
+    return parseTextPos(found) ?? undefined;
   }
 }

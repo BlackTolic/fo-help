@@ -37,8 +37,8 @@ export async function isEquipmentDamaged(client: DamooClient, size: WindowSizeKe
   const hit = parseFindColor(client.findColorE(roi.x1, roi.y1, roi.x2, roi.y2, roi.color, roi.sim));
 
   // 关面板:Esc 兜底(面板没开成功时多按一次 Esc 一般也只是打开系统菜单,任务层可再按一次关掉)
-  client.keyPress(27);
-  await sleep(300);
+  // client.keyPress(27);
+  // await sleep(300);
 
   return hit !== null;
 }

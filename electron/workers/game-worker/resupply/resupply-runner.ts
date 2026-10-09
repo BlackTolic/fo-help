@@ -217,6 +217,7 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     // 开工补给:人一定活着(没有死亡弹框可等、也不能点原地复活),所以跳过第 1 步;
     // 但城镇档案里的路线都以复活点为起点锚点,得先确认角色到底站在哪张图(见 confirmStartPosition)
     ctx.setStatus('resupply', `${label}:确认位置`);
+    // 确认位置:先读地图名,再确认是否在挂机地图(见 confirmStartPosition)
     const position = await confirmStartPosition(flow);
     if (!position.ok) return { ok: false, detail: position.detail };
     // 已在挂机地图:整段补给跳过 —— 没必要为了买药/修装备特意跑一趟城镇
@@ -483,11 +484,12 @@ async function visitMerchant(flow: ResupplyFlow, merchant: TownProfileNpc, reaso
   }
 
   const dialog = new NpcDialog(client, size);
-  let pos = dialog.findNpc(merchant.name);
+  // 找字精确定位:路线只负责"走近",最终点击以找字为准,找不到重试几次
+  let pos = await dialog.findNpc(merchant.name);
   for (let i = 1; !pos && i < RESUPPLY.npcFindAttempts; i++) {
     ctx.sendLog('warn', `[${label}] 没找到 NPC「${merchant.name}」,重试 ${i + 1}/${RESUPPLY.npcFindAttempts}`);
     await sleep(RESUPPLY.npcFindRetryMs);
-    pos = dialog.findNpc(merchant.name);
+    pos = await dialog.findNpc(merchant.name);
   }
   if (!pos) {
     return {
@@ -504,7 +506,11 @@ async function visitMerchant(flow: ResupplyFlow, merchant: TownProfileNpc, reaso
     };
   }
 
+  // 执行对话配方
   const recipe = (ctx.init.auxConfigs?.recipes ?? []).find((r) => r.npcKind === ITEM_MERCHANT_KIND);
+
+  console.log(`visitMerchant ${merchant.name} ${JSON.stringify(recipe)}`);
+
   if (!recipe) {
     await dialog.closeDialog();
     return {

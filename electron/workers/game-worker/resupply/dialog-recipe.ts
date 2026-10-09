@@ -99,12 +99,14 @@ export async function runDialogRecipe(deps: DialogRecipeDeps, recipe: DialogReci
   return { ok: true };
 }
 
+// 执行单步对话配方
 async function runStep(deps: DialogRecipeDeps, step: DialogStep, indexOf: Map<string, number>, pc: number): Promise<StepOutcome> {
   const { ctx, client, dialog, label } = deps;
 
   switch (step.kind) {
+    // 点击选项
     case 'click-text': {
-      const clicked = await dialog.clickOption(step.text, step.offsetY);
+      const clicked = await dialog.clickOption(step.text, step.offsetX, step.offsetY);
       if (clicked) return { kind: 'next' };
       if (step.onMissing === 'fail') {
         return { kind: 'fail', detail: `第 ${pc + 1} 步:对话选项「${step.text}」没找到(onMissing=fail)` };
@@ -112,7 +114,7 @@ async function runStep(deps: DialogRecipeDeps, step: DialogStep, indexOf: Map<st
       ctx.sendLog('warn', `[${label}] 第 ${pc + 1} 步:对话选项「${step.text}」没找到,按 onMissing=skip 继续下一步`);
       return { kind: 'next' };
     }
-
+    // 点击指定坐标
     case 'click-at': {
       client.moveTo(step.x, step.y);
       await sleep(RECIPE.afterActionMs);

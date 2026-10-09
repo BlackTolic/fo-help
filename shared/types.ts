@@ -283,7 +283,7 @@ export interface TownProfileConfig {
 
 /**
  * 对话步骤:
- * - click-text   点对话选项里含指定文字的条目(offsetY=纵向点击偏移;onMissing=找不到时 skip/fail)
+ * - click-text   点对话选项里含指定文字的条目(offsetX/offsetY=点击偏移;onMissing=找不到时 skip/fail)
  * - click-at     直接点屏幕坐标(客户区相对坐标)
  * - key          按键(如 Enter/Esc/F1~F12)
  * - wait         等待毫秒
@@ -293,7 +293,7 @@ export interface TownProfileConfig {
  * thenId / elseId 引用同一配方里其它步骤的 id
  */
 export type DialogStep =
-  | { id: string; kind: 'click-text'; text: string; offsetY?: number; onMissing: 'skip' | 'fail' }
+  | { id: string; kind: 'click-text'; text: string; offsetX?: number; offsetY?: number; onMissing: 'skip' | 'fail' }
   | { id: string; kind: 'click-at'; x: number; y: number; note?: string }
   | { id: string; kind: 'key'; key: string }
   | { id: string; kind: 'wait'; ms: number }
