@@ -93,6 +93,12 @@ export interface ResupplyDeps {
   /** 读当前地图名(OCR 中文名,读不到返回空串) */
   readMapName: () => Promise<string>;
   /**
+   * 入图路径点(挂机地图坐标,按顺序;空 = 不配):
+   * 返程切回挂机地图后,角色只是落在入口,离挂机点还有一段路(地形/走廊挡着,直线走会被卡住),
+   * 沿这些点走过去再恢复挂机循环。来自 farm 的 type='entry' 路径点。
+   */
+  entryPath?: { x: number; y: number }[];
+  /**
    * 换图检查回调(可选):补给流程每次确认"角色到达一张新图"就调它一次
    * (死亡重生回到城镇 / 返程切回挂机图)。
    * 是否真的换图、要不要按屏蔽快捷键由 farm 侧统一判断(见 tasks/farm.ts 的 blockAllPlayersIfMapChanged)。
@@ -609,9 +615,35 @@ async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise
       detail: stopped() ? '任务已停止(返程途中)' : `返程失败:没能走到出城口并切回「${farmMapName}」(核对城镇档案的出口坐标与路线)`,
     };
   }
-  // 切回挂机图 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人
+  // 切回挂机图 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人(先屏蔽,入图路上也生效)
   await deps.onMapMaybeChanged?.();
-  return { ok: true, detail: `已切回「${farmMapName}」,${label}完成` };
+  // 落点在挂机地图入口,离挂机点还有一段路:沿入图点走过去,再交给主循环
+  const entryOk = await walkEntryPath(flow);
+  if (!entryOk) {
+    // 入图点没走全(卡住/被挡):不硬失败,交给主循环的卡住处理,但要让用户看到
+    ctx.sendLog('warn', `[${label}] 入图路径没走完(可能有卡住的点),直接进入挂机循环`);
+  }
+  return { ok: true, detail: `已切回「${farmMapName}」,${entryOk ? '' : '入图路径未走完,'}${label}完成` };
+}
+
+/**
+ * 返程入图:从挂机地图入口沿 entryPath 走到挂机点。
+ * 没配入图点(或只有 0 个)时直接跳过 —— 老配置行为不变。
+ * 返回是否全部点都走到了(单点卡住不算致命,交给调用方决定提示)。
+ */
+async function walkEntryPath(flow: ResupplyFlow): Promise<boolean> {
+  const { ctx, deps, label, stopped } = flow;
+  const points = deps.entryPath ?? [];
+  if (points.length === 0) return true;
+
+  ctx.setStatus('resupply', `${label}:入图`);
+  ctx.sendLog('info', `[${label}] 已进入挂机地图,按入图路径走 ${points.length} 个点回到挂机点`);
+  return travelWithinMap(deps.movement, points, {
+    timeoutMs: RESUPPLY.travelTimeoutMs,
+    moveOptions: RESUPPLY.moveOptions,
+    isStopped: stopped,
+    onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+  });
 }
 
 /**

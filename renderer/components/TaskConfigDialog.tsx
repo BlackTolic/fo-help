@@ -310,6 +310,9 @@ export function TaskConfigDialog({
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
   // 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4,见 shared/game-hotkeys.ts)
   const [blockAllPlayersOnNewMap, setBlockAllPlayersOnNewMap] = useState(false);
+  // 启动时的一次性环境处理(默认开启;见 shared/types.ts 的 zoomOutMinimap / closeChatBackground)
+  const [zoomOutMinimap, setZoomOutMinimap] = useState(true);
+  const [closeChatBackground, setCloseChatBackground] = useState(true);
   const [note, setNote] = useState('');
 
   // 城镇档案 / 对话配方(配置型"任务":只存储/编辑,保存后不启动 worker)
@@ -453,6 +456,9 @@ export function TaskConfigDialog({
       setResupply(normalizeResupply(farm.resupply));
       // 旧配置没有这个字段:回显成"不开启"
       setBlockAllPlayersOnNewMap(farm.blockAllPlayersOnNewMap === true);
+      // 旧配置没有这两个字段:缺省 = 开启
+      setZoomOutMinimap(farm.zoomOutMinimap !== false);
+      setCloseChatBackground(farm.closeChatBackground !== false);
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -605,6 +611,9 @@ export function TaskConfigDialog({
         resupply: normalizeResupply(resupply),
         // 进入新地图时屏蔽所有人:只在勾选时写入(缺省不写,等价于关闭)
         blockAllPlayersOnNewMap: blockAllPlayersOnNewMap || undefined,
+        // 小地图缩放 / 关闭聊天背景:缺省开启,只在取消勾选时写入 false
+        zoomOutMinimap: zoomOutMinimap ? undefined : false,
+        closeChatBackground: closeChatBackground ? undefined : false,
         note: note || undefined,
       };
     }
@@ -966,6 +975,10 @@ export function TaskConfigDialog({
               hasMerchantRecipe={hasMerchantRecipe}
               blockAllPlayersOnNewMap={blockAllPlayersOnNewMap}
               setBlockAllPlayersOnNewMap={setBlockAllPlayersOnNewMap}
+              zoomOutMinimap={zoomOutMinimap}
+              setZoomOutMinimap={setZoomOutMinimap}
+              closeChatBackground={closeChatBackground}
+              setCloseChatBackground={setCloseChatBackground}
               note={note}
               setNote={setNote}
             />
@@ -1421,6 +1434,12 @@ interface FarmConfigProps {
   /** 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4) */
   blockAllPlayersOnNewMap: boolean;
   setBlockAllPlayersOnNewMap: (v: boolean) => void;
+  /** 小地图缩放:任务启动时按一次 Alt+- (缺省开启) */
+  zoomOutMinimap: boolean;
+  setZoomOutMinimap: (v: boolean) => void;
+  /** 关闭聊天背景:任务启动时点一次聊天框(缺省开启) */
+  closeChatBackground: boolean;
+  setCloseChatBackground: (v: boolean) => void;
   note: string;
   setNote: (v: string) => void;
 }
@@ -1464,6 +1483,10 @@ function FarmConfig(props: FarmConfigProps) {
     hasMerchantRecipe,
     blockAllPlayersOnNewMap,
     setBlockAllPlayersOnNewMap,
+    zoomOutMinimap,
+    setZoomOutMinimap,
+    closeChatBackground,
+    setCloseChatBackground,
     note,
     setNote,
   } = props;
@@ -1881,6 +1904,7 @@ function FarmConfig(props: FarmConfigProps) {
                     <option value="farm-spot">挂机点</option>
                     <option value="rest">休息点</option>
                     <option value="path">路径点</option>
+                    <option value="entry">入图点</option>
                   </select>
                   <span className="text-text-muted text-[10px]">X</span>
                   <input
@@ -1971,6 +1995,17 @@ function FarmConfig(props: FarmConfigProps) {
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* 入图点说明:死了回城再回来 / 开工补给从城镇回来时,落点在地图入口,离挂机点还有一段路 */}
+        <div className="text-[10px] text-text-muted mt-1.5 pl-0.5">
+          「入图点」= 回城补给/开工补给重新进入挂机地图后,从地图入口走到挂机点的途经点(按列表从上到下的顺序走)。
+          入口到挂机点直线走会被地形/走廊卡住时,在这里按走过的路线补几个点;平时的挂机循环会跳过入图点
+        </div>
+        {waypoints.some((w) => w.type === 'entry') && !resupply.enabled && (
+          <div className="text-[10px] text-accent-yellow/80 mt-1 pl-0.5">
+            ⚠ 已配入图点,但「死亡回城补给」没开启 —— 入图点只在回城/开工补给重新进图时才会走
           </div>
         )}
       </div>
@@ -2436,7 +2471,7 @@ function FarmConfig(props: FarmConfigProps) {
         <label className="text-sm text-text-secondary mb-1.5 block">
           其他 <span className="text-text-muted text-[11px]">(与挂机循环并行的环境处理)</span>
         </label>
-        <div className="bg-bg-input/40 border border-border-base rounded p-2.5">
+        <div className="bg-bg-input/40 border border-border-base rounded p-2.5 space-y-1.5">
           <label className="flex items-center gap-1.5 text-xs cursor-pointer">
             <input
               type="checkbox"
@@ -2449,6 +2484,28 @@ function FarmConfig(props: FarmConfigProps) {
             <span className="text-text-muted text-[10px]">
               每进入一张新地图(含回城补给返回挂机图)自动按一次 F11×4,把其他玩家的名字/模型屏蔽掉
             </span>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={zoomOutMinimap}
+              onChange={(e) => setZoomOutMinimap(e.target.checked)}
+            />
+            <span>小地图缩放</span>
+            <span className="text-text-muted text-[10px]">任务启动时按一次 Alt+- 把右上角小地图缩小(地图放大 Alt++)</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={closeChatBackground}
+              onChange={(e) => setCloseChatBackground(e.target.checked)}
+            />
+            <span>关闭聊天背景</span>
+            <span className="text-text-muted text-[10px]">任务启动时点击聊天框(11,727)一次,关掉聊天背景</span>
           </label>
         </div>
       </div>

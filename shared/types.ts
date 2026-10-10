@@ -43,8 +43,13 @@ export interface Waypoint {
   id: string;
   x: number;
   y: number;
-  /** farm-spot = 挂机点(可绑定技能) / rest = 休息点(回血回蓝) / path = 路径中间点 */
-  type: 'farm-spot' | 'rest' | 'path';
+  /**
+   * farm-spot = 挂机点(可绑定技能) / rest = 休息点(回血回蓝) / path = 路径中间点
+   * entry = 入图点:回城/开工补给重新进入挂机地图后,先按这些点从地图入口走到挂机点
+   *   (入口到挂机点有一段路,直线走会被地形/走廊卡住,所以要显式配中间点);
+   *   平时的挂机循环会跳过它们,顺序 = 列表里从上到下
+   */
+  type: 'farm-spot' | 'rest' | 'path' | 'entry';
   /** 挂机点绑定的技能 id 列表(引用 FarmTaskConfig.skills;空/未配 = worker 回退为全部技能) */
   skillIds?: string[];
   note?: string;
@@ -215,6 +220,16 @@ export interface FarmTaskConfig {
    * 游戏换图会把"屏蔽玩家"重置,所以每次进新图要重新屏蔽;不配 = 不处理
    */
   blockAllPlayersOnNewMap?: boolean;
+  /**
+   * 小地图缩放:任务启动时按一次 Alt+- 把右上角小地图缩小(地图放大 Alt++)。
+   * 缺省/旧配置 = 开启(只有显式 false 才关闭)
+   */
+  zoomOutMinimap?: boolean;
+  /**
+   * 关闭聊天背景:任务启动时鼠标移到聊天框(11,727)点一次左键,把聊天背景关掉。
+   * 缺省/旧配置 = 开启(只有显式 false 才关闭)
+   */
+  closeChatBackground?: boolean;
   /** 自定义备注 */
   note?: string;
 }

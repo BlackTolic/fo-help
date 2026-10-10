@@ -14,6 +14,10 @@ export const VK_SHIFT = 16;
 export const VK_CTRL = 17;
 export const VK_ALT = 18;
 
+/** 主键区符号键(地图缩放等非 F/字母/数字热键用) */
+export const VK_OEM_MINUS = 189; // - _ 键
+export const VK_OEM_PLUS = 187; // = + 键
+
 /** F1-F12 vkCode 映射(112-123) */
 export const VK_F: Record<string, number> = {
   F1: 112,

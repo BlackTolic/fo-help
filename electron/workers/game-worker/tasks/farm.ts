@@ -116,10 +116,16 @@ interface MoveAttackSkill {
 interface ResolvedWaypoint {
   x: number;
   y: number;
-  /** farm-spot 挂机点(放技能) / rest 休息点 / path 路径中间点(都不放技能) */
-  type: 'farm-spot' | 'rest' | 'path';
+  /** farm-spot 挂机点(放技能) / rest 休息点 / path 路径中间点(都不放技能)/ entry 入图点(挂机循环不走) */
+  type: 'farm-spot' | 'rest' | 'path' | 'entry';
   /** 该点绑定的技能(仅 farm-spot 用;空数组 = 不放) */
   skills: MoveAttackSkill[];
+}
+
+/** 入图路径点(回城/开工补给重新进图后,从地图入口走到挂机点的中间点) */
+interface EntryPoint {
+  x: number;
+  y: number;
 }
 
 /** 解析后的物品拾取配置(taskConfig.pickup + 内置默认值) */
@@ -160,12 +166,18 @@ interface ResolvedConfig {
   clickOffset: Point;
   /** 移动步进间隔(ms) */
   stepIntervalMs: number;
+  /** 入图路径点(type='entry' 的那些,按列表顺序);回城/开工补给重新进图后走它 */
+  entryPath: EntryPoint[];
   /** 物品拾取 */
   pickup: ResolvedPickup;
   /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
   resupply: ResolvedResupply;
   /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 blockAllPlayersIfMapChanged);缺省 false */
   blockAllPlayersOnNewMap: boolean;
+  /** 小地图缩放:任务启动时按一次 Alt+- 缩小右上角小地图(缺省 true) */
+  zoomOutMinimap: boolean;
+  /** 关闭聊天背景:任务启动时点一次聊天框关掉背景(缺省 true) */
+  closeChatBackground: boolean;
   /** 最多跑多少圈;null = 不限 */
   maxLoops: number | null;
 }
@@ -253,6 +265,11 @@ export interface FarmLoopOptions {
    * (测试路径沿用上一次 start-task 留下的 taskConfig,否则会被开工补给带走)。
    */
   allowStartupResupply?: boolean;
+  /**
+   * 是否允许任务启动时的环境处理(小地图缩放 / 关闭聊天背景):缺省 true(正式任务路径)。
+   * 移动攻击测试传 false —— 测试只想看走位/打怪,不该顺带改游戏环境。
+   */
+  allowStartupEnv?: boolean;
 }
 
 // ===== 可调常量(真机调试基本就改这一段)=====
@@ -534,15 +551,23 @@ function detectCharacterDeath(run: FarmRun): DeathDetection {
 }
 
 /**
+ * 死亡检查的结果:
+ *   - null           没死,继续本圈
+ *   - 'resupplied'   检测到死亡、回城补给成功(角色已回到挂机图)—— 调用处结束本圈,从第一个路径点重跑
+ *   - exit           结束任务(补给失败 / 未开启补给),result 带退出原因
+ */
+type DeathCheck = { kind: 'resupplied' } | { kind: 'exit'; result: FarmLoopResult } | null;
+
+/**
  * 角色死亡就返回退出结果,否则返回 null。
  * 统一封装是为了让"两个检查点"共用同一句文案,也免得调用处各写一段死分支。
  *
  * 配了回城补给(resupply.enabled + auxConfigs.townProfile)时改走补给流程:
- *   补给成功 → 返回 null(调用处继续跑主循环,相当于"死后重生了接着挂")
- *   补给失败 → 返回 ok:false 的结果(带上失败原因,任务按原方式结束)
+ *   补给成功 → 返回 'resupplied'(角色被带回入图点;调用处结束本圈,从第一个路径点重跑,不续跑中断点)
+ *   补给失败 → 返回 exit 结果(带上失败原因,任务按原方式结束)
  * 没配补给 = 保持原行为(检测到死亡就结束任务)。
  */
-async function checkDeath(run: FarmRun, loop: number, where: string): Promise<FarmLoopResult | null> {
+async function checkDeath(run: FarmRun, loop: number, where: string): Promise<DeathCheck> {
   const death = detectCharacterDeath(run);
   if (!death.dead) return null;
 
@@ -569,18 +594,20 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<Fa
         // 用带地图名的 travelMovement(reader 带分辨率档位):RouteTraveler 靠它判断"切图即停"
         movement: run.travelMovement,
         readMapName: run.readMapName,
+        // 切回挂机图后先沿入图点从地图入口走到挂机点,再恢复挂机循环
+        entryPath: conf.entryPath,
         // 补给途中每到达一张新图(死亡重生回城镇 / 返程切回挂机图)都走同一次换图判断
         onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
       },
       { label: '回城补给' },
     );
     if (result.ok) {
-      ctx.sendLog('info', `[${label}] 回城补给完成(${result.detail ?? '已回到挂机地图'}),继续挂机`);
-      return null; // 回到主循环:接着走路径点挂机
+      ctx.sendLog('info', `[${label}] 回城补给完成(${result.detail ?? '已回到挂机地图'}),回到第一个路径点重新开始`);
+      return { kind: 'resupplied' };
     }
     const detail = `${place}死亡回城补给失败: ${result.detail ?? '未知原因'},退出打怪循环`;
     ctx.sendLog('warn', `[${label}] ${detail}`);
-    return { ok: false, detail };
+    return { kind: 'exit', result: { ok: false, detail } };
   }
 
   if (conf.resupply.enabled && !townProfile) {
@@ -588,7 +615,7 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<Fa
   }
   const detail = `${place}检测到角色死亡,退出打怪循环`;
   ctx.sendLog('warn', `[${label}] ${detail}`);
-  return { ok: true, detail };
+  return { kind: 'exit', result: { ok: true, detail } };
 }
 
 /**
@@ -614,6 +641,36 @@ async function blockAllPlayersIfMapChanged(run: FarmRun): Promise<void> {
     return;
   }
   ctx.sendLog('info', `[${label}] 进入新地图「${map}」,已屏蔽所有人(F11×4)`);
+}
+
+/** 关闭聊天背景的点击坐标(窗口客户区相对坐标) */
+const CHAT_BACKGROUND_CLICK = { x: 11, y: 727 };
+
+/**
+ * 任务启动时的一次性环境处理(开工时各跑一次,不进入挂机循环):
+ *   - 小地图缩放:按一次 Alt+- 把右上角小地图缩小(键位见 shared/game-hotkeys 的 zoomOutMap)
+ *   - 关闭聊天背景:鼠标移到聊天框点一次左键,把聊天背景关掉
+ * 配置缺省开启(zoomOutMinimap / closeChatBackground !== false);单项失败只记日志,不阻断任务。
+ */
+async function runStartupEnvSetup(run: FarmRun): Promise<void> {
+  const { ctx, conf, label, input } = run;
+  if (conf.zoomOutMinimap) {
+    try {
+      await pressGameHotkey(dmApi, 'zoomOutMap');
+      ctx.sendLog('info', `[${label}] 启动:小地图缩小(Alt+-)`);
+    } catch (e: any) {
+      ctx.sendLog('warn', `[${label}] 小地图缩小失败: ${e?.message ?? e}`);
+    }
+  }
+  if (conf.closeChatBackground) {
+    try {
+      await input.moveMouse({ x: CHAT_BACKGROUND_CLICK.x, y: CHAT_BACKGROUND_CLICK.y }, { kind: 'instant' });
+      await input.click('left');
+      ctx.sendLog('info', `[${label}] 启动:关闭聊天背景(点击 ${CHAT_BACKGROUND_CLICK.x},${CHAT_BACKGROUND_CLICK.y})`);
+    } catch (e: any) {
+      ctx.sendLog('warn', `[${label}] 关闭聊天背景失败: ${e?.message ?? e}`);
+    }
+  }
 }
 
 /**
@@ -648,6 +705,8 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
       // 与 checkDeath 用同一个带地图名的 travelMovement(reader 带分辨率档位)
       movement: run.travelMovement,
       readMapName: run.readMapName,
+      // 返程切回挂机图后同样先走入图点(开工时人从城镇回来,落点也在入口)
+      entryPath: conf.entryPath,
       // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
       onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
     },
@@ -679,12 +738,15 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   const mode = resolveMode(cfg);
   const castMode: ResolvedConfig['castMode'] = cfg?.castMode === 'custom' ? 'custom' : 'smart';
   const skills = resolveSkills(cfg);
+  const waypoints = resolveWaypoints(cfg, castMode, skills);
 
   return {
     mode,
     castMode,
     skills,
-    waypoints: resolveWaypoints(cfg, castMode, skills),
+    waypoints,
+    // 入图点单独抽出来:挂机循环跳过它们,只在回城/开工补给重新进图后走(见 resupply-runner)
+    entryPath: waypoints.filter((w) => w.type === 'entry').map((w) => ({ x: w.x, y: w.y })),
     ...resolveMonsterFilter(cfg, mode),
     ...resolveDetectAreas(cfg, view),
     stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
@@ -694,6 +756,9 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     resupply: resolveResupplyConfig(cfg?.resupply),
     // 进入新地图时屏蔽所有人(缺省 false,旧配置不受影响)
     blockAllPlayersOnNewMap: cfg?.blockAllPlayersOnNewMap === true,
+    // 启动时的一次性环境处理(缺省开启,旧配置不受影响)
+    zoomOutMinimap: cfg?.zoomOutMinimap !== false,
+    closeChatBackground: cfg?.closeChatBackground !== false,
     maxLoops: END_CONDITIONS.maxLoops,
   };
 }
@@ -839,11 +904,16 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
       .map((s) => `${skillLabel(s)}/${s.cooldownMs}ms/吟唱${s.castMs}ms/距离${s.rangePx === 0 ? '未配' : `${s.rangePx}px`}/${s.method}`)
       .join(', ') || '无';
   const farmSpots = conf.waypoints.filter((w) => w.type === 'farm-spot').length;
+  const patrolCount = conf.waypoints.filter((w) => w.type !== 'entry').length;
   const pickup = conf.pickup.enabled
     ? `开启(范围(${fmtRange(conf.pickup.roi)}) 规则=[${conf.pickup.rules.map(formatPickupRule).join(' 或 ')}])`
     : '关闭';
 
-  ctx.sendLog('info', `[${label}] 配置: 模式=${modeLabel[conf.mode]}(${conf.mode}) 路径点=${conf.waypoints.length}(挂机点=${farmSpots})`);
+  ctx.sendLog(
+    'info',
+    `[${label}] 配置: 模式=${modeLabel[conf.mode]}(${conf.mode}) 路径点=${patrolCount}(挂机点=${farmSpots})` +
+      ` 入图点=${conf.entryPath.length}`,
+  );
   ctx.sendLog(
     'info',
     `[${label}] 技能=[${skills}] 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}` +
@@ -852,7 +922,8 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
   ctx.sendLog('info', `[${label}] 找怪=[${conf.monsterKeywords.join(',') || '不限(纯OCR)'}] 颜色=${conf.monsterColor} 拾取=${pickup}`);
   ctx.sendLog(
     'info',
-    `[${label}] 回城补给=${formatResupply(conf.resupply)} 屏蔽所有人=${conf.blockAllPlayersOnNewMap ? '进入新地图时(F11×4)' : '关闭'}`,
+    `[${label}] 回城补给=${formatResupply(conf.resupply)} 屏蔽所有人=${conf.blockAllPlayersOnNewMap ? '进入新地图时(F11×4)' : '关闭'}` +
+      ` 小地图缩放=${conf.zoomOutMinimap ? '启动时(Alt+-)' : '关闭'} 关聊天背景=${conf.closeChatBackground ? '启动时' : '关闭'}`,
   );
   if (ctx.init.taskConfig?.type !== 'farm') {
     ctx.sendLog('warn', `[${label}] taskConfig 不是 farm 配置(或未下发),本次全部用内置默认值`);
@@ -1442,12 +1513,16 @@ function pickSkillsToCast(run: FarmRun, wp: ResolvedWaypoint, now: number): Move
  * 沿路径点循环:走到点 → (定点识别先锁怪) → 放技能 → 下一个点
  * - 每次移动前先扫一眼拾取(见 runPickup):拾取点击会走位,只能在没移动的时候做
  * - 卡住的点(超过 noMoveTimeoutMs 没动)记一条日志就跳过,不强求
+ * - 死亡回城补给成功后结束本圈,从第一个路径点重新跑(不再从死亡时的中断点续跑)
  * - 目标地图名以最近一次读到的坐标为准:过图/传送后 start.map 就过期了,
  *   继续拿它当目标会让 moveTo 每次都判成「跨图」直接失败
+ * - 入图点(type='entry')不参与循环:它们只在回城/开工补给重新进图后走(见 resupply-runner)
  */
 async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoopResult> {
   const { ctx, conf, label } = run;
   const ctrl = ctx.moveAttack;
+  /** 挂机循环实际要走的点(去掉入图点) */
+  const patrol = conf.waypoints.filter((w) => w.type !== 'entry');
   let loop = 0;
   /** 连续多少个路径点没到达(目前只用于日志;想改成"卡住几次就终止",在这里加判断) */
   let stuckCount = 0;
@@ -1469,15 +1544,27 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
     // 每圈开始读一次地图名:变了就重新屏蔽所有人(路径点不跨图,这里够用)
     await blockAllPlayersIfMapChanged(run);
-    // 死亡检查(可能内含"回城补给":补给成功返回 null,继续挂机)
+    // 死亡检查(可能内含"回城补给";补给成功 = 'resupplied')
     const deadAtStart = await checkDeath(run, loop, '开始时');
-    if (deadAtStart) return deadAtStart;
+    if (deadAtStart) {
+      if (deadAtStart.kind === 'exit') return deadAtStart.result;
+      // 开工前死亡、补给成功:角色已被带回入图点;本圈本来就从第一个路径点开始,重读当前位置当"上一位置"
+      prev = await run.movement.readPosition();
+    }
 
-    for (const wp of conf.waypoints) {
+    for (const wp of patrol) {
       if (!ctrl.running) break;
       // 移动前再查一次死亡(挂机点之间移动耗时较长,避免死后还跑完整圈)
       const dead = await checkDeath(run, loop, '途中');
-      if (dead) return dead;
+      if (dead) {
+        if (dead.kind === 'exit') return dead.result;
+        // 死亡后回城补给成功:不再从死亡时的中断点续跑 —— 结束本圈,让 while 重进 for 从第一个路径点跑
+        ctx.sendLog('info', `[${label}] 补给完成,本圈从头重新开始`);
+        // 角色已被带回入图点:重读当前位置当"上一位置",免得定点打怪方向沿用死亡前的坐标
+        prev = await run.movement.readPosition();
+        stuckCount = 0;
+        break;
+      }
 
       // 移动前先把能捡的捡掉(移动本身是连续左键点击,拾取点击会和它抢鼠标):
       // 一轮会把范围内能找到的物品都捡完才返回,所以捡完才走下一个点
@@ -1551,10 +1638,11 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
   const conf = resolveConfig(ctx);
   logResolvedConfig(ctx, label, conf);
 
-  // 没有路径点 = 没什么可跑。不拦的话主循环会在空 for 里空转
-  // (整圈没有 await,直接跑满一个核并刷屏日志)
-  if (conf.waypoints.length === 0) {
-    const detail = '没有配置路径点,无法开始(在「挂机打怪」弹窗里至少加 1 个路径点)';
+  // 没有可循环的路径点 = 没什么可跑。不拦的话主循环会在空 for 里空转
+  // (整圈没有 await,直接跑满一个核并刷屏日志)。
+  // 只配了入图点(type='entry')也算"没有路径点":它们不参与挂机循环
+  if (conf.waypoints.filter((w) => w.type !== 'entry').length === 0) {
+    const detail = '没有可循环的路径点,无法开始(在「挂机打怪」弹窗里至少加 1 个挂机点/休息点/路径点;入图点不参与挂机循环)';
     ctx.sendLog('warn', `[${label}] ${detail}`);
     return { ok: false, detail };
   }
@@ -1628,6 +1716,11 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
 
     // 任务启动、角色开始移动前:先读一次地图名,当作换图判断的基线(同时按一次屏蔽)
     await blockAllPlayersIfMapChanged(run);
+
+    // 启动时的一次性环境处理(小地图缩放 / 关闭聊天背景);移动攻击测试路径由 opts 关掉
+    if (opts?.allowStartupEnv !== false) {
+      await runStartupEnvSetup(run);
+    }
 
     // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
     // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),

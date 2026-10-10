@@ -11,7 +11,7 @@ import type { WorkerContext } from './context';
 import { runFarmLoop } from './tasks/farm';
 
 export async function runMoveAttackTest(ctx: WorkerContext, hwnd: number): Promise<void> {
-  const r = await runFarmLoop(ctx, hwnd, { label: '移动攻击', allowStartupResupply: false });
+  const r = await runFarmLoop(ctx, hwnd, { label: '移动攻击', allowStartupResupply: false, allowStartupEnv: false });
   ctx.postMessage({
     type: 'thumbnail-test',
     hwnd,

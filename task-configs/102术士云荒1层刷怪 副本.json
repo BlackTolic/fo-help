@@ -10,6 +10,13 @@
     "castMode": "smart",
     "waypoints": [
       {
+        "id": "wp-1791644414469-dyuq",
+        "x": 163,
+        "y": 151,
+        "type": "entry",
+        "skillIds": []
+      },
+      {
         "id": "wp-1791370259400-hw9m",
         "x": 130,
         "y": 131,
@@ -303,5 +310,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791641701440
+  "updatedAt": 1791645795466
 }

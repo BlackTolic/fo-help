@@ -7,13 +7,21 @@
 // 键位依据 QQ幻想 官方快捷键表:
 //   Alt+P 宠物面板 / Alt+C 状态(人物)面板 / Alt+I 物品面板 / Alt+V 聊天区
 //   F11   屏幕人名显示模式循环(连按 4 下 = 屏蔽所有玩家)
+//   Alt+- 地图缩小 / Alt++ 地图放大
 //
 // 参考:QQ幻想官网-操作说明 https://fo.qq.com/web200604/information/operation.htm
 
-import { VK_ALT, VK_CTRL, VK_F, VK_SHIFT } from './key-combo';
+import { VK_ALT, VK_CTRL, VK_F, VK_SHIFT, VK_OEM_MINUS, VK_OEM_PLUS } from './key-combo';
 
 /** 语义化快捷键 id:业务代码只认这些名字 */
-export type GameHotkeyId = 'openPetPanel' | 'openCharacterPanel' | 'openItemPanel' | 'openChatPanel' | 'blockAllPlayers';
+export type GameHotkeyId =
+  | 'openPetPanel'
+  | 'openCharacterPanel'
+  | 'openItemPanel'
+  | 'openChatPanel'
+  | 'blockAllPlayers'
+  | 'zoomOutMap'
+  | 'zoomInMap';
 
 /** 按键结构:修饰键 vkCode(按下顺序,反序抬起)+ 主键 vkCode */
 export interface HotkeyCombo {
@@ -84,6 +92,20 @@ export const GAME_HOTKEYS: Record<GameHotkeyId, GameHotkey> = {
     repeat: 4,
     note: 'F11 循环切换人名显示,连按 4 下到"屏蔽所有人"',
   },
+  zoomOutMap: {
+    id: 'zoomOutMap',
+    label: '地图缩小',
+    combo: { modifiers: [VK_ALT], mainVk: VK_OEM_MINUS },
+    repeat: 1,
+    note: 'Alt+- 缩小右上角小地图',
+  },
+  zoomInMap: {
+    id: 'zoomInMap',
+    label: '地图放大',
+    combo: { modifiers: [VK_ALT], mainVk: VK_OEM_PLUS },
+    repeat: 1,
+    note: 'Alt++ 放大右上角小地图',
+  },
 };
 
 /** 修饰键 vkCode → 名字 */
@@ -100,6 +122,8 @@ function mainKeyName(vk: number): string {
   }
   if (vk >= 65 && vk <= 90) return String.fromCharCode(vk);
   if (vk >= 48 && vk <= 57) return String.fromCharCode(vk);
+  if (vk === VK_OEM_MINUS) return '-';
+  if (vk === VK_OEM_PLUS) return '+';
   return `VK${vk}`;
 }
 
