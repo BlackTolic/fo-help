@@ -171,10 +171,16 @@ export const dmApi = {
   useDict: (index: number): number => getRaw().UseDict(index),
 
   // ---- 找字 ----
-  /** 找字,返回 "x|y" 字符串,失败空 */
+  /**
+   * 找字(首个命中),返回 "序号|x|y"(如 "0|734|418"),没找到 "-1|-1|-1"
+   * ⚠️ 坐标在第 2、3 个数上 → 解析用 utils/parse 的 parseTextPos(别用找色那个 parseFindColor)
+   */
   findStrFastE: (x1: number, y1: number, x2: number, y2: number, str: string, color: string, sim: number): string =>
     String(getRaw().FindStrFastE(x1, y1, x2, y2, str, color, sim) || ''),
-  /** 找字带坐标 ref,找到返回 1,失败 0;xRef/yRef 会被填充坐标 */
+  /**
+   * 找字(所有命中,底层 FindStrFastEx),返回 "序号,x,y|序号,x,y|..."(如 "0,734,418|1,120,86"),没找到空串
+   * ⚠️ 同 findStrFastE:坐标在第 2、3 个数上,parseTextPos 解析第一个命中
+   */
   findStrE: (x1: number, y1: number, x2: number, y2: number, str: string, color: string, sim: number): string =>
     String(getRaw().FindStrFastEx(x1, y1, x2, y2, str, color, sim) || ''),
 

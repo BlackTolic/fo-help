@@ -12,24 +12,32 @@
 //   - auxConfigs.recipes 里要有 npcKind='item-merchant' 的对话配方
 //   两者缺一个,补给流程跑到商人那一步就会失败(这里只提示,不硬拦保存)
 
-import type { FarmResupplyConfig } from '../../shared/types';
+import type { FarmResupplyConfig, FarmReviveMode } from '../../shared/types';
 
-/** 新建 farm 任务时的默认值(与 worker 的兜底默认保持一致:自动复活 / 180s / 查耐久 / 不跑开工补给) */
+/** 新建 farm 任务时的默认值(与 worker 的兜底默认保持一致:立即复活 / 180s / 查耐久 / 不跑开工补给) */
 export const DEFAULT_RESUPPLY: FarmResupplyConfig = {
   enabled: false,
   townProfileName: '',
-  reviveMode: 'auto',
+  reviveMode: 'immediate',
   reviveTimeoutMs: 180_000,
   checkDurability: true,
   runOnStart: false,
 };
+
+/**
+ * 复活方式迁移:只认三种新值,其余(含旧配置的 'auto' / 'manual' 与未配)一律回退 immediate。
+ * 与 worker 的 resupply-runner.normalizeReviveMode 保持同一套规则。
+ */
+function normalizeReviveMode(raw: unknown): FarmReviveMode {
+  return raw === 'huihun' || raw === 'tishen' || raw === 'immediate' ? raw : 'immediate';
+}
 
 /** 回填:旧配置没有 resupply 字段 → 用默认值;字段缺失按默认值补齐(与 worker 的 resolveResupplyConfig 对齐) */
 export function normalizeResupply(raw?: FarmResupplyConfig | null): FarmResupplyConfig {
   return {
     enabled: raw?.enabled === true,
     townProfileName: String(raw?.townProfileName ?? ''),
-    reviveMode: raw?.reviveMode === 'manual' ? 'manual' : 'auto',
+    reviveMode: normalizeReviveMode(raw?.reviveMode),
     reviveTimeoutMs: typeof raw?.reviveTimeoutMs === 'number' && raw.reviveTimeoutMs >= 1000 ? Math.round(raw.reviveTimeoutMs) : 180_000,
     checkDurability: raw?.checkDurability !== false,
     potionThreshold: typeof raw?.potionThreshold === 'number' && raw.potionThreshold > 0 ? Math.round(raw.potionThreshold) : undefined,
@@ -122,13 +130,14 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
               </div>
             </div>
 
-            {/* 复活方式 */}
+            {/* 复活方式(死亡弹框上的三个按钮;点击坐标见 core/constant-ocr/death.ts 的 REVIVE_BUTTON_POS) */}
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-text-secondary">复活方式</span>
               {(
                 [
-                  { value: 'auto', label: '自动点「原地复活」' },
-                  { value: 'manual', label: '等玩家自己复活' },
+                  { value: 'immediate', label: '立即复活' },
+                  { value: 'huihun', label: '回魂娃娃' },
+                  { value: 'tishen', label: '替身娃娃' },
                 ] as { value: FarmResupplyConfig['reviveMode']; label: string }[]
               ).map((o) => (
                 <label key={o.value} className="inline-flex items-center gap-1 text-[11px] cursor-pointer">
@@ -137,10 +146,12 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
                     name="farm-revive-mode"
                     className="accent-accent-cyan"
                     disabled={readOnly}
-                    checked={(value.reviveMode ?? 'auto') === o.value}
+                    checked={(value.reviveMode ?? 'immediate') === o.value}
                     onChange={() => patch({ reviveMode: o.value })}
                   />
-                  <span className={(value.reviveMode ?? 'auto') === o.value ? 'text-text-primary' : 'text-text-secondary'}>{o.label}</span>
+                  <span className={(value.reviveMode ?? 'immediate') === o.value ? 'text-text-primary' : 'text-text-secondary'}>
+                    {o.label}
+                  </span>
                 </label>
               ))}
             </div>

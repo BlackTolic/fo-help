@@ -29,8 +29,8 @@ export class NpcDialog {
 
   /** 在全屏扫描区找 NPC 名字,返回 名字坐标+偏移 后的点击位置;找不到返回 undefined */
   async findNpc(name: string, opts?: NpcFindOptions): Promise<Point | undefined> {
-    // 找到NPC之前,先等待 500ms,确保名字显示出来
-    await sleep(500);
+    // 找到NPC之前,先等待 1000ms,确保名字显示出来
+    await sleep(1000);
     const box = NPC_SCAN_BOX[this.size];
     const found = parseTextPos(this.client.findStrE(box.x1, box.y1, box.x2, box.y2, name, box.color, box.sim));
     if (!found) return undefined;
@@ -43,7 +43,7 @@ export class NpcDialog {
     this.client.moveTo(pos.x, pos.y);
     await sleep(200);
     this.client.leftClick();
-    await sleep(2000); // 旧项目实测:对话展开约 2s
+    await sleep(1000); // 旧项目实测:对话展开约 1s
     return this.findCloseButton() !== undefined;
   }
 

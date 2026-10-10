@@ -295,12 +295,13 @@
     "resupply": {
       "enabled": true,
       "townProfileName": "云泽秘径",
-      "reviveMode": "auto",
+      "reviveMode": "immediate",
       "reviveTimeoutMs": 180000,
       "checkDurability": true,
       "runOnStart": true
-    }
+    },
+    "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791556823305
+  "updatedAt": 1791641701440
 }

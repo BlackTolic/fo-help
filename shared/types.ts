@@ -210,9 +210,23 @@ export interface FarmTaskConfig {
   pickup?: FarmPickupConfig;
   /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
   resupply?: FarmResupplyConfig;
+  /**
+   * 进入新地图时屏蔽所有人:检测到换图就按一次 F11×4(见 shared/game-hotkeys.ts 的 blockAllPlayers)。
+   * 游戏换图会把"屏蔽玩家"重置,所以每次进新图要重新屏蔽;不配 = 不处理
+   */
+  blockAllPlayersOnNewMap?: boolean;
   /** 自定义备注 */
   note?: string;
 }
+
+/**
+ * 复活方式(死亡弹框上的三个按钮,点击坐标见 core/constant-ocr/death.ts):
+ * - immediate 立即复活(免费原地复活)
+ * - huihun    回魂娃娃
+ * - tishen    替身娃娃
+ * 旧配置的 'auto'(自动点原地复活)迁移为 immediate;'manual'(等玩家自己复活)已取消,同样迁移为 immediate
+ */
+export type FarmReviveMode = 'immediate' | 'huihun' | 'tishen';
 
 /**
  * 回城补给配置(farm 专属):
@@ -225,8 +239,8 @@ export interface FarmResupplyConfig {
   enabled: boolean;
   /** 城镇档案名(按"任务名"存储的那份 TownProfileConfig 的 name) */
   townProfileName: string;
-  /** 复活方式: auto=自动点「原地复活」 / manual=等玩家自己复活 */
-  reviveMode: 'auto' | 'manual';
+  /** 复活方式: immediate=立即复活 / huihun=回魂娃娃 / tishen=替身娃娃 */
+  reviveMode: FarmReviveMode;
   /** 等复活超时(毫秒),超时按异常处理 */
   reviveTimeoutMs: number;
   /** 是否开角色面板检查装备耐久(装备红/快红 → 触发修理) */

@@ -10,7 +10,7 @@
 //     移动控制器在操作鼠标 —— 复用 farm 主循环那个实例(否则两边抢鼠标、落点互相打架)。
 //
 // 配置来源(全部由 renderer 在 start-task 时下发):
-//   taskConfig.resupply      开关 / 复活方式 / 超时 / 要检查什么 / 要不要开工补给
+//   taskConfig.resupply      开关 / 复活方式(立即复活 / 回魂娃娃 / 替身娃娃) / 超时 / 要检查什么 / 要不要开工补给
 //   auxConfigs.townProfile   城镇档案(城镇地图名、商人、锚点路线、出城口)
 //   auxConfigs.recipes       对话配方(按 npcKind='item-merchant' 取)
 //   auxConfigs.farmMapName   回哪个野外图(与 exits[].toMap 对上;开工模式下也用它判断"已在挂机图")
@@ -19,15 +19,18 @@
 //   pause 不阻塞本流程(pause 期间人卡在城镇更危险,补给一次跑完为止)。
 
 import type { DamooClient } from '../../../../core/platform/damoo/dm-api';
-import { isDead, findReviveButton } from '../../../../core/perception/DeathDetector';
+import { detectDeath, isDead } from '../../../../core/perception/DeathDetector';
+import type { DeathSignal } from '../../../../core/perception/DeathDetector';
+import type { Point } from '../../../../core/platform/vision/IVisionProvider';
 import { isEquipmentDamaged } from '../../../../core/perception/EquipDamageDetector';
 import { readPotionCount } from '../../../../core/perception/PotionCounter';
 import { NpcDialog } from '../../../../core/perception/NpcDialog';
 import { travelToExit, travelWithinMap } from '../../../../core/navigation/RouteTraveler';
 import type { MovementController } from '../../../../core/navigation/MovementController';
 import type { WindowSizeKey } from '../../../../core/constant-ocr/popup';
+import { REVIVE_BUTTON_POS, REVIVE_CANCEL_CASH_POS, REVIVE_MODE_LABEL } from '../../../../core/constant-ocr/death';
 import { sleep } from '../../../../core/utils/sleep';
-import type { FarmResupplyConfig, TownProfileConfig, TownProfileNpc } from '../../../../shared/types';
+import type { FarmResupplyConfig, FarmReviveMode, TownProfileConfig, TownProfileNpc } from '../../../../shared/types';
 import type { WorkerContext } from '../context';
 import { runDialogRecipe } from './dialog-recipe';
 
@@ -69,7 +72,8 @@ export interface ResolvedResupply {
   enabled: boolean;
   /** 城镇档案名(只用于日志:档案本体由 auxConfigs.townProfile 下发) */
   townProfileName: string;
-  reviveMode: 'auto' | 'manual';
+  /** 复活方式(见 shared/types.ts 的 FarmReviveMode) */
+  reviveMode: FarmReviveMode;
   reviveTimeoutMs: number;
   checkDurability: boolean;
   /** 红药低于该值触发购买;null = 不检查药水 */
@@ -88,6 +92,12 @@ export interface ResupplyDeps {
   movement: MovementController;
   /** 读当前地图名(OCR 中文名,读不到返回空串) */
   readMapName: () => Promise<string>;
+  /**
+   * 换图检查回调(可选):补给流程每次确认"角色到达一张新图"就调它一次
+   * (死亡重生回到城镇 / 返程切回挂机图)。
+   * 是否真的换图、要不要按屏蔽快捷键由 farm 侧统一判断(见 tasks/farm.ts 的 blockAllPlayersIfMapChanged)。
+   */
+  onMapMaybeChanged?: () => Promise<void>;
 }
 
 export interface ResupplyOptions {
@@ -111,20 +121,35 @@ export interface ResupplyResult {
 }
 
 /**
+ * 复活方式清洗:只认三种新值,其余(含旧配置的 'auto' / 'manual' 与未配)一律回退 immediate。
+ * 与 renderer 的 FarmResupplySection.normalizeReviveMode 保持同一套迁移规则。
+ */
+function normalizeReviveMode(raw: unknown): FarmReviveMode {
+  return raw === 'huihun' || raw === 'tishen' || raw === 'immediate' ? raw : 'immediate';
+}
+
+/**
  * 清洗回城补给配置:未配 / 字段缺失一律按"关闭 + 安全默认"处理
- * (enabled / runOnStart 缺省 false;reviveMode 缺省 auto;reviveTimeoutMs 缺省 180s;potionThreshold 非正数 = 不检查)
+ * (enabled / runOnStart 缺省 false;reviveMode 缺省 immediate;reviveTimeoutMs 缺省 180s;potionThreshold 非正数 = 不检查)
  * farm 的 resolveConfig 与补给流程都调它,避免两处默认值各写一套。
  */
 export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null): ResolvedResupply {
   const threshold = raw?.potionThreshold;
   const timeout = raw?.reviveTimeoutMs;
   return {
+    // 是否开启回城补给(缺省 false):
     enabled: raw?.enabled === true,
+    // 城镇档案名(只用于日志:档案本体由 auxConfigs.townProfile 下发)
     townProfileName: String(raw?.townProfileName ?? '').trim(),
-    reviveMode: raw?.reviveMode === 'manual' ? 'manual' : 'auto',
+    // 复活模式(缺省 immediate):旧配置的 'auto'(原地复活)迁到 immediate,'manual'(等玩家复活)已取消也迁到 immediate
+    reviveMode: normalizeReviveMode(raw?.reviveMode),
+    // 复活超时(ms):配置缺省时的兜底,与 renderer 的默认值保持一致
     reviveTimeoutMs: typeof timeout === 'number' && timeout >= 1000 ? Math.round(timeout) : DEFAULT_REVIVE_TIMEOUT_MS,
+    // 是否检查装备耐久见底(缺省 false):
     checkDurability: raw?.checkDurability === true,
+    // 红药低于该值触发购买;null = 不检查药水
     potionThreshold: typeof threshold === 'number' && threshold > 0 ? Math.round(threshold) : null,
+    // 任务启动时先跑一次补给(只有 farm 主循环开工时读它,见 tasks/farm.ts 的 runStartupResupply)
     runOnStart: raw?.runOnStart === true,
   };
 }
@@ -149,6 +174,7 @@ interface ResupplyFlow {
  */
 export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, opts?: ResupplyOptions): Promise<ResupplyResult> {
   const label = opts?.label ?? '回城补给';
+  //
   const mode: ResupplyMode = opts?.mode ?? 'death';
 
   // 防重入:补给途中再触发一次(复活瞬间旧弹框还在、下次循环又判定死亡)直接拒绝,不递归
@@ -158,6 +184,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
     return { ok: false, detail };
   }
 
+  // 解析配置
   const cfg = resolveResupplyConfig(ctx.init.taskConfig?.resupply);
   const town: TownProfileConfig | undefined = ctx.init.auxConfigs?.townProfile;
   const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
@@ -170,7 +197,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
 
   ctx.resupply.running = true;
   // 开工模式不复活,状态文案直接说"确认位置"(第一步就是读地图名,见 confirmStartPosition)
-  ctx.setStatus('resupply', `${label}:${mode === 'start' ? '确认位置' : cfg.reviveMode === 'auto' ? '自动复活' : '等待复活'}`);
+  ctx.setStatus('resupply', `${label}:${mode === 'start' ? '确认位置' : REVIVE_MODE_LABEL[cfg.reviveMode]}`);
   ctx.sendLog(
     'info',
     `[${label}] 开始(城镇=${town.mapName}${cfg.townProfileName ? `/${cfg.townProfileName}` : ''} ` +
@@ -191,6 +218,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
 
   let result: ResupplyResult = { ok: false, detail: '未执行' };
   try {
+    // 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)商人 → 返程
     result = await runResupplySteps(flow);
   } catch (e: any) {
     result = { ok: false, detail: `异常: ${e?.message ?? e}` };
@@ -211,8 +239,8 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
 
 /** 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)商人 → 返程 */
 async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
-  const { ctx, label, town, stopped, mode } = flow;
-
+  const { ctx, deps, label, town, stopped, mode } = flow;
+  // 开工模式不复活,状态文案直接说"确认位置"(第一步就是读地图名,见 confirmStartPosition)
   if (mode === 'start') {
     // 开工补给:人一定活着(没有死亡弹框可等、也不能点原地复活),所以跳过第 1 步;
     // 但城镇档案里的路线都以复活点为起点锚点,得先确认角色到底站在哪张图(见 confirmStartPosition)
@@ -235,10 +263,13 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     ctx.setStatus('resupply', `${label}:确认位置`);
     const confirm = await confirmTownMap(flow);
     if (!confirm.matched) return { ok: false, detail: confirm.detail };
+    // 死亡重生把角色从野外送回了城镇 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人
+    await deps.onMapMaybeChanged?.();
   }
 
   // 3) 状态检查:装备耐久 / 红药数量 —— 只有"装备红 或 药水低于阈值"才值得跑一趟商人
   ctx.setStatus('resupply', `${label}:检查状态`);
+  // 检查装备耐久/药水是否需要补给
   const reasons = await inspectStatus(flow);
   if (stopped()) return { ok: false, detail: `任务已停止,放弃${label}` };
 
@@ -263,10 +294,13 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
 }
 
 /**
- * 复活:
- *   auto   = 等死亡弹框出现 → 找「原地复活」并点击 → 等弹框消失(复活生效)
- *   manual = 不点任何东西,只等玩家自己复活(死亡弹框消失)
- * 两种模式的总等待都不超过 cfg.reviveTimeoutMs,超时返回失败(交回 farm 结束任务)。
+ * 复活:等死亡弹框出现 → 点掉「彩玉」勾选(避免消耗付费道具)→ 点配置的复活按钮
+ * (立即复活 / 回魂娃娃 / 替身娃娃,坐标见 core/constant-ocr/death.ts 的 REVIVE_BUTTON_POS)→ 等弹框消失。
+ * 总等待不超过 cfg.reviveTimeoutMs,超时返回失败(交回 farm 结束任务)。
+ *
+ * 判死复用 detectDeath(见 core/perception/DeathDetector):找字「原地复活」既证明弹框在、
+ * 又说明按钮已经渲染出来(拿到它的坐标才动手,避免弹框还在淡入就点空)。
+ * 点击位置不用找字得到的坐标,而是按复活方式取固定按钮坐标 —— 三个按钮只有一处不同,固定值最省识别。
  */
 async function reviveCharacter(flow: ResupplyFlow): Promise<ResupplyResult> {
   const { ctx, deps, label, cfg, stopped } = flow;
@@ -274,41 +308,63 @@ async function reviveCharacter(flow: ResupplyFlow): Promise<ResupplyResult> {
   const deadline = Date.now() + cfg.reviveTimeoutMs;
   const timeoutSec = Math.round(cfg.reviveTimeoutMs / 1000);
 
-  if (cfg.reviveMode === 'auto') {
-    // 等死亡弹框出现:从"检测到死亡"到流程启动之间隔着几次 OCR/命令往返,弹框可能还在淡入
-    const dialogUp = await pollUntilDeadline(() => isDead(client, size), deadline, RESUPPLY.pollMs, stopped);
-    if (!dialogUp) {
-      return {
-        ok: false,
-        detail: stopped() ? '任务已停止,放弃复活' : `${timeoutSec}s 内没读到死亡弹框(「死亡」标题),无法自动复活`,
-      };
-    }
+  // 当前分辨率的复活按钮坐标:没实测过 1600*900,缺了就报错结束,不拿别的档位坐标乱点
+  const buttons = REVIVE_BUTTON_POS[size];
+  if (!buttons) {
+    return { ok: false, detail: `当前分辨率 ${size} 没有配置复活按钮坐标(见 core/constant-ocr/death.ts),无法自动复活` };
+  }
+  const button = buttons[cfg.reviveMode];
 
-    ctx.sendLog('info', `[${label}] 检测到死亡弹框,找「原地复活」按钮`);
-    let clicked = false;
-    while (Date.now() < deadline) {
-      if (stopped()) return { ok: false, detail: '任务已停止,放弃复活' };
-      const btn = findReviveButton(client, size);
-      if (btn) {
-        client.moveTo(btn.x, btn.y);
-        await sleep(RESUPPLY.clickSettleMs);
-        client.leftClick();
-        clicked = true;
-        ctx.sendLog('info', `[${label}] 已点击「原地复活」@(${btn.x},${btn.y})`);
+  // 等死亡弹框 + 按钮出现:从"检测到死亡"到流程启动之间隔着几次 OCR/命令往返,弹框可能还在淡入
+  let revive: Point | undefined;
+  /** 命中的信号(日志用);null = 到超时为止两个信号都没命中 */
+  let via: DeathSignal | null = null;
+  while (Date.now() < deadline) {
+    if (stopped()) return { ok: false, detail: '任务已停止,放弃复活' };
+    const death = detectDeath(client, size);
+    if (death.dead) {
+      via = death.via;
+      // 找字命中就带坐标,拿到即动手;只有标题 OCR 兜底命中(没有坐标)时继续轮询到拿到坐标为止
+      if (death.revive) {
+        revive = death.revive;
         break;
       }
-      // 按钮文字可能还没渲染出来:继续轮询到超时
-      await sleep(RESUPPLY.pollMs);
     }
-    if (!clicked) {
-      return { ok: false, detail: `${timeoutSec}s 内没找到「原地复活」按钮(核对 REVIVE_TEXT_ROI 的区域/颜色)` };
-    }
-    await sleep(RESUPPLY.reviveSettleMs);
-  } else {
-    ctx.sendLog('info', `[${label}] 复活方式=manual:等待玩家自行复活(最多 ${timeoutSec}s)`);
+    await sleep(RESUPPLY.pollMs);
+  }
+  if (!via) {
+    return {
+      ok: false,
+      detail: stopped()
+        ? '任务已停止,放弃复活'
+        : `${timeoutSec}s 内没读到死亡弹框(找字「原地复活」和 OCR「死亡」标题都没命中),无法自动复活`,
+    };
+  }
+  if (!revive) {
+    return { ok: false, detail: `${timeoutSec}s 内没找到「原地复活」按钮(核对 REVIVE_TEXT_ROI 的区域/颜色)` };
   }
 
-  // 等复活生效:死亡弹框消失(manual 模式等价于"等玩家点了复活")
+  ctx.sendLog(
+    'info',
+    `[${label}] 检测到死亡弹框(${via === 'revive-text' ? '找字「原地复活」' : 'OCR「死亡」标题'}命中),复活方式=「${REVIVE_MODE_LABEL[cfg.reviveMode]}」`,
+  );
+
+  // 1) 先点掉「彩玉」勾选:不点掉默认会用彩玉复活,消耗付费道具(旧逻辑就有的这一步)
+  const cancelCash = REVIVE_CANCEL_CASH_POS[size];
+  if (cancelCash) {
+    client.moveTo(cancelCash.x, cancelCash.y);
+    await sleep(400);
+    client.leftClick();
+  }
+
+  // 2) 点配置的复活按钮
+  ctx.sendLog('info', `[${label}] 点「${REVIVE_MODE_LABEL[cfg.reviveMode]}」@(${button.x},${button.y})`);
+  client.moveTo(button.x, button.y);
+  await sleep(RESUPPLY.clickSettleMs);
+  client.leftClick();
+  await sleep(RESUPPLY.reviveSettleMs);
+
+  // 等复活生效:死亡弹框消失
   const alive = await pollUntilDeadline(() => !isDead(client, size), deadline, RESUPPLY.pollMs, stopped);
   if (!alive) {
     return {
@@ -432,7 +488,7 @@ async function inspectStatus(flow: ResupplyFlow): Promise<string[]> {
   const reasons: string[] = [];
 
   if (cfg.checkDurability) {
-    // isEquipmentDamaged 自己负责开/关角色面板(C → 检测 → Esc)
+    // isEquipmentDamaged 自己负责开/关人物面板(Alt+C,见 shared/game-hotkeys.ts → 检测 → Esc)
     const damaged = await isEquipmentDamaged(client, size);
     ctx.sendLog('info', `[${label}] 装备耐久检查:${damaged ? '有装备见底(需要修理)' : '正常'}`);
     if (damaged) reasons.push('装备耐久见底');
@@ -553,6 +609,8 @@ async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise
       detail: stopped() ? '任务已停止(返程途中)' : `返程失败:没能走到出城口并切回「${farmMapName}」(核对城镇档案的出口坐标与路线)`,
     };
   }
+  // 切回挂机图 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人
+  await deps.onMapMaybeChanged?.();
   return { ok: true, detail: `已切回「${farmMapName}」,${label}完成` };
 }
 

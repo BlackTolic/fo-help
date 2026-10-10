@@ -31,10 +31,10 @@
 //   同理,拾取的左键也只能在"没在移动"时点 —— 见 walkWaypoints 里的调用顺序。
 //
 // ── 结束条件 ────────────────────────────────────────────────────────────
-//   stop 命令 / 跑满最大圈数(END_CONDITIONS.maxLoops,当前不限)/ 角色死亡(isCharacterDead)
+//   stop 命令 / 跑满最大圈数(END_CONDITIONS.maxLoops,当前不限)/ 角色死亡(detectCharacterDeath)
 //
 // ── 死亡回城补给 / 开工补给(taskConfig.resupply,见 resupply/resupply-runner.ts)──
-//   死亡检查 = core/perception/DeathDetector(OCR 死亡弹框标题),两个检查点共用 checkDeath
+//   死亡检查 = core/perception/DeathDetector(主判据:找字「原地复活」;兜底:OCR「死亡」标题),两个检查点共用 checkDeath
 //   配了补给(resupply.enabled + auxConfigs.townProfile)= 复活 → 检查耐久/药水 → 按需找道具商人
 //     跑对话配方 → 走回野外图,然后继续挂机;补给失败才结束任务(原因写进 detail)
 //   同一段流程的第二个触发器 = 任务启动(resupply.runOnStart,见 runStartupResupply):
@@ -67,7 +67,8 @@ import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
 import { MonsterNameDetector } from '../../../../core/perception/MonsterNameDetector';
 import { ItemNameDetector } from '../../../../core/perception/ItemNameDetector';
 import type { DetectedItem, ItemPickupRule } from '../../../../core/perception/ItemNameDetector';
-import { isDead } from '../../../../core/perception/DeathDetector';
+import { detectDeath } from '../../../../core/perception/DeathDetector';
+import type { DeathDetection } from '../../../../core/perception/DeathDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
@@ -79,6 +80,7 @@ import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from
 import { resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
 import type { ResolvedResupply } from '../resupply/resupply-runner';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
+import { pressGameHotkey } from '../../../../shared/game-hotkeys';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
@@ -162,6 +164,8 @@ interface ResolvedConfig {
   pickup: ResolvedPickup;
   /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
   resupply: ResolvedResupply;
+  /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 blockAllPlayersIfMapChanged);缺省 false */
+  blockAllPlayersOnNewMap: boolean;
   /** 最多跑多少圈;null = 不限 */
   maxLoops: number | null;
 }
@@ -215,6 +219,8 @@ interface FarmRun {
   lastCast: Map<string, number>;
   /** 已击杀怪物的尸体位置:坐标 key → 忽略截止时间(尸体名字还没消失,见 isCorpseIgnored / ignoreCorpse) */
   corpses: Map<string, number>;
+  /** 上一次读到的地图名(「进入新地图时屏蔽所有人」用它判断是否换图);null = 还没读到过 */
+  lastMapName: string | null;
 }
 
 /**
@@ -519,11 +525,12 @@ async function waitWhilePaused(ctx: WorkerContext, label: string): Promise<void>
 }
 
 /**
- * 角色是否死亡:死亡弹框「死亡」标题 OCR 命中(见 core/perception/DeathDetector)。
+ * 角色死亡判定:找字「原地复活」(主判据)+ OCR「死亡」标题(兜底),命中其一即算死亡
+ * (见 core/perception/DeathDetector)。返回值里带"哪个信号命中",日志靠它排错。
  * 打怪循环的退出条件之一(与 maxLoops 并列);同步语义 —— 调用处(checkDeath)不做 await 判别。
  */
-function isCharacterDead(run: FarmRun): boolean {
-  return isDead(dmApi, run.size);
+function detectCharacterDeath(run: FarmRun): DeathDetection {
+  return detectDeath(dmApi, run.size);
 }
 
 /**
@@ -536,13 +543,17 @@ function isCharacterDead(run: FarmRun): boolean {
  * 没配补给 = 保持原行为(检测到死亡就结束任务)。
  */
 async function checkDeath(run: FarmRun, loop: number, where: string): Promise<FarmLoopResult | null> {
-  if (!isCharacterDead(run)) return null;
+  const death = detectCharacterDeath(run);
+  if (!death.dead) return null;
 
   const { ctx, label, conf } = run;
   const place = `第 ${loop} 圈${where}`;
   // 死亡计数(随 ctx.setStatus 上报主进程,主面板显示"死亡 N")
   ctx.stats.deathCount++;
-  ctx.sendLog('warn', `[${label}] ${place}检测到角色死亡(累计死亡 ${ctx.stats.deathCount} 次)`);
+  ctx.sendLog(
+    'warn',
+    `[${label}] ${place}检测到角色死亡(${death.via === 'revive-text' ? '找字「原地复活」' : 'OCR「死亡」标题'}命中,累计死亡 ${ctx.stats.deathCount} 次)`,
+  );
 
   const townProfile = ctx.init.auxConfigs?.townProfile;
   if (conf.resupply.enabled && townProfile) {
@@ -558,6 +569,8 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<Fa
         // 用带地图名的 travelMovement(reader 带分辨率档位):RouteTraveler 靠它判断"切图即停"
         movement: run.travelMovement,
         readMapName: run.readMapName,
+        // 补给途中每到达一张新图(死亡重生回城镇 / 返程切回挂机图)都走同一次换图判断
+        onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
       },
       { label: '回城补给' },
     );
@@ -579,6 +592,31 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<Fa
 }
 
 /**
+ * 进入新地图时屏蔽所有人(配置开关 blockAllPlayersOnNewMap,执行 F11×4):
+ * 读一次当前地图名,和上次记录不同(或还没记录过)就按一次 shared/game-hotkeys 的 blockAllPlayers。
+ *
+ * 不区分场景:任务启动前、主循环每圈、回城补给到达新图都只是"到点读一次地图",
+ * 靠同一份 run.lastMapName 去重 —— 谁先发现换图谁按,不会重复按。
+ * 读不到地图名(OCR 偶发读空)时跳过,也不更新记录 —— 免得把一次读空当成"换图"。
+ */
+async function blockAllPlayersIfMapChanged(run: FarmRun): Promise<void> {
+  const { ctx, conf, label } = run;
+  if (!conf.blockAllPlayersOnNewMap) return;
+
+  const map = String(await run.readMapName()).trim();
+  if (!map || run.lastMapName === map) return;
+  run.lastMapName = map;
+
+  try {
+    await pressGameHotkey(dmApi, 'blockAllPlayers');
+  } catch (e: any) {
+    ctx.sendLog('warn', `[${label}] 屏蔽所有人失败: ${e?.message ?? e}`);
+    return;
+  }
+  ctx.sendLog('info', `[${label}] 进入新地图「${map}」,已屏蔽所有人(F11×4)`);
+}
+
+/**
  * 开工补给(resupply.runOnStart):任务启动、进主循环之前先跑一遍同一条补给流程 ——
  * 检查耐久/药水 → (按需)找道具商人修理/买药 → 走到出城口切回挂机地图,然后才开始打怪。
  *
@@ -593,7 +631,7 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<Fa
 async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> {
   const { ctx, label, conf } = run;
   if (!conf.resupply.enabled || !conf.resupply.runOnStart) return null;
-
+  // 没配开工补给 = 直接跳过
   const townProfile = ctx.init.auxConfigs?.townProfile;
   if (!townProfile) {
     // 理论上 renderer(aux-configs.ts)在启动前就拦住了;真发生也只能继续跑,记一条日志说清楚
@@ -610,6 +648,8 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
       // 与 checkDeath 用同一个带地图名的 travelMovement(reader 带分辨率档位)
       movement: run.travelMovement,
       readMapName: run.readMapName,
+      // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
+      onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
     },
     { label: '开工补给', mode: 'start' },
   );
@@ -652,6 +692,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     // 回城补给:清洗交给 resupply 模块(默认值与补给流程共用同一份,见 resolveResupplyConfig)
     // runOnStart 也在那份清洗里(缺省 false,旧配置不受影响),主循环开工时读它
     resupply: resolveResupplyConfig(cfg?.resupply),
+    // 进入新地图时屏蔽所有人(缺省 false,旧配置不受影响)
+    blockAllPlayersOnNewMap: cfg?.blockAllPlayersOnNewMap === true,
     maxLoops: END_CONDITIONS.maxLoops,
   };
 }
@@ -808,7 +850,10 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
       ` 移动间隔=${conf.stepIntervalMs}ms 最大圈数=${conf.maxLoops ?? '不限'}`,
   );
   ctx.sendLog('info', `[${label}] 找怪=[${conf.monsterKeywords.join(',') || '不限(纯OCR)'}] 颜色=${conf.monsterColor} 拾取=${pickup}`);
-  ctx.sendLog('info', `[${label}] 回城补给=${formatResupply(conf.resupply)}`);
+  ctx.sendLog(
+    'info',
+    `[${label}] 回城补给=${formatResupply(conf.resupply)} 屏蔽所有人=${conf.blockAllPlayersOnNewMap ? '进入新地图时(F11×4)' : '关闭'}`,
+  );
   if (ctx.init.taskConfig?.type !== 'farm') {
     ctx.sendLog('warn', `[${label}] taskConfig 不是 farm 配置(或未下发),本次全部用内置默认值`);
   }
@@ -1422,6 +1467,8 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
     const loopDesc = conf.maxLoops === null ? `第 ${loop} 圈` : `第 ${loop}/${conf.maxLoops} 圈`;
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
+    // 每圈开始读一次地图名:变了就重新屏蔽所有人(路径点不跨图,这里够用)
+    await blockAllPlayersIfMapChanged(run);
     // 死亡检查(可能内含"回城补给":补给成功返回 null,继续挂机)
     const deadAtStart = await checkDeath(run, loop, '开始时');
     if (deadAtStart) return deadAtStart;
@@ -1575,7 +1622,12 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       lastCast: ctx.lastCast,
       // 已击杀怪物的尸体位置(尸体名还没消失时别再当目标,见 isCorpseIgnored)
       corpses: new Map(),
+      // 换图判断的记录:还没有基线,启动后第一次读到地图名就会当作"新地图"按一次
+      lastMapName: null,
     };
+
+    // 任务启动、角色开始移动前:先读一次地图名,当作换图判断的基线(同时按一次屏蔽)
+    await blockAllPlayersIfMapChanged(run);
 
     // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
     // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),

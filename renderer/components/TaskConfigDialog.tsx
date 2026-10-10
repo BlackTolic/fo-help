@@ -308,6 +308,8 @@ export function TaskConfigDialog({
   const [pickup, setPickup] = useState<PickupUiState>(DEFAULT_PICKUP);
   // 死亡回城补给(farm 专属):引用已保存的城镇档案 + 全部对话配方(启动时解析成 auxConfigs)
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
+  // 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4,见 shared/game-hotkeys.ts)
+  const [blockAllPlayersOnNewMap, setBlockAllPlayersOnNewMap] = useState(false);
   const [note, setNote] = useState('');
 
   // 城镇档案 / 对话配方(配置型"任务":只存储/编辑,保存后不启动 worker)
@@ -449,6 +451,8 @@ export function TaskConfigDialog({
       });
       // 旧配置没有 resupply 字段:回显成"不开启"
       setResupply(normalizeResupply(farm.resupply));
+      // 旧配置没有这个字段:回显成"不开启"
+      setBlockAllPlayersOnNewMap(farm.blockAllPlayersOnNewMap === true);
       setNote(farm.note || '');
     } else if (cfg.type === 'default-skill') {
       const skill = cfg as DefaultSkillTaskConfig;
@@ -599,6 +603,8 @@ export function TaskConfigDialog({
         },
         // 回城补给:整份保存(没开启也留着引用与参数,下次勾上不用重填)
         resupply: normalizeResupply(resupply),
+        // 进入新地图时屏蔽所有人:只在勾选时写入(缺省不写,等价于关闭)
+        blockAllPlayersOnNewMap: blockAllPlayersOnNewMap || undefined,
         note: note || undefined,
       };
     }
@@ -958,6 +964,8 @@ export function TaskConfigDialog({
               setResupply={setResupply}
               townProfileNames={townProfileNames}
               hasMerchantRecipe={hasMerchantRecipe}
+              blockAllPlayersOnNewMap={blockAllPlayersOnNewMap}
+              setBlockAllPlayersOnNewMap={setBlockAllPlayersOnNewMap}
               note={note}
               setNote={setNote}
             />
@@ -1410,6 +1418,9 @@ interface FarmConfigProps {
   townProfileNames: string[];
   /** 是否已有 npcKind='item-merchant' 的对话配方(提示用,不阻断保存) */
   hasMerchantRecipe: boolean;
+  /** 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4) */
+  blockAllPlayersOnNewMap: boolean;
+  setBlockAllPlayersOnNewMap: (v: boolean) => void;
   note: string;
   setNote: (v: string) => void;
 }
@@ -1451,6 +1462,8 @@ function FarmConfig(props: FarmConfigProps) {
     setResupply,
     townProfileNames,
     hasMerchantRecipe,
+    blockAllPlayersOnNewMap,
+    setBlockAllPlayersOnNewMap,
     note,
     setNote,
   } = props;
@@ -2415,6 +2428,28 @@ function FarmConfig(props: FarmConfigProps) {
           </label>
 
           <div className="text-[10px] text-text-muted">看门狗与打怪循环并发运行;四项全部不勾选时 worker 不会启动看门狗</div>
+        </div>
+      </div>
+
+      {/* 进入新地图时屏蔽所有人:worker 检测到换图就按 F11×4(见 shared/game-hotkeys.ts) */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          其他 <span className="text-text-muted text-[11px]">(与挂机循环并行的环境处理)</span>
+        </label>
+        <div className="bg-bg-input/40 border border-border-base rounded p-2.5">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={blockAllPlayersOnNewMap}
+              onChange={(e) => setBlockAllPlayersOnNewMap(e.target.checked)}
+            />
+            <span>进入新地图时屏蔽所有人</span>
+            <span className="text-text-muted text-[10px]">
+              每进入一张新地图(含回城补给返回挂机图)自动按一次 F11×4,把其他玩家的名字/模型屏蔽掉
+            </span>
+          </label>
         </div>
       </div>
 
