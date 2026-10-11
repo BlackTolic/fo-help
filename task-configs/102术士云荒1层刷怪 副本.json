@@ -5,7 +5,7 @@
   "config": {
     "type": "farm",
     "mapId": "custom",
-    "customMapName": "云泽秘径",
+    "customMapName": "云荒部落",
     "mode": "fixed",
     "castMode": "smart",
     "waypoints": [
@@ -325,5 +325,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791710054298
+  "updatedAt": 1791725263995
 }

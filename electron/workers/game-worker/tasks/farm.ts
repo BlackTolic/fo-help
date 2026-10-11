@@ -71,6 +71,9 @@ import { detectDeath } from '../../../../core/perception/DeathDetector';
 import type { DeathDetection } from '../../../../core/perception/DeathDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
+import { resolveAnchoredRoute, travelToExit } from '../../../../core/navigation/RouteTraveler';
+import { crossMapProfiles } from '../../../../core/navigation/MapCrossing';
+import type { MapCrossingProfile } from '../../../../core/navigation/MapCrossing';
 import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
 import { SKILL_KEYS, normalizeSkillKey, pressSkillKey } from '../../../../core/platform/input/skill-key';
 import type { SkillKey } from '../../../../core/platform/input/skill-key';
@@ -79,8 +82,9 @@ import type { MapPosition, MapCoordConfig } from '../../../../core/perception/ty
 import type { WindowSizeKey } from '../../../../core/constant-ocr/popup';
 import type { WorkerContext } from '../context';
 import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from '../interrupts';
-import { resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
+import { REVIVE_ANCHOR, resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
 import type { ResolvedResupply } from '../resupply/resupply-runner';
+import { talkToNpc } from '../resupply/talk-npc';
 import { dismountPet, mountPet } from '../pet-ride';
 import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
@@ -173,6 +177,8 @@ interface ResolvedConfig {
   stepIntervalMs: number;
   /** 入图路径点(type='entry' 的那些,按列表顺序);回城/开工补给重新进图后走它 */
   entryPath: EntryPoint[];
+  /** 地图跨越链路(中间地图档案,按穿越顺序;来自 mapCrossings + auxConfigs.mapProfiles);空 = 不跨图 */
+  mapProfiles: MapCrossingProfile[];
   /** 物品拾取 */
   pickup: ResolvedPickup;
   /** 宠物骑乘(回城上骑 / 到挂机点下骑;缺省关闭,配置见 shared/types.ts 的 FarmPetRideConfig) */
@@ -606,6 +612,8 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<De
         petRide: conf.petRide,
         // 切回挂机图后先沿入图点从地图入口走到挂机点,再恢复挂机循环
         entryPath: conf.entryPath,
+        // 地图跨越链路:返程先到链首图,再逐跳穿越回挂机图(没配 = 空数组,行为不变)
+        mapProfiles: conf.mapProfiles,
         // 补给途中每到达一张新图(死亡重生回城镇 / 返程切回挂机图)都走同一次换图判断
         onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
       },
@@ -720,6 +728,8 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
       petRide: conf.petRide,
       // 返程切回挂机图后同样先走入图点(开工时人从城镇回来,落点也在入口)
       entryPath: conf.entryPath,
+      // 地图跨越链路:开工返程同样先到链首图再逐跳穿越回挂机图
+      mapProfiles: conf.mapProfiles,
       // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
       onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
     },
@@ -733,6 +743,104 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
   const detail = `开工补给失败: ${result.detail ?? '未知原因'},退出打怪循环`;
   ctx.sendLog('warn', `[${label}] ${detail}`);
   return { ok: false, detail };
+}
+
+/** 地图跨越 / 城镇出口过图段的移动参数(与补给返程一致:卡住 15s 放弃本点,别拖死) */
+const CROSS_MOVE_OPTIONS = { arriveTolerance: 3, stepIntervalMs: 800, noMoveTimeoutMs: 15_000, moveEpsilon: 0.5 };
+/** 地图跨越每一段的整体超时(走路 + 等切图) */
+const CROSS_TRAVEL_TIMEOUT_MS = 120_000;
+
+/**
+ * 开工跨图(地图跨越):进主循环之前,若角色不在挂机图,沿 conf.mapProfiles 逐跳穿越过去。
+ *   - 已在挂机图 → 跳过(开工补给返程若已把角色带回来,这里也是 no-op)
+ *   - 在过图链路上某图 → 逐跳穿越(见 core/navigation/MapCrossing)
+ *   - 在城镇(且下发过城镇档案)→ 先走城镇出口到链首图,再逐跳
+ *   - 其它情况 → 结束任务并给出清晰原因(不会带着错误起点硬跑)
+ * 返回 { exit: 结束结果 | null, crossed: 是否真的跨过图 }。
+ */
+async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult | null; crossed: boolean }> {
+  const { ctx, conf, label, readMapName, travelMovement } = run;
+  const profiles = conf.mapProfiles;
+  if (profiles.length === 0) return { exit: null, crossed: false };
+
+  const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
+  if (!farmMapName) {
+    ctx.sendLog('warn', `[${label}] 配了地图跨越但没下发挂机地图名,跳过跨图`);
+    return { exit: null, crossed: false };
+  }
+
+  const cur = String((await readMapName()) ?? '').trim();
+  if (!cur) {
+    // OCR 偶发读空:不硬跨(免得从错误起点出发),交给主循环常规处理
+    ctx.sendLog('warn', `[${label}] 读不到当前地图名,跳过地图跨越`);
+    return { exit: null, crossed: false };
+  }
+  if (cur === farmMapName) return { exit: null, crossed: false };
+
+  const chainDesc = [...profiles.map((p) => p.mapName), farmMapName].join(' → ');
+  ctx.setStatus('moving', `${label} 地图跨越`);
+  ctx.sendLog('info', `[${label}] 地图跨越:当前在「${cur}」,目标「${farmMapName}」,链路 ${chainDesc}`);
+
+  const stopped = () => !ctx.moveAttack.running;
+  const town = ctx.init.auxConfigs?.townProfile;
+  const inChain = profiles.some((p) => p.mapName === cur);
+
+  if (!inChain) {
+    if (town && cur === town.mapName) {
+      // 在城镇:先走到链首图的出口过图,再交给跨图链
+      const firstTarget = profiles[0].mapName;
+      const exit = (town.exits ?? []).find((e) => (e.toMap ?? '').trim() === firstTarget);
+      if (!exit) {
+        const detail = `地图跨越:城镇档案「${town.mapName}」里没有去「${firstTarget}」的出口`;
+        ctx.sendLog('warn', `[${label}] ${detail}`);
+        return { exit: { ok: false, detail }, crossed: false };
+      }
+      const points = resolveAnchoredRoute(town.routes ?? [], REVIVE_ANCHOR, exit.id);
+      ctx.sendLog(
+        'info',
+        `[${label}] 地图跨越:从城镇走 ${points.length} 个途经点 → 出口 (${exit.position.x},${exit.position.y}) → 「${firstTarget}」`,
+      );
+      const hopOk = await travelToExit(travelMovement, readMapName, points, exit.position, firstTarget, {
+        timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
+        moveOptions: CROSS_MOVE_OPTIONS,
+        isStopped: stopped,
+        onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+      });
+      if (!hopOk) {
+        const detail = stopped() ? '任务已停止(地图跨越途中)' : `地图跨越:没能从城镇走到「${firstTarget}」并切图`;
+        ctx.sendLog('warn', `[${label}] ${detail}`);
+        return { exit: { ok: false, detail }, crossed: false };
+      }
+      await blockAllPlayersIfMapChanged(run);
+    } else {
+      const detail =
+        `地图跨越:当前在「${cur}」,不在过图链路上(链路:${chainDesc})。` +
+        (town
+          ? `请把角色走到城镇「${town.mapName}」或链首图「${profiles[0].mapName}」再启动任务`
+          : `请把角色走到链首图「${profiles[0].mapName}」再启动任务(想从城镇出发需开启「回城补给」并选好城镇档案)`);
+      ctx.sendLog('warn', `[${label}] ${detail}`);
+      return { exit: { ok: false, detail }, crossed: false };
+    }
+  }
+
+  const cross = await crossMapProfiles(travelMovement, readMapName, profiles, farmMapName, {
+    timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
+    moveOptions: CROSS_MOVE_OPTIONS,
+    isStopped: stopped,
+    onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+    onArriveMap: async () => {
+      await blockAllPlayersIfMapChanged(run);
+    },
+    runNpc: (npc) => talkToNpc({ ctx, client: dmApi, size: run.size, label, npcName: npc.name, recipeName: npc.recipeName }),
+  });
+  if (!cross.ok) {
+    const detail = stopped() ? '任务已停止(地图跨越途中)' : `地图跨越失败:${cross.detail}`;
+    ctx.sendLog('warn', `[${label}] ${detail}`);
+    return { exit: { ok: false, detail }, crossed: false };
+  }
+  ctx.sendLog('info', `[${label}] 地图跨越完成:${cross.detail}`);
+  await blockAllPlayersIfMapChanged(run);
+  return { exit: null, crossed: true };
 }
 
 // ===== 配置解析(把 taskConfig 变成 ResolvedConfig)=====
@@ -760,6 +868,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     waypoints,
     // 入图点单独抽出来:挂机循环跳过它们,只在回城/开工补给重新进图后走(见 resupply-runner)
     entryPath: waypoints.filter((w) => w.type === 'entry').map((w) => ({ x: w.x, y: w.y })),
+    // 地图跨越链路:档案本体由 renderer 按 farm.mapCrossings 顺序解析下发(见 renderer/aux-configs.ts)
+    mapProfiles: ctx.init.auxConfigs?.mapProfiles ?? [],
     ...resolveMonsterFilter(cfg, mode),
     ...resolveDetectAreas(cfg, view),
     stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
@@ -1794,19 +1904,29 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       if (startup) return startup;
     }
 
-    // 起点重读:开工补给把角色从城镇一路带到挂机地图(走位 + 切图),上面读到的 start 已经过期 ——
+    // 地图跨越(进主循环之前):角色不在挂机图时按 conf.mapProfiles 逐跳穿越过去。
+    // 开工补给返程若已把角色带回挂机图,这里会直接判"已在挂机图"跳过(不会重复跨)。
+    // 同一开关(allowStartupResupply)关掉:移动攻击测试不该顺带跨图。
+    let crossedMaps = false;
+    if (opts?.allowStartupResupply !== false) {
+      const cross = await crossMapsOnStartup(run);
+      if (cross.exit) return cross.exit;
+      crossedMaps = cross.crossed;
+    }
+
+    // 起点重读:开工补给 / 地图跨越会把角色带到挂机地图(走位 + 切图),上面读到的 start 已经过期 ——
     // 拿旧坐标进主循环会让定点打怪的"移动反方向"算歪、moveTo 的目标图也可能判成跨图。
-    // 没开开工补给(或被测试路径关掉)时不重读,保持原行为(少一次 OCR)
+    // 两段都没跑(或被测试路径关掉)时不重读,保持原行为(少一次 OCR)
     let loopStart = start;
-    if (useStartupResupply) {
+    if (useStartupResupply || crossedMaps) {
       const after = await movement.readPosition();
       if (!after) {
-        const detail = '开工补给后读不到当前位置(检查设置里的分辨率,以及坐标区域/颜色是否匹配)';
+        const detail = '开工补给/跨图后读不到当前位置(检查设置里的分辨率,以及坐标区域/颜色是否匹配)';
         ctx.sendLog('warn', `[${label}] ${detail}`);
         return { ok: false, detail };
       }
       loopStart = after;
-      ctx.sendLog('info', `[${label}] 补给后的起点: (${after.x}, ${after.y}) 地图=${after.map ?? '未知'}`);
+      ctx.sendLog('info', `[${label}] 补给/跨图后的起点: (${after.x}, ${after.y}) 地图=${after.map ?? '未知'}`);
     }
 
     return await walkWaypoints(run, loopStart);

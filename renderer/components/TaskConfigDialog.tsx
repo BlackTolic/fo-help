@@ -23,6 +23,7 @@ import type {
   ScreenRect,
   TownProfileConfig,
   DialogRecipeConfig,
+  MapProfileConfig,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
 import { FARM_MAPS } from '../farm-maps';
@@ -32,6 +33,8 @@ import { FarmResupplySection, DEFAULT_RESUPPLY, normalizeResupply } from './Farm
 import { FarmPetRideSection, DEFAULT_PET_RIDE, normalizePetRide } from './FarmPetRideSection';
 import { TownProfileForm } from './TownProfileForm';
 import { DialogRecipeForm } from './DialogRecipeForm';
+import { MapProfileForm } from './MapProfileForm';
+import { MapCrossingsSection } from './MapCrossingsSection';
 import {
   COLOR_WHITE,
   COLOR_RED,
@@ -61,10 +64,17 @@ const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; 
   // 配置型"任务":可存储/编辑/被 farm 的回城补给引用,但不可作为任务运行(保存后不启动 worker)
   { type: 'town-profile', name: '城镇档案', icon: '🏙', desc: '复活点 / 道具商人 / 出城口 + 寻路路线(供死亡回城补给用)', ready: true },
   { type: 'dialog-recipe', name: '对话配方', icon: '💬', desc: '与某类 NPC 对话的步骤脚本(修理 / 买药;供死亡回城补给用)', ready: true },
+  {
+    type: 'map-profile',
+    name: '过图路线',
+    icon: '🗺',
+    desc: '中间地图的入口/出口 + 途经点(供挂机打怪的「地图跨越」逐跳穿越)',
+    ready: true,
+  },
 ];
 
-/** 配置型"任务"提示(城镇档案/对话配方:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
-const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「死亡回城补给」引用,不会启动 worker';
+/** 配置型"任务"提示(城镇档案/对话配方/过图路线:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
+const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「死亡回城补给 / 地图跨越」引用,不会启动 worker';
 
 /** footer 主操作按钮(实心 cyan,与历史任务列表里的「启动」一致) */
 const PRIMARY_BTN_CLS =
@@ -137,6 +147,15 @@ const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
 const DEFAULT_DIALOG_RECIPE: DialogRecipeConfig = {
   type: 'dialog-recipe',
   steps: [],
+};
+
+/** 新建过图路线的默认值(空的,让用户自己填;保存时至少要有本图地图名与两个口子的 toMap) */
+const DEFAULT_MAP_PROFILE: MapProfileConfig = {
+  type: 'map-profile',
+  mapName: '',
+  entrance: { position: { x: 0, y: 0 }, toMap: '' },
+  exit: { position: { x: 0, y: 0 }, toMap: '' },
+  waypoints: [],
 };
 
 /**
@@ -286,11 +305,14 @@ export function TaskConfigDialog({
   /** 已保存的城镇档案 / 对话配方(配置型任务在各自卡片里管理,不进历史任务) */
   const savedTownProfiles = taskHistory.filter((h) => h.config.type === 'town-profile');
   const savedDialogRecipes = taskHistory.filter((h) => h.config.type === 'dialog-recipe');
+  /** 地图跨越可选的过图路线名(历史任务里所有 map-profile,按 name 存/取) */
+  const mapProfileNames = taskHistory.filter((h) => h.config.type === 'map-profile').map((h) => h.name);
+  const savedMapProfiles = taskHistory.filter((h) => h.config.type === 'map-profile');
   /** 历史任务里可运行的任务条数(配置型任务不进历史任务) */
   const runnableHistoryCount = taskHistory.filter((h) => !isConfigOnlyTaskType(h.config.type)).length;
 
   // 挂机打怪配置
-  const [mapId, setMapId] = useState('hu-ya-shan');
+  const [mapId, setMapId] = useState('long-cheng');
   const [customMapName, setCustomMapName] = useState('');
   const [mode, setMode] = useState<FarmMode>('fixed');
   // 施法方式:智能施法(默认)= 到挂机点自动选一个可释放技能;自定义 = 按路径点绑定技能释放
@@ -310,6 +332,8 @@ export function TaskConfigDialog({
   const [pickup, setPickup] = useState<PickupUiState>(DEFAULT_PICKUP);
   // 死亡回城补给(farm 专属):引用已保存的城镇档案 + 全部对话配方(启动时解析成 auxConfigs)
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
+  // 地图跨越(farm 专属):出发图 → 挂机图之间依次穿越的中间地图名(引用 map-profile 任务)
+  const [mapCrossings, setMapCrossings] = useState<string[]>([]);
   // 宠物骑乘:回到城里上骑、到挂机点下骑(上骑/下骑从「宠物技能」里选)
   const [petRide, setPetRide] = useState<FarmPetRideConfig>({ ...DEFAULT_PET_RIDE });
   // 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4,见 shared/game-hotkeys.ts)
@@ -333,6 +357,8 @@ export function TaskConfigDialog({
         ? '档案里的 NPC 都没有选配方,补给时不会访问任何 NPC'
         : null;
   const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
+  // 过图路线(配置型"任务":只存储/编辑,保存后不启动 worker)
+  const [mapProfile, setMapProfile] = useState<MapProfileConfig>(DEFAULT_MAP_PROFILE);
 
   // 缺省技能配置
   const [skillSteps, setSkillSteps] = useState<DefaultSkillStep[]>([]);
@@ -409,10 +435,53 @@ export function TaskConfigDialog({
     if (res.ok) newDialogRecipe();
     else alert(`删除失败: ${res.error || '未知错误'}`);
   };
+  /** 重置为「新建过图路线」 */
+  const newMapProfile = () => {
+    setMapProfile(DEFAULT_MAP_PROFILE);
+    setEditingName(null);
+    setSaveError(null);
+  };
+  /** 把一条已保存的过图路线载入表单(编辑态,保存时覆盖它) */
+  const loadMapProfile = (stored: StoredTaskConfig) => {
+    const map = stored.config as MapProfileConfig;
+    setMapProfile({
+      type: 'map-profile',
+      mapName: map.mapName ?? '',
+      entrance: {
+        position: { x: map.entrance?.position?.x ?? 0, y: map.entrance?.position?.y ?? 0 },
+        toMap: map.entrance?.toMap ?? '',
+      },
+      exit: {
+        position: { x: map.exit?.position?.x ?? 0, y: map.exit?.position?.y ?? 0 },
+        toMap: map.exit?.toMap ?? '',
+      },
+      waypoints: map.waypoints ?? [],
+    });
+    setEditingName(stored.name);
+    setSaveError(null);
+  };
+  /** 删除当前正在编辑的过图路线(带 farm 引用提示) */
+  const deleteSelectedMapProfile = async () => {
+    const stored = savedMapProfiles.find((p) => p.name === editingName);
+    if (!stored || deleting) return;
+    const refs = referencedByFarmTasks(stored, taskHistory);
+    if (refs.length > 0) {
+      const ok = confirm(
+        `任务 ${refs.map((n) => `「${n}」`).join('、')} 的「地图跨越」引用了「${stored.name}」,\n删除后这些任务会启动失败。\n\n确定删除?`,
+      );
+      if (!ok) return;
+    }
+    setDeleting(true);
+    const res = await deleteTaskByName(stored.name);
+    setDeleting(false);
+    if (res.ok) newMapProfile();
+    else alert(`删除失败: ${res.error || '未知错误'}`);
+  };
   /** 选择任务类型卡片:配置型任务先重置表单(卡片内新建),其余直接进 config 步骤 */
   const selectTaskType = (type: TaskType) => {
     if (type === 'town-profile') newTownProfile();
     else if (type === 'dialog-recipe') newDialogRecipe();
+    else if (type === 'map-profile') newMapProfile();
     setTaskType(type);
     setSaveError(null);
     setStep('config');
@@ -471,6 +540,8 @@ export function TaskConfigDialog({
       });
       // 旧配置没有 resupply 字段:回显成"不开启"
       setResupply(normalizeResupply(farm.resupply));
+      // 旧配置没有 mapCrossings 字段:回显成"不跨图"
+      setMapCrossings(farm.mapCrossings ?? []);
       // 旧配置没有 petRide 字段:回显成"不开启"
       setPetRide(normalizePetRide(farm.petRide));
       // 旧配置没有这个字段:回显成"不开启"
@@ -498,6 +569,15 @@ export function TaskConfigDialog({
     } else if (cfg.type === 'dialog-recipe') {
       const recipe = cfg as DialogRecipeConfig;
       setDialogRecipe({ type: 'dialog-recipe', steps: recipe.steps ?? [] });
+    } else if (cfg.type === 'map-profile') {
+      const map = cfg as MapProfileConfig;
+      setMapProfile({
+        type: 'map-profile',
+        mapName: map.mapName ?? '',
+        entrance: map.entrance ?? { position: { x: 0, y: 0 }, toMap: '' },
+        exit: map.exit ?? { position: { x: 0, y: 0 }, toMap: '' },
+        waypoints: map.waypoints ?? [],
+      });
     }
   };
 
@@ -628,6 +708,8 @@ export function TaskConfigDialog({
         },
         // 回城补给:整份保存(没开启也留着引用与参数,下次勾上不用重填)
         resupply: normalizeResupply(resupply),
+        // 地图跨越:只留非空的名字(空数组 = 不写,等价于不跨图)
+        mapCrossings: mapCrossings.filter(Boolean).length > 0 ? mapCrossings.filter(Boolean) : undefined,
         // 宠物骑乘:整份保存,上骑/下骑只保留仍然存在且仍是「宠物技能」的 id,避免失效引用
         petRide: {
           enabled: petRide.enabled === true,
@@ -701,6 +783,25 @@ export function TaskConfigDialog({
         steps: dialogRecipe.steps,
       };
     }
+    if (taskType === 'map-profile') {
+      return {
+        type: 'map-profile',
+        mapName: mapProfile.mapName.trim(),
+        entrance: {
+          position: { x: (mapProfile.entrance?.position?.x ?? 0) | 0, y: (mapProfile.entrance?.position?.y ?? 0) | 0 },
+          toMap: (mapProfile.entrance?.toMap ?? '').trim(),
+        },
+        exit: {
+          position: { x: (mapProfile.exit?.position?.x ?? 0) | 0, y: (mapProfile.exit?.position?.y ?? 0) | 0 },
+          toMap: (mapProfile.exit?.toMap ?? '').trim(),
+        },
+        waypoints: (mapProfile.waypoints ?? []).map((w) => ({
+          x: (w.x ?? 0) | 0,
+          y: (w.y ?? 0) | 0,
+          npc: w.npc && (w.npc.name ?? '').trim() ? { name: w.npc.name.trim(), recipeName: (w.npc.recipeName ?? '').trim() } : undefined,
+        })),
+      };
+    }
     return { type: taskType } as any;
   };
 
@@ -734,6 +835,20 @@ export function TaskConfigDialog({
       const cfg = buildConfig();
       if ((cfg.type === 'dialog-recipe' ? cfg.steps : []).length === 0) {
         return '对话配方至少需要 1 个步骤';
+      }
+    }
+    if (taskType === 'map-profile') {
+      const cfg = buildConfig();
+      if (cfg.type === 'map-profile') {
+        if (!cfg.mapName.trim()) return '过图路线需要填「本图地图名」(游戏内 OCR 读到的中文名)';
+        if (!cfg.entrance.toMap.trim()) return '过图路线需要填「入口口子」通向的图名(返程要用)';
+        if (!cfg.exit.toMap.trim()) return '过图路线需要填「出口口子」通向的图名(去下一张图)';
+      }
+      // NPC 途经点:名字与配方都必须选(看原始表单 —— buildConfig 会把没填名字的 npc 丢掉)
+      for (const wp of mapProfile.waypoints ?? []) {
+        if (!wp.npc) continue;
+        if (!(wp.npc.name ?? '').trim()) return `途经点 (${wp.x},${wp.y}) 的 NPC 没选名字(或点「移除 NPC」当作普通途经点)`;
+        if (!(wp.npc.recipeName ?? '').trim()) return `途经点 (${wp.x},${wp.y}) 配了 NPC「${wp.npc.name}」,请给它选一份对话配方`;
       }
     }
     return null;
@@ -1011,6 +1126,9 @@ export function TaskConfigDialog({
               setPetRide={setPetRide}
               townProfileNames={townProfileNames}
               recipeIssue={recipeIssue}
+              mapCrossings={mapCrossings}
+              setMapCrossings={setMapCrossings}
+              mapProfileNames={mapProfileNames}
               blockAllPlayersOnNewMap={blockAllPlayersOnNewMap}
               setBlockAllPlayersOnNewMap={setBlockAllPlayersOnNewMap}
               zoomOutMinimap={zoomOutMinimap}
@@ -1128,12 +1246,59 @@ export function TaskConfigDialog({
             </>
           )}
 
+          {step === 'config' && taskType === 'map-profile' && (
+            <>
+              <div className="mb-3 text-[12px] text-accent-cyan bg-accent-cyan/10 border border-accent-cyan/30 rounded px-3 py-2">
+                {CONFIG_ONLY_HINT}
+              </div>
+              {/* 卡片内管理:选择已保存的过图路线查看/修改,或新建、删除 */}
+              <div className="mb-3 p-2.5 rounded border border-border-base bg-bg-input/40 flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-secondary shrink-0">已保存的过图路线</span>
+                <select
+                  value={editingName ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    if (!name) newMapProfile();
+                    else {
+                      const stored = savedMapProfiles.find((p) => p.name === name);
+                      if (stored) loadMapProfile(stored);
+                    }
+                  }}
+                  className="bg-bg-card border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">＋ 新建过图路线</option>
+                  {savedMapProfiles.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {editingName && !readOnly && (
+                  <button
+                    onClick={() => void deleteSelectedMapProfile()}
+                    disabled={deleting}
+                    className="text-xs px-2 py-1 rounded bg-accent-red/10 hover:bg-accent-red/20 text-accent-red flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={`删除「${editingName}」(不可撤销)`}
+                  >
+                    {deleting ? '删除中...' : '删除'}
+                  </button>
+                )}
+                <span className="ml-auto text-[10px] text-text-muted">
+                  {editingName ? `正在编辑「${editingName}」` : '新建(保存时命名)'}
+                </span>
+              </div>
+              <MapProfileForm readOnly={readOnly} value={mapProfile} onChange={setMapProfile} hwnd={hwnd} recipeNames={recipeNames} />
+            </>
+          )}
+
           {step === 'config' &&
             taskType &&
             taskType !== 'farm' &&
             taskType !== 'default-skill' &&
             taskType !== 'town-profile' &&
-            taskType !== 'dialog-recipe' && (
+            taskType !== 'dialog-recipe' &&
+            taskType !== 'map-profile' && (
               <div className="text-center py-12 text-text-secondary">
                 <div className="text-4xl mb-3 opacity-30">{TASK_OPTIONS.find((o) => o.type === taskType)?.icon}</div>
                 <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
@@ -1483,6 +1648,11 @@ interface FarmConfigProps {
   townProfileNames: string[];
   /** 当前编辑的城镇档案里 NPC 引用配方的问题(提示用,不阻断保存) */
   recipeIssue: string | null;
+  /** 地图跨越:中间地图的过图路线名,按穿越顺序(不含城镇、不含挂机图) */
+  mapCrossings: string[];
+  setMapCrossings: (v: string[] | ((prev: string[]) => string[])) => void;
+  /** 可选的过图路线名(历史任务里所有 map-profile 的 name) */
+  mapProfileNames: string[];
   /** 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4) */
   blockAllPlayersOnNewMap: boolean;
   setBlockAllPlayersOnNewMap: (v: boolean) => void;
@@ -1535,6 +1705,9 @@ function FarmConfig(props: FarmConfigProps) {
     setPetRide,
     townProfileNames,
     recipeIssue,
+    mapCrossings,
+    setMapCrossings,
+    mapProfileNames,
     blockAllPlayersOnNewMap,
     setBlockAllPlayersOnNewMap,
     zoomOutMinimap,
@@ -2596,6 +2769,9 @@ function FarmConfig(props: FarmConfigProps) {
           </label>
         </div>
       </div>
+
+      {/* 地图跨越:出发图 → 挂机图之间依次穿越的中间地图(引用「过图路线」) */}
+      <MapCrossingsSection readOnly={readOnly} value={mapCrossings} onChange={setMapCrossings} mapProfileNames={mapProfileNames} />
 
       {/* 死亡回城补给:死亡后复活 → 检查耐久/药水 → 回城找道具商人 → 返回野外 */}
       <FarmResupplySection

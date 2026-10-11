@@ -13,6 +13,16 @@ export interface FarmMapOption {
 
 export const FARM_MAPS: FarmMapOption[] = [
   { id: 'long-cheng', name: '龙城' },
+  { id: 'yun-huang-bu-luo', name: '云荒部落' },
+  { id: 'bi-yi-cheng', name: '比翼城' },
+  { id: 'lou-lan-cheng', name: '楼兰城' },
+  { id: 'chu-yun-cheng', name: '出云城' },
+  { id: 'tian-du', name: '天都' },
+  { id: 'wu-lei-cheng', name: '无泪城' },
+  { id: 'tao-yuan-dong-cun', name: '桃源东村' },
+  { id: 'tao-yuan-xi-cun', name: '桃源西村' },
+  { id: 'chang-le-dong-cun', name: '长乐东村' },
+  { id: 'chang-le-xi-cun', name: '长乐西村' },
   { id: 'flow-path', name: ' 流花径' },
   { id: 'tian-yuan', name: '桃源村' },
   { id: 'custom', name: '自定义...' },

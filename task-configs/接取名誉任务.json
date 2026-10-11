@@ -1,0 +1,49 @@
+{
+  "id": "task-接取名誉任务-1791721450399",
+  "name": "接取名誉任务",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791719481231-85h9",
+        "kind": "if-text",
+        "text": "击败了怨灵",
+        "thenId": "step-1791720518475-2yrg"
+      },
+      {
+        "id": "step-1791719481856-adr8",
+        "kind": "click-text",
+        "text": "名誉任务",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791720645292-5sap",
+        "kind": "click-text",
+        "text": "好的",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791720518475-2yrg",
+        "kind": "click-text",
+        "text": "击败了怨灵",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791720461696-wat3",
+        "kind": "click-at",
+        "x": 854,
+        "y": 204,
+        "note": "关闭弹框"
+      }
+    ]
+  },
+  "createdAt": 1791721450399,
+  "updatedAt": 1791721450399
+}

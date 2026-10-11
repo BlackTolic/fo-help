@@ -19,6 +19,8 @@ export const NPC = {
   AIRSHIP_FAIRY: '飞空艇仙子',
   /** 杨戬(游戏内 NPC 名) */
   YANG_JIAN: '杨戬',
+  /** 荣光使者(游戏内 NPC 名) */
+  GLORY_ENVOY: '荣光使者',
 } as const;
 
 /** 全部 NPC 名称 */

@@ -190,3 +190,28 @@ export async function travelWithinMap(movement: MovementController, points: Rout
 
   return allOk;
 }
+
+/** 锚点间路线的一条记录(与 shared/types.ts 的 TownProfileRoute 结构兼容) */
+export interface AnchoredRoute {
+  /** 起点锚点 id */
+  from: string;
+  /** 终点锚点 id */
+  to: string;
+  waypoints: RoutePoint[];
+}
+
+/**
+ * 按锚点 id 解析一条途经点序列(城镇档案 / 过图路线共用):
+ *   1. 优先直接路线(from → to)
+ *   2. 其次反向路线(to → from)的 waypoints 反序 —— 档案里只配一个方向是常态
+ *   3. 都没有 → 空数组:调用方退化成"直接从当前位置走过去"
+ */
+export function resolveAnchoredRoute(routes: AnchoredRoute[], from: string, to: string): RoutePoint[] {
+  const direct = routes.find((r) => r.from === from && r.to === to);
+  if (direct) return direct.waypoints.map((p) => ({ x: p.x, y: p.y }));
+
+  const reverse = routes.find((r) => r.from === to && r.to === from);
+  if (reverse) return [...reverse.waypoints].reverse().map((p) => ({ x: p.x, y: p.y }));
+
+  return [];
+}

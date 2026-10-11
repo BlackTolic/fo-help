@@ -1,0 +1,44 @@
+{
+  "id": "task-楼兰城前往接取名誉任务-1791722491140",
+  "name": "楼兰城前往接取名誉任务",
+  "taskType": "town-profile",
+  "config": {
+    "type": "town-profile",
+    "mapName": "楼兰城",
+    "revivePoint": {
+      "x": 278,
+      "y": 73
+    },
+    "npcs": [
+      {
+        "id": "npc-1791722441989-uln7",
+        "name": "道具商人",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "recipeName": "飞空艇-龙城"
+      }
+    ],
+    "routes": [
+      {
+        "id": "route-1791722216164-brtm",
+        "from": "revive",
+        "to": "exit-1791722260834-6yn8",
+        "waypoints": []
+      }
+    ],
+    "exits": [
+      {
+        "id": "exit-1791722260834-6yn8",
+        "toMap": "楼兰城郊",
+        "position": {
+          "x": 328,
+          "y": 94
+        }
+      }
+    ]
+  },
+  "createdAt": 1791722491140,
+  "updatedAt": 1791722764596
+}

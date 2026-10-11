@@ -21,9 +21,18 @@ export interface CharacterInfo {
 
 /**
  * 任务类型
- * town-profile(城镇档案)/ dialog-recipe(对话配方)是配置型"任务":与任务同样存储/编辑,但不可作为任务运行
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)是配置型"任务":与任务同样存储/编辑,但不可作为任务运行
  */
-export type TaskType = 'farm' | 'mine' | 'catch-pet' | 'refine' | 'reputation' | 'default-skill' | 'town-profile' | 'dialog-recipe';
+export type TaskType =
+  | 'farm'
+  | 'mine'
+  | 'catch-pet'
+  | 'refine'
+  | 'reputation'
+  | 'default-skill'
+  | 'town-profile'
+  | 'dialog-recipe'
+  | 'map-profile';
 
 /** 脚本状态(主面板卡片显示) */
 export type ScriptStatus =
@@ -235,6 +244,12 @@ export interface FarmTaskConfig {
   /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
   resupply?: FarmResupplyConfig;
   /**
+   * 地图跨越:出发图 → 挂机图之间要依次穿越的中间地图(引用 map-profile 任务名,按顺序)。
+   * 不含出发城镇、不含挂机图本身(城镇→首图由城镇档案 exits 负责,挂机图内由入图点负责);
+   * 空/不配 = 不跨图(行为与旧配置一致)。任务启动与死亡返程都会按它逐跳穿越。
+   */
+  mapCrossings?: string[];
+  /**
    * 进入新地图时屏蔽所有人:检测到换图就按一次 F11×4(见 shared/game-hotkeys.ts 的 blockAllPlayers)。
    * 游戏换图会把"屏蔽玩家"重置,所以每次进新图要重新屏蔽;不配 = 不处理
    */
@@ -330,6 +345,49 @@ export interface TownProfileConfig {
   exits: TownProfileExit[];
 }
 
+// ===== 过图路线(map-profile):一张中间地图的两个出入口 + 途经点,供 farm 的「地图跨越」逐跳穿越 =====
+// 同为配置型"任务";farm.mapCrossings 按顺序引用它,worker 用 RouteTraveler.travelToExit 逐跳过图
+
+/** 过图路线的一个出入口;position 为游戏内地图坐标 */
+export interface MapProfilePortal {
+  /** 出入口在本图的坐标(游戏内地图坐标) */
+  position: { x: number; y: number };
+  /** 穿过这个口子会到达的图(游戏内 OCR 中文地图名) */
+  toMap: string;
+}
+
+/** 过图路线途经点上的 NPC 交互:走到这个点后先和 NPC 对话(跑完配方)再继续 */
+export interface MapProfileNpc {
+  /** NPC 名称(中文,取值见 shared/npc.ts);也是游戏内找字用的绿字名 */
+  name: string;
+  /** 引用的对话配方名(= dialog-recipe 的任务名);必填,否则没有可执行的对话 */
+  recipeName: string;
+}
+
+/** 过图路线的一个途经点 */
+export interface MapProfileWaypoint {
+  x: number;
+  y: number;
+  /** 可选:到这个点时先和这个 NPC 对话,配方跑完才走下一个点(去程/返程都会触发) */
+  npc?: MapProfileNpc;
+}
+
+/**
+ * 过图路线档案:一张中间地图怎么从一端走到另一端并过图。
+ * 只支持"线性两端"的图(一个入口、一个出口);有岔路/多出入口的图需要拆成多份或后续升级为锚点+多路线模型。
+ */
+export interface MapProfileConfig {
+  type: 'map-profile';
+  /** 本图 OCR 中文地图名(必须和游戏里读到的名字一致) */
+  mapName: string;
+  /** 入口口子:从上一张图过图后落到这里;返程时从这里走出去(→ entrance.toMap) */
+  entrance: MapProfilePortal;
+  /** 出口口子:去下一张图;返程时从这里进入本图(→ exit.toMap) */
+  exit: MapProfilePortal;
+  /** entrance → exit 的途经点(单向);返程按反向走;途经点可挂 NPC(到点先对话) */
+  waypoints: MapProfileWaypoint[];
+}
+
 // ===== 对话配方(dialog-recipe):在某个 NPC 处按顺序执行的步骤脚本(修理 / 买药等) =====
 // 同为配置型"任务";城镇档案里的 NPC 用 TownProfileNpc.recipeName 引用它,worker 按名字取用
 
@@ -413,9 +471,15 @@ export interface PlaceholderTaskConfig {
 
 /**
  * 任务配置联合类型
- * town-profile(城镇档案)/ dialog-recipe(对话配方)只参与存储/编辑,不可作为任务运行
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)只参与存储/编辑,不可作为任务运行
  */
-export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTaskConfig | TownProfileConfig | DialogRecipeConfig;
+export type TaskConfig =
+  | FarmTaskConfig
+  | PlaceholderTaskConfig
+  | DefaultSkillTaskConfig
+  | TownProfileConfig
+  | DialogRecipeConfig
+  | MapProfileConfig;
 
 /**
  * start-task 命令的附属配置(farm 回城补给用):
@@ -428,6 +492,12 @@ export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTa
  */
 export type ResupplyRecipe = DialogRecipeConfig & { name: string };
 
+/**
+ * 下发给 worker 的过图路线档案:档案本体 + 它的任务名。
+ * farm 的 mapCrossings 按名字引用它(顺序 = 穿越顺序)。
+ */
+export type ResupplyMapProfile = MapProfileConfig & { name: string };
+
 export interface StartTaskAuxConfigs {
   /** 城镇档案(farm.resupply.townProfileName 指向的那份) */
   townProfile?: TownProfileConfig;
@@ -435,6 +505,8 @@ export interface StartTaskAuxConfigs {
   recipes?: ResupplyRecipe[];
   /** farm 挂机地图的 OCR 中文地图名(回城后靠它找出口返回),renderer 启动时解析传入 */
   farmMapName?: string;
+  /** farm.mapCrossings 引用到的全部过图路线档案(按穿越顺序),renderer 启动时解析传入 */
+  mapProfiles?: ResupplyMapProfile[];
 }
 
 /** worker:read-position 的响应:成功 = { map, x, y }(map=null 表示地图名未识别);失败/超时 = error 有值 */

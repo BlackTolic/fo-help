@@ -25,8 +25,9 @@ import type { Point } from '../../../../core/platform/vision/IVisionProvider';
 import type { IInputProvider } from '../../../../core/platform/input/IInputProvider';
 import { isEquipmentDamaged } from '../../../../core/perception/EquipDamageDetector';
 import { readPotionCount } from '../../../../core/perception/PotionCounter';
-import { NpcDialog } from '../../../../core/perception/NpcDialog';
-import { travelToExit, travelWithinMap } from '../../../../core/navigation/RouteTraveler';
+import { resolveAnchoredRoute, travelToExit, travelWithinMap } from '../../../../core/navigation/RouteTraveler';
+import { crossMapProfiles } from '../../../../core/navigation/MapCrossing';
+import type { MapCrossingProfile } from '../../../../core/navigation/MapCrossing';
 import type { MovementController } from '../../../../core/navigation/MovementController';
 import type { WindowSizeKey } from '../../../../core/constant-ocr/popup';
 import { REVIVE_BUTTON_POS, REVIVE_CANCEL_CASH_POS, REVIVE_MODE_LABEL } from '../../../../core/constant-ocr/death';
@@ -35,10 +36,10 @@ import type { FarmResupplyConfig, FarmReviveMode, TownProfileConfig, TownProfile
 import type { WorkerContext } from '../context';
 import { mountPet } from '../pet-ride';
 import type { ResolvedPetRide } from '../pet-ride';
-import { runDialogRecipe } from './dialog-recipe';
+import { talkToNpc } from './talk-npc';
 
 /** 复活点锚点 id(与 shared/types.ts 的 TownProfileRoute.from 约定一致) */
-const REVIVE_ANCHOR = 'revive';
+export const REVIVE_ANCHOR = 'revive';
 
 /** 默认复活超时(ms):配置缺省时的兜底,与 renderer 的默认值保持一致 */
 const DEFAULT_REVIVE_TIMEOUT_MS = 180_000;
@@ -103,8 +104,14 @@ export interface ResupplyDeps {
    */
   entryPath?: { x: number; y: number }[];
   /**
+   * 地图跨越链路(中间地图档案,按穿越顺序;空 = 不跨图,直接返程回挂机图):
+   * 返程时先走城镇出口到链首那张图,再逐跳穿越到挂机图(见 core/navigation/MapCrossing.ts)。
+   * 来自 farm 的 mapCrossings(renderer 已按顺序解析成 auxConfigs.mapProfiles)。
+   */
+  mapProfiles?: MapCrossingProfile[];
+  /**
    * 换图检查回调(可选):补给流程每次确认"角色到达一张新图"就调它一次
-   * (死亡重生回到城镇 / 返程切回挂机图)。
+   * (死亡重生回到城镇 / 返程切回挂机图 / 跨图链每穿过一张中间图)。
    * 是否真的换图、要不要按屏蔽快捷键由 farm 侧统一判断(见 tasks/farm.ts 的 blockAllPlayersIfMapChanged)。
    */
   onMapMaybeChanged?: () => Promise<void>;
@@ -473,6 +480,10 @@ async function confirmStartPosition(flow: ResupplyFlow): Promise<StartPositionCo
         return { ok: true, skipped: true, detail: `已在挂机地图「${name}」,跳过开工补给` };
       }
       if (name === town.mapName) return { ok: true, detail: `已在城镇「${name}」` };
+      // 已在过图链路上:不补给了(不在城镇,没商人可找),跳过开工补给,交给 farm 的「地图跨越」直接前进
+      if ((deps.mapProfiles ?? []).some((p) => p.mapName === name)) {
+        return { ok: true, skipped: true, detail: `已在过图链路「${name}」上,跳过开工补给,直接按「地图跨越」前往挂机图` };
+      }
       last = name;
       ctx.sendLog(
         'warn',
@@ -543,9 +554,7 @@ async function inspectStatus(flow: ResupplyFlow): Promise<string[]> {
 /**
  * 去某个 NPC 并执行它引用的对话配方:
  *   1. 按城镇档案路线从上一步的锚点走到它附近(没有路线 = 直接从当前位置走过去);
- *   2. 到了以后用 findNpc 找字精确定位(路线只负责"走近",最终点击以找字为准),找不到重试几次;
- *   3. openDialog 必须成功(用 '@X' 关闭钮反查);
- *   4. 执行 npc.recipeName 指名的那份配方(配方不存在 = 直接失败),跑完/失败都兜底关窗。
+ *   2. 到了以后交给 talkToNpc:找字定位 → 开对话 → 跑配方 → 兜底关窗(见 talk-npc.ts)。
  */
 async function visitNpc(flow: ResupplyFlow, npc: TownProfileNpc, fromAnchor: string): Promise<ResupplyResult> {
   const { ctx, deps, label, town, stopped } = flow;
@@ -583,52 +592,38 @@ async function visitNpc(flow: ResupplyFlow, npc: TownProfileNpc, fromAnchor: str
     ctx.sendLog('warn', `[${label}] 有途经点没走到,继续尝试找 NPC「${npc.name}」`);
   }
 
-  const dialog = new NpcDialog(client, size);
-  // 找字精确定位:路线只负责"走近",最终点击以找字为准,找不到重试几次
-  let pos = await dialog.findNpc(npc.name);
-  for (let i = 1; !pos && i < RESUPPLY.npcFindAttempts; i++) {
-    ctx.sendLog('warn', `[${label}] 没找到 NPC「${npc.name}」,重试 ${i + 1}/${RESUPPLY.npcFindAttempts}`);
-    await sleep(RESUPPLY.npcFindRetryMs);
-    pos = await dialog.findNpc(npc.name);
-  }
-  if (!pos) {
-    return {
-      ok: false,
-      detail: `走到「${npc.name}」附近后仍找不到它(核对城镇档案里的 NPC 名字/坐标,以及绿色字扫描区 NPC_SCAN_BOX)`,
-    };
-  }
-  ctx.sendLog('info', `[${label}] 找到 NPC「${npc.name}」@(${pos.x},${pos.y}),打开对话`);
-
-  if (!(await dialog.openDialog(pos))) {
-    return {
-      ok: false,
-      detail: `打开「${npc.name}」的对话失败(没读到 '@X' 关闭钮:对话框没弹出,或 DIALOG_CLOSE_BTN 的区域/颜色没配对)`,
-    };
-  }
-
-  const recipeResult = await runDialogRecipe({ ctx, client, dialog, label }, recipe);
-  // 兜底关窗:配方跑完或中途失败都别把对话框留在屏幕上(否则后续移动点击都会先点到对话)
-  await dialog.closeDialog();
-  return recipeResult.ok ? { ok: true } : { ok: false, detail: recipeResult.detail };
+  const talk = await talkToNpc({ ctx, client, size, label, npcName: npc.name, recipeName });
+  return talk.ok ? { ok: true } : { ok: false, detail: talk.detail ?? `与「${npc.name}」的对话失败` };
 }
 
-/** 返程:按路线走到出城口,等游戏切回挂机图 */
+/**
+ * 返程:按路线走到出城口切到「链首图」(有地图跨越时;没有则直接切回挂机图),
+ * 再沿过图链路逐跳穿越回挂机图,最后走入图点。
+ */
 async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise<ResupplyResult> {
   const { ctx, deps, label, town, farmMapName, stopped } = flow;
+  const profiles = deps.mapProfiles ?? [];
 
   if (!farmMapName) {
     return { ok: false, detail: '缺少 auxConfigs.farmMapName(挂机地图名),不知道要回哪张野外图' };
   }
-  const exit = town.exits.find((e) => e.toMap === farmMapName);
+
+  // 第一跳目标:配了地图跨越 = 链首那张中间图;否则 = 挂机图(旧行为)
+  const firstTarget = profiles[0]?.mapName ?? farmMapName;
+  const exit = town.exits.find((e) => (e.toMap ?? '').trim() === firstTarget);
   if (!exit) {
-    return { ok: false, detail: `城镇档案里没有去「${farmMapName}」的出口(需要一条 exits[].toMap 与挂机地图名一致)` };
+    return { ok: false, detail: `城镇档案里没有去「${firstTarget}」的出口(需要一条 exits[].toMap 与该图名一致)` };
   }
 
-  const points = resolveRoute(town, fromAnchor, exit.id);
+  const points = resolveAnchoredRoute(town.routes ?? [], fromAnchor, exit.id);
   ctx.setStatus('resupply', `${label}:返程`);
-  ctx.sendLog('info', `[${label}] 返程:${points.length} 个途经点 → 出城口 (${exit.position.x},${exit.position.y}) → 「${farmMapName}」`);
+  ctx.sendLog(
+    'info',
+    `[${label}] 返程:${points.length} 个途经点 → 出城口 (${exit.position.x},${exit.position.y}) → 「${firstTarget}」` +
+      (profiles.length > 0 ? `,再穿越 ${profiles.map((p) => p.mapName).join(' → ')} 回「${farmMapName}」` : ''),
+  );
 
-  const ok = await travelToExit(deps.movement, () => deps.readMapName(), points, exit.position, farmMapName, {
+  const ok = await travelToExit(deps.movement, () => deps.readMapName(), points, exit.position, firstTarget, {
     timeoutMs: RESUPPLY.travelTimeoutMs,
     moveOptions: RESUPPLY.moveOptions,
     isStopped: stopped,
@@ -637,11 +632,30 @@ async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise
   if (!ok) {
     return {
       ok: false,
-      detail: stopped() ? '任务已停止(返程途中)' : `返程失败:没能走到出城口并切回「${farmMapName}」(核对城镇档案的出口坐标与路线)`,
+      detail: stopped() ? '任务已停止(返程途中)' : `返程失败:没能走到出城口并切到「${firstTarget}」(核对城镇档案的出口坐标与路线)`,
     };
   }
-  // 切回挂机图 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人(先屏蔽,入图路上也生效)
+  // 切到链首图(或挂机图)= 换图:让 farm 侧按开关决定要不要重新屏蔽所有人(先屏蔽,入图路上也生效)
   await deps.onMapMaybeChanged?.();
+
+  // 中间地图逐跳穿越(链首那张已在上一步到达,所以从这里开始)
+  if (profiles.length > 0) {
+    ctx.setStatus('resupply', `${label}:跨图`);
+    const cross = await crossMapProfiles(deps.movement, () => deps.readMapName(), profiles, farmMapName, {
+      timeoutMs: RESUPPLY.travelTimeoutMs,
+      moveOptions: RESUPPLY.moveOptions,
+      isStopped: stopped,
+      onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+      onArriveMap: async () => {
+        await deps.onMapMaybeChanged?.();
+      },
+      runNpc: (npc) => talkToNpc({ ctx, client: deps.client, size: deps.size, label, npcName: npc.name, recipeName: npc.recipeName }),
+    });
+    if (!cross.ok) {
+      return { ok: false, detail: stopped() ? '任务已停止(跨图途中)' : `返程跨图失败:${cross.detail}` };
+    }
+  }
+
   // 落点在挂机地图入口,离挂机点还有一段路:沿入图点走过去,再交给主循环
   const entryOk = await walkEntryPath(flow);
   if (!entryOk) {
@@ -672,19 +686,14 @@ async function walkEntryPath(flow: ResupplyFlow): Promise<boolean> {
 }
 
 /**
- * 锚点间路线解析(纯函数):
+ * 锚点间路线解析(城镇档案):
  *   1. 优先直接路线(from → to)
  *   2. 其次反向路线(to → from)的 waypoints 反序 —— 档案里只配一个方向是常态
  *   3. 都没有 → 空数组:调用方退化成"直接从当前位置走过去"(见 appendTarget)
+ * 逻辑已提取为 core/navigation/RouteTraveler.ts 的 resolveAnchoredRoute,这里只做类型适配。
  */
 function resolveRoute(profile: TownProfileConfig, fromAnchor: string, toAnchor: string): { x: number; y: number }[] {
-  const direct = profile.routes.find((r) => r.from === fromAnchor && r.to === toAnchor);
-  if (direct) return direct.waypoints.map((p) => ({ x: p.x, y: p.y }));
-
-  const reverse = profile.routes.find((r) => r.from === toAnchor && r.to === fromAnchor);
-  if (reverse) return [...reverse.waypoints].reverse().map((p) => ({ x: p.x, y: p.y }));
-
-  return [];
+  return resolveAnchoredRoute(profile.routes ?? [], fromAnchor, toAnchor);
 }
 
 /** 路线 + 目标点:途经点只负责"到附近",最后再走一次目标点本身(已在目标附近就不重复走) */
