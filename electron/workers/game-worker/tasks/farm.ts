@@ -81,6 +81,8 @@ import type { WorkerContext } from '../context';
 import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from '../interrupts';
 import { resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
 import type { ResolvedResupply } from '../resupply/resupply-runner';
+import { dismountPet, mountPet } from '../pet-ride';
+import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
 import { pressGameHotkey } from '../../../../shared/game-hotkeys';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
@@ -111,8 +113,8 @@ interface MoveAttackSkill {
   castMs: number;
   /** 施法距离(屏幕像素,以角色为圆心);target 技能:怪超出距离则跳过;0 = 用默认距离 */
   rangePx: number;
-  /** 施法方式:quick=只按键 / target=按键+左键点目标 / self=点自己+按键 / item=按键使用快捷栏物品 */
-  method: 'quick' | 'target' | 'self' | 'item';
+  /** 施法方式:quick=只按键 / target=按键+左键点目标 / self=点自己+按键 / item=按键使用快捷栏物品 / pet=宠物技能(只按键,不参与打怪) */
+  method: 'quick' | 'target' | 'self' | 'item' | 'pet';
 }
 
 /** 解析后的路径点 */
@@ -173,6 +175,8 @@ interface ResolvedConfig {
   entryPath: EntryPoint[];
   /** 物品拾取 */
   pickup: ResolvedPickup;
+  /** 宠物骑乘(回城上骑 / 到挂机点下骑;缺省关闭,配置见 shared/types.ts 的 FarmPetRideConfig) */
+  petRide: ResolvedPetRide;
   /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
   resupply: ResolvedResupply;
   /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 blockAllPlayersIfMapChanged);缺省 false */
@@ -594,9 +598,12 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<De
       {
         client: dmApi,
         size: run.size,
+        input: run.input,
         // 用带地图名的 travelMovement(reader 带分辨率档位):RouteTraveler 靠它判断"切图即停"
         movement: run.travelMovement,
         readMapName: run.readMapName,
+        // 宠物骑乘:回到城里先检查宠物 + 上骑(见 pet-ride.ts)
+        petRide: conf.petRide,
         // 切回挂机图后先沿入图点从地图入口走到挂机点,再恢复挂机循环
         entryPath: conf.entryPath,
         // 补给途中每到达一张新图(死亡重生回城镇 / 返程切回挂机图)都走同一次换图判断
@@ -705,9 +712,12 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
     {
       client: dmApi,
       size: run.size,
+      input: run.input,
       // 与 checkDeath 用同一个带地图名的 travelMovement(reader 带分辨率档位)
       movement: run.travelMovement,
       readMapName: run.readMapName,
+      // 宠物骑乘:开工时人在城镇也先上骑,再一路骑回挂机图(见 pet-ride.ts)
+      petRide: conf.petRide,
       // 返程切回挂机图后同样先走入图点(开工时人从城镇回来,落点也在入口)
       entryPath: conf.entryPath,
       // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
@@ -754,6 +764,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     ...resolveDetectAreas(cfg, view),
     stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
     pickup: resolvePickup(ctx, cfg, view),
+    // 宠物骑乘:上骑/下骑必须是 method='pet' 的技能(见 resolvePetRide),缺省关闭
+    petRide: resolvePetRide(cfg, skills),
     // 回城补给:清洗交给 resupply 模块(默认值与补给流程共用同一份,见 resolveResupplyConfig)
     // runOnStart 也在那份清洗里(缺省 false,旧配置不受影响),主循环开工时读它
     resupply: resolveResupplyConfig(cfg?.resupply),
@@ -790,6 +802,19 @@ function resolveSkills(cfg: FarmTaskConfig | null): MoveAttackSkill[] {
         method: (s.method ?? 'target') as MoveAttackSkill['method'],
       }))
   );
+}
+
+/**
+ * 宠物骑乘:上骑/下骑只认 method='pet' 且键位合法的技能(在 resolveSkills 里已过滤未启用/非法键位)。
+ * 引用的 id 找不到对应宠物技能 = 该项为空,骑乘动作按"没配"处理(见 pet-ride.ts)。
+ */
+function resolvePetRide(cfg: FarmTaskConfig | null, skills: MoveAttackSkill[]): ResolvedPetRide {
+  const raw = cfg?.petRide;
+  const pick = (id?: string): PetRideSkill | null => {
+    const s = skills.find((x) => x.id === id && x.method === 'pet');
+    return s ? { id: s.id, key: s.key, name: s.name } : null;
+  };
+  return { enabled: raw?.enabled === true, mount: pick(raw?.mountSkillId), dismount: pick(raw?.dismountSkillId) };
 }
 
 /**
@@ -930,7 +955,8 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
   ctx.sendLog(
     'info',
     `[${label}] 回城补给=${formatResupply(conf.resupply)} 屏蔽所有人=${conf.blockAllPlayersOnNewMap ? '进入新地图时(F11×4)' : '关闭'}` +
-      ` 小地图缩放=${conf.zoomOutMinimap ? '启动时(Alt+-)' : '关闭'} 关聊天背景=${conf.closeChatBackground ? '启动时' : '关闭'}`,
+      ` 小地图缩放=${conf.zoomOutMinimap ? '启动时(Alt+-)' : '关闭'} 关聊天背景=${conf.closeChatBackground ? '启动时' : '关闭'}` +
+      ` 宠物骑乘=${formatPetRide(conf.petRide)}`,
   );
   if (ctx.init.taskConfig?.type !== 'farm') {
     ctx.sendLog('warn', `[${label}] taskConfig 不是 farm 配置(或未下发),本次全部用内置默认值`);
@@ -945,6 +971,13 @@ function formatResupply(r: ResolvedResupply): string {
     ` 复活超时=${Math.round(r.reviveTimeoutMs / 1000)}s 耐久检查=${r.checkDurability ? '是' : '否'}` +
     ` 药水阈值=${r.potionThreshold ?? '不检查'} 开工补给=${r.runOnStart ? '是' : '否'})`
   );
+}
+
+/** 宠物骑乘配置在日志里的写法 */
+function formatPetRide(p: ResolvedPetRide): string {
+  if (!p.enabled) return '关闭';
+  const label = (s: PetRideSkill | null): string => (s ? `${s.key}${s.name ? `·${s.name}` : ''}` : '未配');
+  return `开启(上骑=${label(p.mount)} 下骑=${label(p.dismount)})`;
 }
 
 // ===== 移动与瞄准 =====
@@ -1045,6 +1078,13 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
       await pressSkillKey(input, skill.key);
       if (skill.castMs > 0) await sleep(skill.castMs);
       ctx.sendLog('info', `[${label}] 释放 ${name}(快捷施法)`);
+      return true;
+
+    case 'pet':
+      // 宠物技能(骑乘)不参与打怪循环,正常不会走到这里;留一个分支保证施法方式全集可处理
+      await pressSkillKey(input, skill.key);
+      if (skill.castMs > 0) await sleep(skill.castMs);
+      ctx.sendLog('info', `[${label}] 释放 ${name}(宠物技能)`);
       return true;
 
     case 'item':
@@ -1308,9 +1348,9 @@ function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
 async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> {
   const { ctx, conf, view, label, monster, lastCast } = run;
   const ctrl = ctx.moveAttack;
-  // 参与攻击的技能:智能施法排除「物品使用」(药品交给看门狗的「生命回复」,不在每个点空放);
+  // 参与攻击的技能:宠物技能(骑乘)不参与;智能施法再排除「物品使用」(药品交给看门狗的「生命回复」,不在每个点空放);
   // 自定义施法按用户显式绑定(含物品)
-  const castable = conf.castMode === 'smart' ? wp.skills.filter((s) => s.method !== 'item') : wp.skills;
+  const castable = wp.skills.filter((s) => s.method !== 'pet' && !(conf.castMode === 'smart' && s.method === 'item'));
 
   ctx.sendLog(
     'info',
@@ -1509,7 +1549,7 @@ function pickSkillsToCast(run: FarmRun, wp: ResolvedWaypoint, now: number): Move
   if (run.conf.castMode !== 'smart') return ready;
 
   const selfBuffs = ready.filter((s) => s.method === 'self');
-  const others = ready.filter((s) => s.method !== 'self' && s.method !== 'item');
+  const others = ready.filter((s) => s.method !== 'self' && s.method !== 'item' && s.method !== 'pet');
   const best = others.length > 0 ? [others.reduce((a, b) => (b.cooldownMs > a.cooldownMs ? b : a))] : [];
   return [...best, ...selfBuffs]; // 先放输出技能,再放状态 buff
 }
@@ -1611,6 +1651,12 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         // 到达后重置卡住计数
         stuckCount = 0;
         if (!here) continue;
+
+        // 从城里一路上骑过来,到了挂机点先下骑再开始打怪(见 shared/types.ts 的 FarmPetRideConfig)
+        if (wp.type === 'farm-spot' && ctx.petMounted) {
+          await dismountPet(ctx, { client: dmApi, input: run.input, size: run.size }, conf.petRide, label);
+          ctx.petMounted = false;
+        }
 
         // 处理不同类型的路径点
         if (wp.type !== 'farm-spot') {

@@ -215,6 +215,13 @@ export const dmApi = {
   middleClick: (): number => getRaw().MiddleClick(),
   middleDown: (): number => getRaw().MiddleDown(),
   middleUp: (): number => getRaw().MiddleUp(),
+  /**
+   * 双击(大漠原生):两次点击的间隔由插件控制,比手动连点两次更稳、更快。
+   * 用前先把鼠标移到目标位置(左键同 LeftClick 约定)。
+   */
+  leftDoubleClick: (): number => getRaw().LeftDoubleClick(),
+  rightDoubleClick: (): number => getRaw().RightDoubleClick(),
+  middleDoubleClick: (): number => getRaw().MiddleDoubleClick(),
 
   // ---- 窗口 ----
   /** 设置窗口状态: 0关闭 1激活 2最小化 4最大化 8置顶 9取消置顶 */

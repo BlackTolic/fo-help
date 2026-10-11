@@ -286,12 +286,12 @@
       },
       {
         "id": "skill-1791700490261-c2nq",
-        "key": "TF10",
-        "name": "11",
-        "cooldownMs": 500000,
+        "key": "TF8",
+        "name": "上骑",
+        "cooldownMs": 0,
         "castMs": 400,
         "rangePx": 0,
-        "method": "self",
+        "method": "pet",
         "enabled": true
       }
     ],
@@ -317,8 +317,13 @@
       "checkDurability": true,
       "runOnStart": true
     },
+    "petRide": {
+      "enabled": true,
+      "mountSkillId": "skill-1791700490261-c2nq",
+      "dismountSkillId": "skill-1791700490261-c2nq"
+    },
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791703477479
+  "updatedAt": 1791707111783
 }

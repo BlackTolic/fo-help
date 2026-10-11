@@ -101,12 +101,13 @@ export class DamooInputProvider implements IInputProvider {
   }
 
   async click(button: MouseButton, count = 1): Promise<void> {
-    const fn =
-      button === 'left'
-        ? dmApi.leftClick
-        : button === 'right'
-          ? dmApi.rightClick
-          : dmApi.middleClick;
+    // 双击(count=2)用大漠原生双击:两次点击的间隔由插件控制,比手动连点两次更稳、更快
+    if (count === 2) {
+      const dbl = button === 'left' ? dmApi.leftDoubleClick : button === 'right' ? dmApi.rightDoubleClick : dmApi.middleDoubleClick;
+      dbl();
+      return;
+    }
+    const fn = button === 'left' ? dmApi.leftClick : button === 'right' ? dmApi.rightClick : dmApi.middleClick;
     for (let i = 0; i < count; i++) {
       fn();
       if (i < count - 1) await new Promise((r) => setTimeout(r, 60));
@@ -114,14 +115,12 @@ export class DamooInputProvider implements IInputProvider {
   }
 
   async mouseDown(button: MouseButton): Promise<void> {
-    const fn =
-      button === 'left' ? dmApi.leftDown : button === 'right' ? dmApi.rightDown : dmApi.middleDown;
+    const fn = button === 'left' ? dmApi.leftDown : button === 'right' ? dmApi.rightDown : dmApi.middleDown;
     fn();
   }
 
   async mouseUp(button: MouseButton): Promise<void> {
-    const fn =
-      button === 'left' ? dmApi.leftUp : button === 'right' ? dmApi.rightUp : dmApi.middleUp;
+    const fn = button === 'left' ? dmApi.leftUp : button === 'right' ? dmApi.rightUp : dmApi.middleUp;
     fn();
   }
 

@@ -22,6 +22,7 @@ import type { DamooClient } from '../../../../core/platform/damoo/dm-api';
 import { detectDeath, isDead } from '../../../../core/perception/DeathDetector';
 import type { DeathSignal } from '../../../../core/perception/DeathDetector';
 import type { Point } from '../../../../core/platform/vision/IVisionProvider';
+import type { IInputProvider } from '../../../../core/platform/input/IInputProvider';
 import { isEquipmentDamaged } from '../../../../core/perception/EquipDamageDetector';
 import { readPotionCount } from '../../../../core/perception/PotionCounter';
 import { NpcDialog } from '../../../../core/perception/NpcDialog';
@@ -32,6 +33,8 @@ import { REVIVE_BUTTON_POS, REVIVE_CANCEL_CASH_POS, REVIVE_MODE_LABEL } from '..
 import { sleep } from '../../../../core/utils/sleep';
 import type { FarmResupplyConfig, FarmReviveMode, TownProfileConfig, TownProfileNpc } from '../../../../shared/types';
 import type { WorkerContext } from '../context';
+import { mountPet } from '../pet-ride';
+import type { ResolvedPetRide } from '../pet-ride';
 import { runDialogRecipe } from './dialog-recipe';
 
 /** 复活点锚点 id(与 shared/types.ts 的 TownProfileRoute.from 约定一致) */
@@ -87,6 +90,10 @@ export interface ResupplyDeps {
   size: WindowSizeKey;
   /** farm 主循环正在用的移动控制器(复用同一实例,不要新建) */
   movement: MovementController;
+  /** farm 主循环正在用的输入模拟(复用同一实例;上骑/下骑按技能键用) */
+  input: IInputProvider;
+  /** 宠物骑乘配置(回到城里检查宠物激活并上骑;缺省关闭,见 shared/types.ts 的 FarmPetRideConfig) */
+  petRide: ResolvedPetRide;
   /** 读当前地图名(OCR 中文名,读不到返回空串) */
   readMapName: () => Promise<string>;
   /**
@@ -256,6 +263,8 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     if (stopped()) return { ok: false, detail: `任务已停止,放弃${label}` };
     // 位置离档案复活点太远只提醒不阻断:后面的寻路是"从当前位置按坐标走"(见 travelWithinMap)
     await warnIfFarFromRevivePoint(flow);
+    // 人在城镇:检查宠物是否激活并上骑,骑着回挂机图更快(到挂机点主循环再下骑)
+    await mountPetOnCity(flow);
   } else {
     // 1) 复活
     const revived = await reviveCharacter(flow);
@@ -268,6 +277,8 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     if (!confirm.matched) return { ok: false, detail: confirm.detail };
     // 死亡重生把角色从野外送回了城镇 = 换图:让 farm 侧按开关决定要不要重新屏蔽所有人
     await deps.onMapMaybeChanged?.();
+    // 回到城里:检查宠物是否激活并上骑(见 pet-ride.ts)
+    await mountPetOnCity(flow);
   }
 
   // 3) 状态检查:装备耐久 / 红药数量 —— 只有"装备红 或 药水低于阈值"才值得跑一趟商人
@@ -300,6 +311,18 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
 
   // 4) 返程:出城口 → 等切回挂机图
   return travelBackToFarm(flow, fromAnchor);
+}
+
+/**
+ * 回到城里后的宠物骑乘:检查宠物是否激活 → 释放「上骑」技能(最多 3 次,见 pet-ride.ts)。
+ * 成功骑上时把 ctx.petMounted 置位,挂机主循环到达挂机点后会据此释放「下骑」再开始打怪。
+ * 骑乘未开启 / 宠物未激活(会先自动激活)/ 上骑失败都只是记日志,不阻断补给流程。
+ */
+async function mountPetOnCity(flow: ResupplyFlow): Promise<void> {
+  const { ctx, deps, label } = flow;
+  if (!deps.petRide.enabled) return;
+  ctx.setStatus('resupply', `${label}:上骑`);
+  ctx.petMounted = await mountPet(ctx, deps, deps.petRide, label);
 }
 
 /**

@@ -68,7 +68,8 @@ export type SkillCastMethod =
   | 'quick' // 快捷施法:只按键
   | 'target' // 缺省施法:按键 + 鼠标左键点击目标坐标
   | 'self' // 状态施法:点击角色自身 + 按键(自身 buff 类)
-  | 'item'; // 物品使用:只按快捷键消耗快捷栏物品(药品等)
+  | 'item' // 物品使用:只按快捷键消耗快捷栏物品(药品等)
+  | 'pet'; // 宠物技能:只按键(骑乘等宠物技能;不参与打怪循环,由「宠物骑乘」的上骑/下骑调用)
 
 /** 挂机打怪技能配置(任务级;路径点通过 skillIds 引用其中若干个) */
 export interface FarmSkillConfig {
@@ -94,6 +95,22 @@ export interface FarmSkillConfig {
 
 /** 挂机打怪模式: fixed=定点打怪 / fixed-detect=定点识别 / move-detect=移动识别 */
 export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
+
+/**
+ * 宠物骑乘配置(farm 专属):
+ * 勾选后每次回城补给回到城里,先检查宠物是否激活(OCR「暂时没有宠物」),
+ * 激活则释放「上骑」技能并检测骑乘提示字样(最多 3 次,间隔 1s);
+ * 到了挂机点再释放一次「下骑」技能后才开始打怪。
+ * 上骑/下骑都从「宠物技能」(method='pet')的条目里选,可以是同一个按键。
+ */
+export interface FarmPetRideConfig {
+  /** 是否开启宠物骑乘 */
+  enabled: boolean;
+  /** 上骑技能 id(引用 FarmSkillConfig.id,该技能 method 必须是 'pet') */
+  mountSkillId?: string;
+  /** 下骑技能 id(同上) */
+  dismountSkillId?: string;
+}
 
 /**
  * 挂机打怪施法方式:
@@ -213,6 +230,8 @@ export interface FarmTaskConfig {
   watchdog?: FarmWatchdogConfig;
   /** 物品拾取(打怪间隙捡掉落物);不配 = 不开启 */
   pickup?: FarmPickupConfig;
+  /** 宠物骑乘(回城后上骑、到挂机点下骑;依赖回城补给/开工补给的回城时机);不配 = 不开启 */
+  petRide?: FarmPetRideConfig;
   /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
   resupply?: FarmResupplyConfig;
   /**

@@ -99,6 +99,13 @@ export class WorkerContext {
     running: false,
   };
 
+  /**
+   * 宠物是否处于骑乘状态(「宠物骑乘」功能):
+   * 回城补给在城里「上骑」成功置 true,挂机主循环到达挂机点「下骑」后置 false。
+   * 只在两个模块之间传递"待下骑"这一件事,不参与任何识别判定。
+   */
+  petMounted = false;
+
   currentStep = '(none)';
   mainStart = Date.now();
 
