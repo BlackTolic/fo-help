@@ -1,0 +1,28 @@
+{
+  "id": "task-与道具商人对话-1791693208770",
+  "name": "与道具商人对话",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791692959286-sgcw",
+        "kind": "click-text",
+        "text": "购买道具",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791693075801-nlvd",
+        "kind": "click-text",
+        "text": "法力药水",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      }
+    ]
+  },
+  "createdAt": 1791693208770,
+  "updatedAt": 1791693208770
+}

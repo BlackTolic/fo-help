@@ -4,7 +4,6 @@
   "taskType": "dialog-recipe",
   "config": {
     "type": "dialog-recipe",
-    "npcKind": "item-merchant",
     "steps": [
       {
         "id": "step-1791553336515-w1es",

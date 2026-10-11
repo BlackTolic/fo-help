@@ -13,7 +13,7 @@
 //   wait 超过上限 → 按上限等待并记警告(配置写错一个 0 不至于把任务挂住)
 
 import { parseKeyCombo } from '../../../../shared/key-combo';
-import type { DialogRecipeConfig, DialogStep } from '../../../../shared/types';
+import type { DialogStep, ResupplyRecipe } from '../../../../shared/types';
 import type { DamooClient } from '../../../../core/platform/damoo/dm-api';
 import type { NpcDialog } from '../../../../core/perception/NpcDialog';
 import { sleep } from '../../../../core/utils/sleep';
@@ -63,11 +63,11 @@ export interface DialogRecipeDeps {
  * 顺序执行一条对话配方,直到步骤跑完 / 某步 fail / 执行步数超上限。
  * 返回值只描述配方本身的结果,关窗由调用方兜底(见 resupply-runner 的 visitMerchant)。
  */
-export async function runDialogRecipe(deps: DialogRecipeDeps, recipe: DialogRecipeConfig): Promise<{ ok: boolean; detail?: string }> {
+export async function runDialogRecipe(deps: DialogRecipeDeps, recipe: ResupplyRecipe): Promise<{ ok: boolean; detail?: string }> {
   const { ctx, label } = deps;
   const steps = recipe.steps ?? [];
   if (steps.length === 0) {
-    ctx.sendLog('warn', `[${label}] 对话配方(npcKind=${recipe.npcKind})没有任何步骤,跳过`);
+    ctx.sendLog('warn', `[${label}] 对话配方「${recipe.name}」没有任何步骤,跳过`);
     return { ok: true };
   }
 
@@ -77,7 +77,7 @@ export async function runDialogRecipe(deps: DialogRecipeDeps, recipe: DialogReci
     if (!indexOf.has(s.id)) indexOf.set(s.id, i);
   });
 
-  ctx.sendLog('info', `[${label}] 执行对话配方(npcKind=${recipe.npcKind},${steps.length} 步)`);
+  ctx.sendLog('info', `[${label}] 执行对话配方「${recipe.name}」(${steps.length} 步)`);
 
   let pc = 0;
   let executed = 0;

@@ -1,7 +1,7 @@
 // 对话配方编辑器(dialog-recipe 任务的 config 表单)
 //
-// 数据面:DialogRecipeConfig(见 shared/types.ts)= npcKind + steps[]
-// worker 侧(resupply-runner → runDialogRecipe)按 npcKind='item-merchant' 取这份配方,
+// 数据面:DialogRecipeConfig(见 shared/types.ts)= steps[];由城镇档案里 NPC 的 recipeName 引用
+// worker 侧(resupply-runner → runDialogRecipe)按城镇档案里 NPC 的 recipeName 取这份配方,
 // 逐步执行 steps:点对话选项 / 点坐标 / 按键 / 等待 / 输入文字 / 条件分支 / 关闭对话
 //
 // 注意:if-text 的 thenId / elseId 引用同一份配方里其它步骤的 id(下拉里选,不用手填)
@@ -117,27 +117,11 @@ export function DialogRecipeForm(props: DialogRecipeFormProps) {
         <div className="flex items-center gap-2">
           <MessageSquare size={14} className="text-accent-cyan" />
           <span className="font-medium text-text-primary">对话配方</span>
-          <span className="text-text-muted text-[11px]">(与某类 NPC 对话时的步骤脚本,按顺序执行)</span>
+          <span className="text-text-muted text-[11px]">(在某个 NPC 处按顺序执行的步骤脚本)</span>
         </div>
         <div className="text-text-muted text-[11px]">
-          死亡回城补给时,worker 从全部配方里取 npcKind =「item-merchant」的那份执行(修理装备 / 买药)。 对话窗口每开一次跑一遍 steps。
+          一份配方就是一段步骤脚本;由城镇档案里的某个 NPC 用「配方」字段点名引用它,对话窗口每开一次跑一遍 steps。
         </div>
-      </div>
-
-      {/* NPC 类型 */}
-      <div>
-        <label className="text-sm text-text-secondary mb-1.5 block">
-          NPC 类型 npcKind <span className="text-text-muted text-[11px]">(要和城镇档案里 NPC 的 kind 对上)</span>
-        </label>
-        <input
-          type="text"
-          value={value.npcKind ?? ''}
-          onChange={(e) => patch({ npcKind: e.target.value })}
-          placeholder="item-merchant"
-          disabled={readOnly}
-          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
-        />
-        <div className="text-[10px] text-text-muted mt-1">道具商人填 item-merchant(当前补给流程只认它)</div>
       </div>
 
       {/* 步骤列表 */}

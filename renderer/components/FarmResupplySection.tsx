@@ -8,9 +8,9 @@
 //   任务启动   = runOnStart 勾上才生效(不复活,直接补给 → 前往挂机地图;已在挂机图则跳过)
 //
 // worker 侧约定(见 electron/workers/game-worker/resupply/):
-//   - 城镇档案里要有 kind='item-merchant' 的 NPC
-//   - auxConfigs.recipes 里要有 npcKind='item-merchant' 的对话配方
-//   两者缺一个,补给流程跑到商人那一步就会失败(这里只提示,不硬拦保存)
+//   - 城镇档案里每个要访问的 NPC 用 recipeName 指名一份对话配方
+//   - 补给时按档案顺序依次访问这些 NPC,各跑它自己那份配方
+//   引用的配方不存在会在启动时被 resolveAuxConfigs 拦下(这里只提示,不硬拦保存)
 
 import type { FarmResupplyConfig, FarmReviveMode } from '../../shared/types';
 
@@ -52,12 +52,12 @@ export interface FarmResupplySectionProps {
   onChange: (next: FarmResupplyConfig) => void;
   /** 可选的城镇档案名(来源:store.taskHistory 里 taskType==='town-profile' 的项,按 name 显示/取值) */
   townProfileNames: string[];
-  /** 是否已存在 npcKind='item-merchant' 的对话配方(没有时给黄色提示) */
-  hasMerchantRecipe: boolean;
+  /** 当前选中的城镇档案里,NPC 引用配方的问题(如引用了不存在的配方);空 = 没问题。只提示,不阻断保存 */
+  recipeIssue?: string | null;
 }
 
 export function FarmResupplySection(props: FarmResupplySectionProps) {
-  const { readOnly = false, value, onChange, townProfileNames, hasMerchantRecipe } = props;
+  const { readOnly = false, value, onChange, townProfileNames, recipeIssue = null } = props;
   const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
 
   const patch = (p: Partial<FarmResupplyConfig>) => onChange({ ...value, ...p });
@@ -206,12 +206,12 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
               </div>
             </div>
 
-            {/* 依赖提示:worker 只认道具商人的 NPC 与配方 */}
-            <div className={`text-[10px] ${hasMerchantRecipe ? 'text-text-muted' : 'text-accent-yellow/80'}`}>
-              {hasMerchantRecipe ? '' : '⚠ 还没有 npcKind=「item-merchant」的对话配方,补给到商人那一步会失败;'}
-              需要城镇档案里存在 kind=「item-merchant」的 NPC,且历史任务里存在 npcKind=「item-merchant」的对话配方
+            {/* 依赖提示:补给按城镇档案里 NPC 的「配方」引用依次访问,引用的配方必须存在 */}
+            <div className={`text-[10px] ${recipeIssue ? 'text-accent-yellow/80' : 'text-text-muted'}`}>
+              {recipeIssue ? `⚠ ${recipeIssue};` : ''}
+              补给时会按城镇档案里的顺序访问所有「配了配方」的 NPC,各跑它自己那份配方
               <br />
-              耐久与药水都没问题时会跳过商人直接返程;两份配置缺一样都会在补给途中报错并结束任务
+              耐久与药水都没问题时会跳过所有 NPC 直接返程;引用的配方不存在会在启动时就被拦下
               <br />
               开工补给失败(如启动时角色既不在城镇也不在挂机地图)同样会结束任务,不会带着错误的起点继续挂机
             </div>

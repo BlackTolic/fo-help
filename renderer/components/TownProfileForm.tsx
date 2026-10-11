@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { Plus, Trash2, Loader2, MapPin } from '../icons';
 import type { TownProfileConfig, TownProfileExit, TownProfileNpc, TownProfileRoute } from '../../shared/types';
+import { NPC, normalizeNpcName, npcSelectOptions } from '../../shared/npc';
 import { useStore } from '../store/useStore';
 
 /** 复活点锚点 id(与 electron/workers/game-worker/resupply/resupply-runner.ts 的 REVIVE_ANCHOR 一致) */
@@ -28,6 +29,8 @@ export interface TownProfileFormProps {
    * (点击后把 worker 读到的 {map,x,y} 填进"当前聚焦的坐标字段")
    */
   hwnd?: number;
+  /** 可选的对话配方名(来源:历史任务里 taskType==='dialog-recipe' 的项);NPC 用它指名要执行的配方 */
+  recipeNames: string[];
 }
 
 const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
@@ -35,6 +38,12 @@ const disabledCls = 'disabled:opacity-60 disabled:cursor-not-allowed';
 /** 生成一条新记录的唯一 id(沿用 TaskConfigDialog 里 waypoint/skill 的写法) */
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** 配方下拉选项:全部配方名;当前值不在列表里时补在末尾(旧数据 / 已删配方不静默丢掉) */
+function npcRecipeOptions(current: string | undefined, available: string[]): string[] {
+  const v = (current ?? '').trim();
+  return v && !available.includes(v) ? [...available, v] : [...available];
 }
 
 /** 坐标输入对(X / Y) */
@@ -74,7 +83,7 @@ function XyField({ x, y, readOnly, onFocus, onX, onY }: XyFieldProps) {
 }
 
 export function TownProfileForm(props: TownProfileFormProps) {
-  const { readOnly = false, value, onChange, hwnd } = props;
+  const { readOnly = false, value, onChange, hwnd, recipeNames } = props;
   const readWorkerPosition = useStore((s) => s.readWorkerPosition);
 
   const npcs = value.npcs ?? [];
@@ -92,7 +101,7 @@ export function TownProfileForm(props: TownProfileFormProps) {
   // ---- NPC ----
   const addNpc = () =>
     patch({
-      npcs: [...npcs, { id: makeId('npc'), kind: 'item-merchant', name: '', position: { x: 0, y: 0 } } satisfies TownProfileNpc],
+      npcs: [...npcs, { id: makeId('npc'), name: NPC.ITEM_MERCHANT, position: { x: 0, y: 0 } } satisfies TownProfileNpc],
     });
   const removeNpc = (id: string) => patch({ npcs: npcs.filter((n) => n.id !== id) });
   const patchNpc = (id: string, p: Partial<TownProfileNpc>) => patch({ npcs: npcs.map((n) => (n.id === id ? { ...n, ...p } : n)) });
@@ -282,7 +291,7 @@ export function TownProfileForm(props: TownProfileFormProps) {
             </button>
           )}
         </div>
-        <div className="text-[10px] text-text-muted mb-1.5">道具商人填 item-merchant(当前补给流程只认它)</div>
+        <div className="text-[10px] text-text-muted mb-1.5">NPC 名称取值见 shared/npc.ts;「配方」留空 = 只当路线锚点,不会被访问</div>
 
         {npcs.length === 0 ? (
           <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
@@ -302,23 +311,34 @@ export function TownProfileForm(props: TownProfileFormProps) {
                   title="锚点 id(路线用 «from/to» 引用它)"
                   className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
                 />
-                <input
-                  type="text"
-                  value={npc.kind}
-                  onChange={(e) => patchNpc(npc.id, { kind: e.target.value })}
-                  disabled={readOnly}
-                  placeholder="item-merchant"
-                  title="职能:补给流程只认 item-merchant(对应对话配方的 npcKind)"
-                  className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
-                />
-                <input
-                  type="text"
-                  value={npc.name}
+                <select
+                  value={normalizeNpcName(npc.name)}
                   onChange={(e) => patchNpc(npc.id, { name: e.target.value })}
                   disabled={readOnly}
-                  placeholder="NPC 名字(游戏里显示的名字)"
-                  className={`w-40 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                />
+                  title="NPC 名称(取值见 shared/npc.ts);也是游戏里找字用的绿字名"
+                  className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                >
+                  {!normalizeNpcName(npc.name) && <option value="">(未选择)</option>}
+                  {npcSelectOptions(npc.name).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={npc.recipeName ?? ''}
+                  onChange={(e) => patchNpc(npc.id, { recipeName: e.target.value || undefined })}
+                  disabled={readOnly}
+                  title="到达这个 NPC 时执行哪份对话配方;留空 = 只当路线锚点,不会被访问"
+                  className={`w-44 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                >
+                  <option value="">(不访问:只当路线锚点)</option>
+                  {npcRecipeOptions(npc.recipeName, recipeNames).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
                 <XyField
                   x={npc.position?.x ?? 0}
                   y={npc.position?.y ?? 0}

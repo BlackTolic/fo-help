@@ -273,10 +273,14 @@ export interface FarmResupplyConfig {
 /** 城镇 NPC(道具商人/仓库等);position 为游戏内地图坐标 */
 export interface TownProfileNpc {
   id: string;
-  /** NPC 职能(与 DialogRecipeConfig.npcKind 对应,如 'potion' / 'repair' / 'storage') */
-  kind: string;
+  /** NPC 名称(中文,取值见 shared/npc.ts);既是列表里的显示名,也是游戏内找字用的绿字名 */
   name: string;
   position: { x: number; y: number };
+  /**
+   * 引用的对话配方名(= 历史任务里那份 dialog-recipe 的任务名)。
+   * 补给时按档案里的顺序依次访问所有配了它的 NPC;留空 = 只当路线锚点,不会被访问。
+   */
+  recipeName?: string;
 }
 
 /** 锚点间的一条寻路路线;waypoints 为地图坐标途径点 */
@@ -307,8 +311,8 @@ export interface TownProfileConfig {
   exits: TownProfileExit[];
 }
 
-// ===== 对话配方(dialog-recipe):与某类 NPC 对话完成修理/买药的步骤脚本 =====
-// 同为配置型"任务";farm 的 resupply 通过 StartTaskAuxConfigs.recipes 按 npcKind 取用
+// ===== 对话配方(dialog-recipe):在某个 NPC 处按顺序执行的步骤脚本(修理 / 买药等) =====
+// 同为配置型"任务";城镇档案里的 NPC 用 TownProfileNpc.recipeName 引用它,worker 按名字取用
 
 /**
  * 对话步骤:
@@ -330,11 +334,9 @@ export type DialogStep =
   | { id: string; kind: 'if-text'; text: string; thenId?: string; elseId?: string }
   | { id: string; kind: 'close-dialog' };
 
-/** 对话配方:某一类 NPC(kind 对应 TownProfileNpc.kind)的完整对话流程 */
+/** 对话配方:一段与 NPC 对话的步骤脚本;由城镇档案里的 NPC 按名字引用(见 TownProfileNpc.recipeName) */
 export interface DialogRecipeConfig {
   type: 'dialog-recipe';
-  /** NPC 职能(如 'potion' / 'repair'),resupply 按它从 recipes 里取配方 */
-  npcKind: string;
   steps: DialogStep[];
 }
 
@@ -401,11 +403,17 @@ export type TaskConfig = FarmTaskConfig | PlaceholderTaskConfig | DefaultSkillTa
  * renderer 启动任务时把 farm 配置里的引用解析成完整配置,随 start-task 一并下发,
  * worker 收到后存到 ctx.init.auxConfigs(与 taskConfig 同生命周期)
  */
+/**
+ * 下发给 worker 的对话配方:配方本体 + 它的任务名。
+ * 城镇档案里的 NPC 用 TownProfileNpc.recipeName 引用它(名字 = 历史任务里那份 dialog-recipe 的任务名)。
+ */
+export type ResupplyRecipe = DialogRecipeConfig & { name: string };
+
 export interface StartTaskAuxConfigs {
   /** 城镇档案(farm.resupply.townProfileName 指向的那份) */
   townProfile?: TownProfileConfig;
-  /** 对话配方(resupply 对话按 npcKind 从中取) */
-  recipes?: DialogRecipeConfig[];
+  /** 全部对话配方(worker 按 NPC 的 recipeName 从中取) */
+  recipes?: ResupplyRecipe[];
   /** farm 挂机地图的 OCR 中文地图名(回城后靠它找出口返回),renderer 启动时解析传入 */
   farmMapName?: string;
 }

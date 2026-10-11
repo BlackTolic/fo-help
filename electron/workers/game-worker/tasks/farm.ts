@@ -1716,7 +1716,8 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
 
     // 任务启动、角色开始移动前:先读一次地图名,当作换图判断的基线(同时按一次屏蔽)
     await blockAllPlayersIfMapChanged(run);
-
+    // 暂停1s,确保地图加载完成
+    await new Promise((resolve) => setTimeout(resolve, 500));
     // 启动时的一次性环境处理(小地图缩放 / 关闭聊天背景);移动攻击测试路径由 opts 关掉
     if (opts?.allowStartupEnv !== false) {
       await runStartupEnvSetup(run);

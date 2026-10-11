@@ -1,7 +1,7 @@
-// 回城补给(resupply):确认位置 / 复活 → 检查耐久/药水 → (按需)找道具商人跑对话配方 → 前往挂机图
+// 回城补给(resupply):确认位置 / 复活 → 检查耐久/药水 → (按需)按档案顺序访问 NPC 跑对话配方 → 前往挂机图
 //
 // 两个触发器(farm 侧注入 mode 区分,见 ResupplyOptions.mode):
-//   death(缺省) = 死亡回城补给:复活 → 确认回到城镇 → 状态检查 → 商人 → 返程(触发点见 tasks/farm.ts 的 checkDeath)
+//   death(缺省) = 死亡回城补给:复活 → 确认回到城镇 → 状态检查 → 访问 NPC → 返程(触发点见 tasks/farm.ts 的 checkDeath)
 //   start        = 开工补给:任务启动时跑一遍同一条流程(不复活;已在挂机地图则整段跳过,见 confirmStartPosition)
 //   这里不判断"该不该补给",只负责把一次补给跑完并把结果(ok/detail)交回去。
 //
@@ -11,8 +11,8 @@
 //
 // 配置来源(全部由 renderer 在 start-task 时下发):
 //   taskConfig.resupply      开关 / 复活方式(立即复活 / 回魂娃娃 / 替身娃娃) / 超时 / 要检查什么 / 要不要开工补给
-//   auxConfigs.townProfile   城镇档案(城镇地图名、商人、锚点路线、出城口)
-//   auxConfigs.recipes       对话配方(按 npcKind='item-merchant' 取)
+//   auxConfigs.townProfile   城镇档案(城镇地图名、NPC 列表、锚点路线、出城口)
+//   auxConfigs.recipes       全部对话配方;每个 NPC 用它的 recipeName 指名要跑哪一份(见 shared/types.ts)
 //   auxConfigs.farmMapName   回哪个野外图(与 exits[].toMap 对上;开工模式下也用它判断"已在挂机图")
 //
 // 中断:只认 ctx.moveAttack.running(stop 命令把它置 false),每个等待/每段行走之间都会检查;
@@ -33,9 +33,6 @@ import { sleep } from '../../../../core/utils/sleep';
 import type { FarmResupplyConfig, FarmReviveMode, TownProfileConfig, TownProfileNpc } from '../../../../shared/types';
 import type { WorkerContext } from '../context';
 import { runDialogRecipe } from './dialog-recipe';
-
-/** 道具商人的 npc.kind(对话配方也按它取) */
-const ITEM_MERCHANT_KIND = 'item-merchant';
 
 /** 复活点锚点 id(与 shared/types.ts 的 TownProfileRoute.from 约定一致) */
 const REVIVE_ANCHOR = 'revive';
@@ -111,9 +108,9 @@ export interface ResupplyOptions {
   label?: string;
   /**
    * 触发模式(缺省 'death'):
-   * - 'death' 死亡回城补给:先复活 → 确认在城镇,再走 状态检查 → 商人 → 返程
+   * - 'death' 死亡回城补给:先复活 → 确认在城镇,再走 状态检查 → 访问 NPC → 返程
    * - 'start' 开工补给:任务启动时跑。不复活;先确认位置(已在挂机地图 = 整段跳过;
-   *           不在城镇也不在挂机地图 = 直接失败),之后的 状态检查 → 商人 → 返程 完全复用
+   *           不在城镇也不在挂机地图 = 直接失败),之后的 状态检查 → 访问 NPC → 返程 完全复用
    */
   mode?: ResupplyMode;
 }
@@ -224,7 +221,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
 
   let result: ResupplyResult = { ok: false, detail: '未执行' };
   try {
-    // 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)商人 → 返程
+    // 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程
     result = await runResupplySteps(flow);
   } catch (e: any) {
     result = { ok: false, detail: `异常: ${e?.message ?? e}` };
@@ -243,7 +240,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
   return result;
 }
 
-/** 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)商人 → 返程 */
+/** 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程 */
 async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
   const { ctx, deps, label, town, stopped, mode } = flow;
   // 开工模式不复活,状态文案直接说"确认位置"(第一步就是读地图名,见 confirmStartPosition)
@@ -280,19 +277,25 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
   if (stopped()) return { ok: false, detail: `任务已停止,放弃${label}` };
 
   let fromAnchor = REVIVE_ANCHOR;
+  // 按档案里的顺序访问所有"引用了对话配方"的 NPC;没引用的只当路线锚点
+  const targets = town.npcs.filter((n) => (n.recipeName ?? '').trim());
   if (reasons.length === 0) {
-    ctx.sendLog('info', `[${label}] 装备耐久与药水都没问题,不需要去商人,直接返程`);
+    ctx.sendLog('info', `[${label}] 装备耐久与药水都没问题,不访问任何 NPC,直接返程`);
+  } else if (targets.length === 0) {
+    return {
+      ok: false,
+      detail: `触发了补给(${reasons.join('、')}),但城镇档案里没有任何 NPC 引用对话配方,不知道该做什么`,
+    };
   } else {
-    const merchant = town.npcs.find((n) => n.kind === ITEM_MERCHANT_KIND);
-    if (!merchant) {
-      return {
-        ok: false,
-        detail: `城镇档案里没有 kind=${ITEM_MERCHANT_KIND} 的 NPC(触发原因:${reasons.join('、')}),无法补给`,
-      };
+    ctx.sendLog(
+      'info',
+      `[${label}] 触发补给(${reasons.join('、')}) → 计划访问 ${targets.length} 个 NPC:${targets.map((n) => n.name).join(' → ')}`,
+    );
+    for (const npc of targets) {
+      const visit = await visitNpc(flow, npc, fromAnchor);
+      if (!visit.ok) return visit;
+      fromAnchor = npc.id;
     }
-    const visit = await visitMerchant(flow, merchant, reasons);
-    if (!visit.ok) return visit;
-    fromAnchor = merchant.id;
   }
 
   // 4) 返程:出城口 → 等切回挂机图
@@ -515,21 +518,33 @@ async function inspectStatus(flow: ResupplyFlow): Promise<string[]> {
 }
 
 /**
- * 去道具商人并执行对话配方:
- *   1. 按城镇档案路线走到商人附近(没有路线 = 直接从当前位置走过去);
+ * 去某个 NPC 并执行它引用的对话配方:
+ *   1. 按城镇档案路线从上一步的锚点走到它附近(没有路线 = 直接从当前位置走过去);
  *   2. 到了以后用 findNpc 找字精确定位(路线只负责"走近",最终点击以找字为准),找不到重试几次;
  *   3. openDialog 必须成功(用 '@X' 关闭钮反查);
- *   4. 按 npcKind='item-merchant' 取对话配方执行,跑完/失败都兜底关窗。
+ *   4. 执行 npc.recipeName 指名的那份配方(配方不存在 = 直接失败),跑完/失败都兜底关窗。
  */
-async function visitMerchant(flow: ResupplyFlow, merchant: TownProfileNpc, reasons: string[]): Promise<ResupplyResult> {
+async function visitNpc(flow: ResupplyFlow, npc: TownProfileNpc, fromAnchor: string): Promise<ResupplyResult> {
   const { ctx, deps, label, town, stopped } = flow;
   const { client, size, movement } = deps;
 
-  const route = resolveRoute(town, REVIVE_ANCHOR, merchant.id);
-  const points = appendTarget(route, merchant.position);
+  const recipeName = (npc.recipeName ?? '').trim();
+  const recipe = (ctx.init.auxConfigs?.recipes ?? []).find((r) => r.name === recipeName);
+  if (!recipe) {
+    const available = (ctx.init.auxConfigs?.recipes ?? []).map((r) => r.name);
+    return {
+      ok: false,
+      detail:
+        `NPC「${npc.name}」引用的对话配方「${recipeName}」不存在(可能已被删除或改名)。` +
+        (available.length > 0 ? `当前可用配方:${available.join('、')}` : '当前没有任何对话配方'),
+    };
+  }
+
+  const route = resolveRoute(town, fromAnchor, npc.id);
+  const points = appendTarget(route, npc.position);
   ctx.sendLog(
     'info',
-    `[${label}] 触发补给(${reasons.join('、')}) → 去「${merchant.name}」(${merchant.position.x},${merchant.position.y})` +
+    `[${label}] 去「${npc.name}」(${npc.position.x},${npc.position.y}) 执行配方「${recipeName}」` +
       (route.length > 0 ? `,途经 ${route.length} 个点` : ',没配路线,直接从当前位置走过去'),
   );
 
@@ -539,45 +554,32 @@ async function visitMerchant(flow: ResupplyFlow, merchant: TownProfileNpc, reaso
     isStopped: stopped,
     onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
   });
-  if (stopped()) return { ok: false, detail: '任务已停止(去商人的路上)' };
+  if (stopped()) return { ok: false, detail: `任务已停止(去「${npc.name}」的路上)` };
   if (!arrived) {
     // 没走到不算失败:找字可能仍能命中(途经点卡住但人已经在附近),交给下面的 findNpc 决定
-    ctx.sendLog('warn', `[${label}] 有途经点没走到,继续尝试找 NPC「${merchant.name}」`);
+    ctx.sendLog('warn', `[${label}] 有途经点没走到,继续尝试找 NPC「${npc.name}」`);
   }
 
   const dialog = new NpcDialog(client, size);
   // 找字精确定位:路线只负责"走近",最终点击以找字为准,找不到重试几次
-  let pos = await dialog.findNpc(merchant.name);
+  let pos = await dialog.findNpc(npc.name);
   for (let i = 1; !pos && i < RESUPPLY.npcFindAttempts; i++) {
-    ctx.sendLog('warn', `[${label}] 没找到 NPC「${merchant.name}」,重试 ${i + 1}/${RESUPPLY.npcFindAttempts}`);
+    ctx.sendLog('warn', `[${label}] 没找到 NPC「${npc.name}」,重试 ${i + 1}/${RESUPPLY.npcFindAttempts}`);
     await sleep(RESUPPLY.npcFindRetryMs);
-    pos = await dialog.findNpc(merchant.name);
+    pos = await dialog.findNpc(npc.name);
   }
   if (!pos) {
     return {
       ok: false,
-      detail: `走到商人附近后仍找不到 NPC「${merchant.name}」(核对城镇档案里的 NPC 名字/坐标,以及绿色字扫描区 NPC_SCAN_BOX)`,
+      detail: `走到「${npc.name}」附近后仍找不到它(核对城镇档案里的 NPC 名字/坐标,以及绿色字扫描区 NPC_SCAN_BOX)`,
     };
   }
-  ctx.sendLog('info', `[${label}] 找到 NPC「${merchant.name}」@(${pos.x},${pos.y}),打开对话`);
+  ctx.sendLog('info', `[${label}] 找到 NPC「${npc.name}」@(${pos.x},${pos.y}),打开对话`);
 
   if (!(await dialog.openDialog(pos))) {
     return {
       ok: false,
-      detail: `打开「${merchant.name}」的对话失败(没读到 '@X' 关闭钮:对话框没弹出,或 DIALOG_CLOSE_BTN 的区域/颜色没配对)`,
-    };
-  }
-
-  // 执行对话配方
-  const recipe = (ctx.init.auxConfigs?.recipes ?? []).find((r) => r.npcKind === ITEM_MERCHANT_KIND);
-
-  console.log(`visitMerchant ${merchant.name} ${JSON.stringify(recipe)}`);
-
-  if (!recipe) {
-    await dialog.closeDialog();
-    return {
-      ok: false,
-      detail: `auxConfigs.recipes 里没有 npcKind=${ITEM_MERCHANT_KIND} 的对话配方(修理/买药步骤无处可取)`,
+      detail: `打开「${npc.name}」的对话失败(没读到 '@X' 关闭钮:对话框没弹出,或 DIALOG_CLOSE_BTN 的区域/颜色没配对)`,
     };
   }
 

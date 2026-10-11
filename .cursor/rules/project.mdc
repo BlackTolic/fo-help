@@ -1,0 +1,17 @@
+---
+description: fo-help（QQ幻想挂机助手）项目编码规范
+globs:
+alwaysApply: true
+---
+
+本仓库的编码规范统一维护在根目录 `AGENTS.md`，请先完整阅读并遵守：
+`@AGENTS.md`
+
+要点速览（完整内容以 `AGENTS.md` 为准）：
+
+- 完成标准：`npm run typecheck && npm run lint` 必须通过；项目无测试框架，不要新增测试。`format:check` 对全仓是红的（36 个历史遗留文件），只格式化你自己改动的文件，不要跑全量 `npm run format`。
+- 硬约束：import 一律用相对路径，禁用 `@core` / `@shared` / `@renderer` 别名；`core/`、`shared/` 需同时兼容 CJS 与 ESM（禁 `import.meta`、顶层 await、DOM API）；渲染进程不得 import `core/platform/damoo`、`core/interrupt/handlers.ts`、`core/logger*.ts`、`electron/**`、`node:*`；子进程用 `utilityProcess` 而非 `worker_threads`。
+- 新增 IPC 通道要同步改 4 个文件：`shared/ipc-channels.ts`、`electron/main.ts`、`electron/preload.ts`、`renderer/types.ts`。
+- 渲染进程：函数组件 + hooks（禁 `React.FC`），状态走单一 zustand store，只经 `window.fohelp` 调主进程，图标只能从 `renderer/icons.ts` 导入，样式用 Tailwind 语义 token。
+- 禁区：`.deprecated/` 不读不改不 import；不擅自加依赖；不改构建产物；不新增文档文件。
+- 提交信息用中文、无前缀。

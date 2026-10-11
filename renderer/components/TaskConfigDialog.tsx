@@ -26,6 +26,7 @@ import type {
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
 import { FARM_MAPS } from '../farm-maps';
 import { isConfigOnlyTaskType, referencedByFarmTasks } from '../aux-configs';
+import { NPC, normalizeNpcName } from '../../shared/npc';
 import { FarmResupplySection, DEFAULT_RESUPPLY, normalizeResupply } from './FarmResupplySection';
 import { TownProfileForm } from './TownProfileForm';
 import { DialogRecipeForm } from './DialogRecipeForm';
@@ -130,10 +131,9 @@ const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
   exits: [],
 };
 
-/** 新建对话配方的默认值(npcKind 默认 item-merchant:当前补给流程只认它) */
+/** 新建对话配方的默认值(配方是纯步骤脚本,由城镇档案里的 NPC 按名字引用) */
 const DEFAULT_DIALOG_RECIPE: DialogRecipeConfig = {
   type: 'dialog-recipe',
-  npcKind: 'item-merchant',
   steps: [],
 };
 
@@ -279,8 +279,8 @@ export function TaskConfigDialog({
   const deleteTaskByName = useStore((s) => s.deleteTaskByName);
   /** 死亡回城补给可选的城镇档案名(历史任务里所有 town-profile,按 name 存/取) */
   const townProfileNames = taskHistory.filter((h) => h.config.type === 'town-profile').map((h) => h.name);
-  /** 是否已有道具商人的对话配方(补给流程只认 npcKind='item-merchant') —— 只用于提示,不阻断保存 */
-  const hasMerchantRecipe = taskHistory.some((h) => h.config.type === 'dialog-recipe' && h.config.npcKind === 'item-merchant');
+  /** 全部对话配方名(城镇档案里的 NPC 用它指名要执行的配方) */
+  const recipeNames = taskHistory.filter((h) => h.config.type === 'dialog-recipe').map((h) => h.name);
   /** 已保存的城镇档案 / 对话配方(配置型任务在各自卡片里管理,不进历史任务) */
   const savedTownProfiles = taskHistory.filter((h) => h.config.type === 'town-profile');
   const savedDialogRecipes = taskHistory.filter((h) => h.config.type === 'dialog-recipe');
@@ -317,6 +317,17 @@ export function TaskConfigDialog({
 
   // 城镇档案 / 对话配方(配置型"任务":只存储/编辑,保存后不启动 worker)
   const [townProfile, setTownProfile] = useState<TownProfileConfig>(DEFAULT_TOWN_PROFILE);
+  /** 当前编辑的城镇档案里,NPC 的配方引用问题(只提示,不阻断保存;启动时 resolveAuxConfigs 还会再拦一次) */
+  const missingRecipes = [
+    ...new Set(townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter((x) => x && !recipeNames.includes(x))),
+  ];
+  const referencedRecipes = townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter(Boolean);
+  const recipeIssue =
+    missingRecipes.length > 0
+      ? `NPC 引用的对话配方不存在:${missingRecipes.join('、')}`
+      : referencedRecipes.length === 0
+        ? '档案里的 NPC 都没有选配方,补给时不会访问任何 NPC'
+        : null;
   const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
 
   // 缺省技能配置
@@ -356,7 +367,7 @@ export function TaskConfigDialog({
   /** 把一条已保存的对话配方载入表单(编辑态,保存时覆盖它) */
   const loadDialogRecipe = (stored: StoredTaskConfig) => {
     const recipe = stored.config as DialogRecipeConfig;
-    setDialogRecipe({ type: 'dialog-recipe', npcKind: recipe.npcKind ?? 'item-merchant', steps: recipe.steps ?? [] });
+    setDialogRecipe({ type: 'dialog-recipe', steps: recipe.steps ?? [] });
     setEditingName(stored.name);
     setSaveError(null);
   };
@@ -478,7 +489,7 @@ export function TaskConfigDialog({
       });
     } else if (cfg.type === 'dialog-recipe') {
       const recipe = cfg as DialogRecipeConfig;
-      setDialogRecipe({ type: 'dialog-recipe', npcKind: recipe.npcKind ?? 'item-merchant', steps: recipe.steps ?? [] });
+      setDialogRecipe({ type: 'dialog-recipe', steps: recipe.steps ?? [] });
     }
   };
 
@@ -642,14 +653,14 @@ export function TaskConfigDialog({
         type: 'town-profile',
         mapName: townProfile.mapName.trim(),
         revivePoint: { x: (townProfile.revivePoint?.x ?? 0) | 0, y: (townProfile.revivePoint?.y ?? 0) | 0 },
-        // id / 名字全空的记录丢掉(留着只会让 worker 白走一趟);kind 留空按 item-merchant 兜底
+        // id / 名字全空的记录丢掉(留着只会让 worker 白走一趟);recipeName 空 = 只当路线锚点,不会被访问
         npcs: townProfile.npcs
           .filter((n) => (n.id ?? '').trim() || (n.name ?? '').trim())
           .map((n) => ({
             id: (n.id ?? '').trim(),
-            kind: (n.kind ?? '').trim() || 'item-merchant',
-            name: (n.name ?? '').trim(),
+            name: normalizeNpcName(n.name) || NPC.ITEM_MERCHANT,
             position: { x: (n.position?.x ?? 0) | 0, y: (n.position?.y ?? 0) | 0 },
+            recipeName: (n.recipeName ?? '').trim() || undefined,
           })),
         // 起点/终点没填的路线丢掉(worker 的 resolveRoute 按 from/to 精确匹配,空值永远不会命中)
         routes: townProfile.routes
@@ -672,7 +683,6 @@ export function TaskConfigDialog({
     if (taskType === 'dialog-recipe') {
       return {
         type: 'dialog-recipe',
-        npcKind: dialogRecipe.npcKind.trim() || 'item-merchant',
         // 步骤原样保存(每步的字段由它的 kind 决定,界面已保证必填项存在)
         steps: dialogRecipe.steps,
       };
@@ -690,8 +700,12 @@ export function TaskConfigDialog({
     }
     if (taskType === 'town-profile') {
       const cfg = buildConfig();
-      if ((cfg.type === 'town-profile' ? cfg.npcs : []).length === 0) {
-        return '城镇档案至少需要 1 个 NPC(补给流程靠它找到道具商人)';
+      const npcs = cfg.type === 'town-profile' ? cfg.npcs : [];
+      if (npcs.length === 0) {
+        return '城镇档案至少需要 1 个 NPC';
+      }
+      if (!npcs.some((n) => (n.recipeName ?? '').trim())) {
+        return '城镇档案里至少要有一个 NPC 选了「配方」,否则回城补给不会访问任何 NPC';
       }
     }
     if (taskType === 'dialog-recipe') {
@@ -972,7 +986,7 @@ export function TaskConfigDialog({
               resupply={resupply}
               setResupply={setResupply}
               townProfileNames={townProfileNames}
-              hasMerchantRecipe={hasMerchantRecipe}
+              recipeIssue={recipeIssue}
               blockAllPlayersOnNewMap={blockAllPlayersOnNewMap}
               setBlockAllPlayersOnNewMap={setBlockAllPlayersOnNewMap}
               zoomOutMinimap={zoomOutMinimap}
@@ -1040,7 +1054,7 @@ export function TaskConfigDialog({
                   {editingName ? `正在编辑「${editingName}」` : '新建(保存时命名)'}
                 </span>
               </div>
-              <TownProfileForm readOnly={readOnly} value={townProfile} onChange={setTownProfile} hwnd={hwnd} />
+              <TownProfileForm readOnly={readOnly} value={townProfile} onChange={setTownProfile} hwnd={hwnd} recipeNames={recipeNames} />
             </>
           )}
 
@@ -1429,8 +1443,8 @@ interface FarmConfigProps {
   setResupply: (v: FarmResupplyConfig | ((prev: FarmResupplyConfig) => FarmResupplyConfig)) => void;
   /** 可选城镇档案名(历史任务里所有 town-profile 的 name) */
   townProfileNames: string[];
-  /** 是否已有 npcKind='item-merchant' 的对话配方(提示用,不阻断保存) */
-  hasMerchantRecipe: boolean;
+  /** 当前编辑的城镇档案里 NPC 引用配方的问题(提示用,不阻断保存) */
+  recipeIssue: string | null;
   /** 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4) */
   blockAllPlayersOnNewMap: boolean;
   setBlockAllPlayersOnNewMap: (v: boolean) => void;
@@ -1480,7 +1494,7 @@ function FarmConfig(props: FarmConfigProps) {
     resupply,
     setResupply,
     townProfileNames,
-    hasMerchantRecipe,
+    recipeIssue,
     blockAllPlayersOnNewMap,
     setBlockAllPlayersOnNewMap,
     zoomOutMinimap,
@@ -2516,7 +2530,7 @@ function FarmConfig(props: FarmConfigProps) {
         value={resupply}
         onChange={setResupply}
         townProfileNames={townProfileNames}
-        hasMerchantRecipe={hasMerchantRecipe}
+        recipeIssue={recipeIssue}
       />
 
       {/* 备注 */}
