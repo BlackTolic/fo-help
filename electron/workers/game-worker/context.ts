@@ -113,6 +113,14 @@ export class WorkerContext {
    */
   readonly lastCast = new Map<string, number>();
 
+  /**
+   * 挂机打怪进行中标志:生命回复(血条见底自动吃药)只在「挂机点挂机打怪过程中」扫描血条,
+   * 由 tasks/farm.ts 在挂机点循环里置位(含挂机点之间的走位),离开本段或进入死亡/回城补给时复位。
+   * 开工/回城补给的「从地图到挂机点起点」入图段等其余时刻保持 false ——
+   * 否则切图加载时血条区读不到颜色会被误判成"血量见底"而空放药品。
+   */
+  farmSpotActive = false;
+
   constructor() {
     // ★ DEBUG:在所有 import 之前打 stderr,确认子进程启动到这一行
     try {

@@ -443,9 +443,11 @@ export function TaskConfigDialog({
       setOcrRange(farm.mobFilter?.ocrRange ?? { x: 0, y: 0, w: 0, h: 0 });
       setClickOffset(farm.mobFilter?.clickOffset ?? { x: 0, y: 0 });
       // 旧技能没有施法方式/吟唱/距离字段,按旧行为(target + 400ms 吟唱 + 不限距离)补默认值
+      // 第二页键位旧配置写成 SF*,回显时归一成 TF*
       setSkills(
         (farm.skills || []).map((s) => ({
           ...s,
+          key: normalizeSkillKey(s.key),
           name: s.name || '',
           method: s.method ?? 'target',
           castMs: s.castMs ?? 400,
@@ -1296,8 +1298,12 @@ export function TaskConfigDialog({
 
 // ---- 挂机打怪配置子组件 ----
 
-/** 技能可选键(F1-F10,与 worker 的 MoveAttackSkill.key 对应) */
-const SKILL_KEY_OPTIONS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10'];
+/** 技能可选键:第一页 F1-F10 / 第二页 TF1-TF10(按一次 Tab 切页,与 worker 的 skill-key.ts 对应) */
+const SKILL_KEY_PAGE1 = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10'];
+const SKILL_KEY_PAGE2 = ['TF1', 'TF2', 'TF3', 'TF4', 'TF5', 'TF6', 'TF7', 'TF8', 'TF9', 'TF10'];
+
+/** 旧配置第二页写成 SF*,读入时归一成 TF*(与 worker 的 normalizeSkillKey 一致) */
+const normalizeSkillKey = (key: string): string => key.replace(/^SF(\d+)$/, 'TF$1');
 
 /** 施法方式选项 */
 const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string }[] = [
@@ -1678,7 +1684,7 @@ function FarmConfig(props: FarmConfigProps) {
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            技能设置 <span className="text-text-muted text-[11px]">(F1-F10;路径点从这里选择要释放的技能)</span>
+            技能设置 <span className="text-text-muted text-[11px]">(F1-F10 第一页 / TF1-TF10 第二页;路径点从这里选择要释放的技能)</span>
           </label>
           {!readOnly && (
             <button onClick={addSkill} className="text-xs btn btn-secondary flex items-center gap-1">
@@ -1690,7 +1696,8 @@ function FarmConfig(props: FarmConfigProps) {
 
         {skills.length === 0 ? (
           <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无技能,点"添加技能"配置(F1-F10 的名称/间隔/吟唱/施法距离/施法方式); 定点识别可以不配技能 = 普通攻击(右键锁定后左键点一下)
+            暂无技能,点"添加技能"配置(F1-F10 第一页 / TF1-TF10 第二页的名称/间隔/吟唱/施法距离/施法方式); 定点识别可以不配技能 =
+            普通攻击(右键锁定后左键点一下)
           </div>
         ) : (
           <div className="space-y-2">
@@ -1715,14 +1722,23 @@ function FarmConfig(props: FarmConfigProps) {
                       value={skill.key}
                       onChange={(e) => updateSkill(skill.id, { key: e.target.value })}
                       disabled={readOnly}
-                      className={`w-14 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
-                      title="技能键"
+                      className={`w-16 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                      title="技能键:第一页 F1-F10 / 第二页 TF1-TF10(按一次 Tab 切页)"
                     >
-                      {SKILL_KEY_OPTIONS.map((k) => (
-                        <option key={k} value={k}>
-                          {k}
-                        </option>
-                      ))}
+                      <optgroup label="第一页 F1-F10">
+                        {SKILL_KEY_PAGE1.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="第二页 TF1-TF10(Tab)">
+                        {SKILL_KEY_PAGE2.map((k) => (
+                          <option key={k} value={k}>
+                            {k}
+                          </option>
+                        ))}
+                      </optgroup>
                     </select>
                     <input
                       type="text"
@@ -1845,7 +1861,8 @@ function FarmConfig(props: FarmConfigProps) {
               ? '定点识别 + 智能施法会在每个挂机点循环释放全部已配置技能,直到锁定的怪名消失,再重新识别'
               : '智能施法会在每个挂机点自动释放所有就绪的状态施法技能,并从其余技能里选一个可释放的'
             : '在下方"挂机点"类型的路径点上选择要释放的技能'}
-          。定点识别也可以不配任何技能:不配 = 普通攻击(右键锁定后左键点一下)
+          。定点识别也可以不配任何技能:不配 = 普通攻击(右键锁定后左键点一下)。技能键位:F1-F10 = 第一页,TF1-TF10 = 第二页(按一次 Tab
+          在第一页/第二页之间切换;worker 放第二页技能时会「切到第二页 → 按 F 键 → 立刻切回第一页」,用完停在第一页)
         </div>
       </div>
 

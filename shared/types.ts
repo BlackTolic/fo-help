@@ -74,7 +74,7 @@ export type SkillCastMethod =
 export interface FarmSkillConfig {
   /** 唯一 id(UI 排序/删除 + 路径点绑定用) */
   id: string;
-  /** 技能键(F1-F10) */
+  /** 技能键:第一页 F1-F10 / 第二页 TF1-TF10(按一次 Tab 切到第二页;T = Tab,见 core/platform/input/skill-key.ts) */
   key: string;
   /** 技能名称(便于在路径点绑定界面辨认) */
   name?: string;

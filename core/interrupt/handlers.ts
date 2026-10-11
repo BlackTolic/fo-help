@@ -19,7 +19,8 @@ import {
 } from '../constant-ocr/popup';
 import type { CaptchaSolver, VerifyAnswer } from '../ai/captcha-solver';
 import type { TeamInviteAction } from '../../shared/types';
-import type { KeyCode } from '../platform/input/IInputProvider';
+import type { SkillKey } from '../platform/input/skill-key';
+import { pressSkillKey } from '../platform/input/skill-key';
 import type { PopupHandler, PopupMatch, PopupHandlerContext } from './types';
 
 /** 点击某个绝对屏幕坐标(瞬移 + 左键) */
@@ -56,8 +57,8 @@ export function createTeamInviteHandler(sizeKey: WindowSizeKey, action: TeamInvi
 export interface HealItem {
   /** 技能配置 id(冷却记录按 id,键位可能重复配置) */
   id: string;
-  /** 快捷栏键位 */
-  key: KeyCode;
+  /** 快捷栏键位(F1-F10 第一页 / TF1-TF10 第二页,按一次 Tab 切页) */
+  key: SkillKey;
   /** 物品名称(日志展示用) */
   name?: string;
   /** 物品冷却/使用间隔(毫秒) */
@@ -91,7 +92,7 @@ export function createHealHandler(items: HealItem[], lastUsed: ItemUseLog): Popu
         ctx.log('warn', '血量危险,但回血物品都在冷却中,本次跳过');
         return;
       }
-      await ctx.input.pressKey(item.key);
+      await pressSkillKey(ctx.input, item.key);
       lastUsed.set(item.id, Date.now());
       ctx.log('info', `血量危险,使用物品 ${item.key}${item.name ? `·${item.name}` : ''}`);
     },

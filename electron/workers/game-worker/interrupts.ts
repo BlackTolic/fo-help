@@ -19,7 +19,8 @@ import { dmApi } from '../../../core/platform/damoo/dm-api';
 import { DamooInputProvider } from '../../../core/platform/input/damoo/DamooInputProvider';
 import type { WindowSizeKey } from '../../../core/constant-ocr/popup';
 import type { FarmTaskConfig, GameResolution, TeamInviteAction } from '../../../shared/types';
-import type { KeyCode } from '../../../core/platform/input/IInputProvider';
+import type { SkillKey } from '../../../core/platform/input/skill-key';
+import { SKILL_KEYS, normalizeSkillKey } from '../../../core/platform/input/skill-key';
 import {
   InterruptWatcher,
   createVerifyCodeDetector,
@@ -78,8 +79,8 @@ function createSolver(ctx: WorkerContext): CaptchaSolver {
   });
 }
 
-/** 可作为回血药的物品键位(与 farm.ts 的技能键位校验保持一致) */
-const VALID_ITEM_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10']);
+/** 可作为回血药的物品键位(F1-F10 第一页 / TF1-TF10 第二页,与 farm.ts 的技能键位校验共用同一份) */
+const VALID_ITEM_KEYS = new Set<string>(SKILL_KEYS);
 
 /** 一次装配的结果:规则 + 配置指纹(指纹用于判断 start-task 后要不要重建) */
 interface WatchdogPlan {
@@ -93,14 +94,19 @@ function resolveHealItems(ctx: WorkerContext, ids: string[]): HealItem[] {
   const cfg = ctx.init.taskConfig as FarmTaskConfig | null | undefined;
   const skills = cfg?.type === 'farm' ? (cfg.skills ?? []) : [];
   const wanted = new Set(ids);
-  return skills
-    .filter((s) => s.enabled !== false && s.method === 'item' && wanted.has(s.id) && VALID_ITEM_KEYS.has(s.key))
-    .map((s) => ({
-      id: s.id,
-      key: s.key as KeyCode,
-      name: s.name,
-      cooldownMs: Math.max(0, s.cooldownMs | 0),
-    }));
+  return (
+    skills
+      .filter((s) => s.enabled !== false && s.method === 'item' && wanted.has(s.id))
+      // 旧配置第二页写成 SF*,统一归一成 TF*(兼容老配置)
+      .map((s) => ({ ...s, key: normalizeSkillKey(s.key) }))
+      .filter((s) => VALID_ITEM_KEYS.has(s.key))
+      .map((s) => ({
+        id: s.id,
+        key: s.key as SkillKey,
+        name: s.name,
+        cooldownMs: Math.max(0, s.cooldownMs | 0),
+      }))
+  );
 }
 
 /**
@@ -151,7 +157,10 @@ function buildWatchdogPlan(ctx: WorkerContext, sizeKey: WindowSizeKey): Watchdog
   if (healItems.length > 0) {
     rules.push({
       type: 'heal',
-      detector: createBloodStatusDetector(sizeKey, () => hasReadyItem(healItems, ctx.lastCast)),
+      // 只在「挂机点挂机打怪过程中」扫描(ctx.farmSpotActive),且还有 CD 就绪的回血物品时才读血条:
+      // 开工/回城补给的入图段(地图→挂机点起点)等其余时刻不扫描,
+      // 避免切图加载画面读不到颜色被误判成血量见底而空放药品
+      detector: createBloodStatusDetector(sizeKey, () => ctx.farmSpotActive && hasReadyItem(healItems, ctx.lastCast)),
       handler: createHealHandler(healItems, ctx.lastCast),
       // 物品 CD 由 handler 走共享的 ctx.lastCast 自己管,这里的规则冷却只做防抖
       cooldownMs: 1000,

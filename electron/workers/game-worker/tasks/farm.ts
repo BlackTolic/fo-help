@@ -72,6 +72,8 @@ import type { DeathDetection } from '../../../../core/perception/DeathDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
+import { SKILL_KEYS, normalizeSkillKey, pressSkillKey } from '../../../../core/platform/input/skill-key';
+import type { SkillKey } from '../../../../core/platform/input/skill-key';
 import type { Point, Rect } from '../../../../core/platform/vision/IVisionProvider';
 import type { MapPosition, MapCoordConfig } from '../../../../core/perception/types';
 import type { WindowSizeKey } from '../../../../core/constant-ocr/popup';
@@ -99,7 +101,8 @@ interface ViewGeometry {
 interface MoveAttackSkill {
   /** 技能配置 id(冷却记录按 id,key 可能重复配置) */
   id: string;
-  key: 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F7' | 'F8' | 'F9' | 'F10';
+  /** 技能键:第一页 F1-F10 / 第二页 TF1-TF10(按一次 Tab 切到第二页,见 platform/input/skill-key.ts) */
+  key: SkillKey;
   /** 技能名称(日志展示用) */
   name?: string;
   /** 技能时间间隔(毫秒,两次释放的最短间隔) */
@@ -378,8 +381,8 @@ const END_CONDITIONS: { maxLoops: number | null } = {
   maxLoops: null,
 };
 
-/** 技能键位白名单 */
-const VALID_SKILL_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10']);
+/** 技能键位白名单(F1-F10 第一页 / TF1-TF10 第二页,见 platform/input/skill-key.ts) */
+const VALID_SKILL_KEYS = new Set<string>(SKILL_KEYS);
 
 /** 旧配置模式 → 新模式(旧的 single/patrol/aoe 统一迁到定点打怪) */
 const LEGACY_MODE_MAP: Record<string, ResolvedConfig['mode']> = {
@@ -771,18 +774,22 @@ function resolveMode(cfg: FarmTaskConfig | null): ResolvedConfig['mode'] {
 
 /** 任务级技能:只留启用的 + 键位合法的;数值兜底并夹取(兼容旧配置缺字段) */
 function resolveSkills(cfg: FarmTaskConfig | null): MoveAttackSkill[] {
-  return (cfg?.skills ?? [])
-    .filter((s) => s.enabled !== false)
-    .filter((s) => VALID_SKILL_KEYS.has(s.key))
-    .map((s) => ({
-      id: s.id,
-      key: s.key as MoveAttackSkill['key'],
-      name: s.name,
-      cooldownMs: Math.max(0, s.cooldownMs | 0),
-      castMs: Math.max(0, s.castMs ?? 400),
-      rangePx: Math.max(0, s.rangePx ?? 0),
-      method: (s.method ?? 'target') as MoveAttackSkill['method'],
-    }));
+  return (
+    (cfg?.skills ?? [])
+      .filter((s) => s.enabled !== false)
+      // 旧配置第二页写成 SF*,统一归一成 TF*(兼容老配置)
+      .map((s) => ({ ...s, key: normalizeSkillKey(s.key) }))
+      .filter((s) => VALID_SKILL_KEYS.has(s.key))
+      .map((s) => ({
+        id: s.id,
+        key: s.key as SkillKey,
+        name: s.name,
+        cooldownMs: Math.max(0, s.cooldownMs | 0),
+        castMs: Math.max(0, s.castMs ?? 400),
+        rangePx: Math.max(0, s.rangePx ?? 0),
+        method: (s.method ?? 'target') as MoveAttackSkill['method'],
+      }))
+  );
 }
 
 /**
@@ -1035,13 +1042,13 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
 
   switch (skill.method) {
     case 'quick':
-      await input.pressKey(skill.key);
+      await pressSkillKey(input, skill.key);
       if (skill.castMs > 0) await sleep(skill.castMs);
       ctx.sendLog('info', `[${label}] 释放 ${name}(快捷施法)`);
       return true;
 
     case 'item':
-      await input.pressKey(skill.key);
+      await pressSkillKey(input, skill.key);
       ctx.sendLog('info', `[${label}] 使用物品 ${name}(物品使用)`);
       return true;
 
@@ -1050,7 +1057,7 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
       await input.delay(200);
       await input.click('right');
       await input.delay(200);
-      await input.pressKey(skill.key);
+      await pressSkillKey(input, skill.key);
       if (skill.castMs > 0) await sleep(skill.castMs);
       ctx.sendLog('info', `[${label}] 释放 ${name} @自身(状态施法)`);
       return true;
@@ -1062,7 +1069,7 @@ async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point |
         return false;
       }
       await input.moveMouse(clickPos, { kind: 'instant' });
-      await input.pressKey(skill.key);
+      await pressSkillKey(input, skill.key);
       await input.click('left');
       // 在施法过程中再补充100ms
       if (skill.castMs > 0) await sleep(skill.castMs + 100);
@@ -1566,54 +1573,62 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         break;
       }
 
-      // 移动前先把能捡的捡掉(移动本身是连续左键点击,拾取点击会和它抢鼠标):
-      // 一轮会把范围内能找到的物品都捡完才返回,所以捡完才走下一个点
-      if ((await runPickup(run)) === 'picked') {
-        // 捡东西会把人走到物品旁边 → 重记"上一位置",免得定点打怪的方向算歪
-        prev = (await run.movement.readPosition()) ?? prev;
-      }
+      // 从这里到本点结束 = 挂机循环(挂机点之间的走位 + 打怪):允许看门狗的生命回复扫描血条
+      // (见 ctx.farmSpotActive)。每次进入本段置位、离开(含 continue)在 finally 复位 ——
+      // 挂机点之间的走位也算在内;只有「从地图到挂机点起点」(开工/回城补给的入图段)和死亡/补给期间不扫描。
+      ctx.farmSpotActive = true;
+      try {
+        // 移动前先把能捡的捡掉(移动本身是连续左键点击,拾取点击会和它抢鼠标):
+        // 一轮会把范围内能找到的物品都捡完才返回,所以捡完才走下一个点
+        if ((await runPickup(run)) === 'picked') {
+          // 捡东西会把人走到物品旁边 → 重记"上一位置",免得定点打怪的方向算歪
+          prev = (await run.movement.readPosition()) ?? prev;
+        }
 
-      // 移动到下一个路径点:精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即到位;
-      // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住(3s 没动视为卡住)
-      const arrived = await run.movement.moveTo(
-        { map: mapName, x: wp.x, y: wp.y },
-        {
-          arriveTolerance: 1, // 到达容忍度:1 个单位内即到位
-          stepIntervalMs: conf.stepIntervalMs, // 每次移动间隔
-          noMoveTimeoutMs: 2000, // 1.5s 没动视为卡住
-          moveEpsilon: 0.5, // 1 个单位内即到位
-        },
-      );
-      // 读取当前位置(可能超出画面,落进 UI 区域)
-      const current: MapPosition | null = await run.movement.readPosition();
-      if (current?.map) mapName = current.map;
-      // 落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects
-      const here: MapPosition | null = current ?? prev;
+        // 移动到下一个路径点:精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即到位;
+        // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住(3s 没动视为卡住)
+        const arrived = await run.movement.moveTo(
+          { map: mapName, x: wp.x, y: wp.y },
+          {
+            arriveTolerance: 1, // 到达容忍度:1 个单位内即到位
+            stepIntervalMs: conf.stepIntervalMs, // 每次移动间隔
+            noMoveTimeoutMs: 2000, // 1.5s 没动视为卡住
+            moveEpsilon: 0.5, // 1 个单位内即到位
+          },
+        );
+        // 读取当前位置(可能超出画面,落进 UI 区域)
+        const current: MapPosition | null = await run.movement.readPosition();
+        if (current?.map) mapName = current.map;
+        // 落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects
+        const here: MapPosition | null = current ?? prev;
 
-      if (!arrived) {
-        stuckCount++;
-        ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达(累计卡住 ${stuckCount} 个点),跳过`);
+        if (!arrived) {
+          stuckCount++;
+          ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达(累计卡住 ${stuckCount} 个点),跳过`);
+          prev = here;
+          continue;
+        }
+        // 到达后重置卡住计数
+        stuckCount = 0;
+        if (!here) continue;
+
+        // 处理不同类型的路径点
+        if (wp.type !== 'farm-spot') {
+          // 休息点 / 路径中间点:只路过,不放技能
+          ctx.sendLog('info', `[${label}] 到达 (${here.x},${here.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
+          // 挂机点:定点识别或定点打怪
+        } else if (conf.mode === 'fixed-detect') {
+          // 定点识别:识别怪名 → 左键点一下锁定(HUD 出现名字)→ 按配置打到怪死
+          // (连续识别不到怪 / 扫到的都是尸体 = 结束本挂机点)
+          await runDetectSpot(run, wp);
+        } else {
+          // 定点打怪(默认):不识别,技能打在固定方向
+          await runFixedSpot(run, wp, here, prev);
+        }
         prev = here;
-        continue;
+      } finally {
+        ctx.farmSpotActive = false;
       }
-      // 到达后重置卡住计数
-      stuckCount = 0;
-      if (!here) continue;
-
-      // 处理不同类型的路径点
-      if (wp.type !== 'farm-spot') {
-        // 休息点 / 路径中间点:只路过,不放技能
-        ctx.sendLog('info', `[${label}] 到达 (${here.x},${here.y}) ${wp.type === 'rest' ? '休息点' : '路径点'},不放技能`);
-        // 挂机点:定点识别或定点打怪
-      } else if (conf.mode === 'fixed-detect') {
-        // 定点识别:识别怪名 → 左键点一下锁定(HUD 出现名字)→ 按配置打到怪死
-        // (连续识别不到怪 / 扫到的都是尸体 = 结束本挂机点)
-        await runDetectSpot(run, wp);
-      } else {
-        // 定点打怪(默认):不识别,技能打在固定方向
-        await runFixedSpot(run, wp, here, prev);
-      }
-      prev = here;
     }
   }
 

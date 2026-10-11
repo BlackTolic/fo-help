@@ -283,6 +283,16 @@
         "rangePx": 0,
         "method": "quick",
         "enabled": true
+      },
+      {
+        "id": "skill-1791700490261-c2nq",
+        "key": "TF10",
+        "name": "11",
+        "cooldownMs": 500000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
       }
     ],
     "movementSpeed": 500,
@@ -310,5 +320,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791693396904
+  "updatedAt": 1791703477479
 }

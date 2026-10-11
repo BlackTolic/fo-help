@@ -106,21 +106,22 @@ function roiCenter(x1: number, y1: number, x2: number, y2: number): Point {
  * 血条见底检测(生命回复用)
  * 区域内找不到黄/绿色 = 血量进入危险状态 → 返回匹配
  *
- * @param isHealReady 可选:判断"是否还有 CD 就绪的回血物品";返回 false 时本次不触发,
- *   避免物品全在冷却中还反复触发 handler(handler 里仍会再判断一次)
+ * @param shouldScan 可选:是否扫描本次(返回 false 直接不触发)。调用方用它同时限定
+ *   「只在挂机点打怪时扫描」+「还有 CD 就绪的回血物品」——切图/补给等非打怪时刻不读血条颜色,
+ *   避免加载画面读不到颜色被误判成血量见底
  */
-export function createBloodStatusDetector(sizeKey: WindowSizeKey, isHealReady?: () => boolean): PopupDetector {
+export function createBloodStatusDetector(sizeKey: WindowSizeKey, shouldScan?: () => boolean): PopupDetector {
   const conf = BLOOD_STATUS_ROI[sizeKey];
   return {
     detect(): PopupMatch | null {
+      // 非打怪时刻 / 没有 CD 就绪的回血物品:本轮不扫描
+      if (shouldScan && !shouldScan()) return null;
       // 找到黄/绿色 = 血量安全(findColor 返回 'x|y',没找到返回空串)
       const found = dmApi.findColorE(conf.x1, conf.y1, conf.x2, conf.y2, conf.color, conf.sim);
       const pos = parseFindColor(found);
       // pos有值，代表血量安全
       if (pos) return null;
-      // 没有CD就绪的回血物品
-      if (isHealReady && !isHealReady()) return null;
-      // 有CD就绪的回血物品且血量不安全
+      // 血量不安全(且调用方已确认可扫描)
       return {
         type: 'heal',
         anchor: roiCenter(conf.x1, conf.y1, conf.x2, conf.y2),
