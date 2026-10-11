@@ -163,6 +163,72 @@ export async function travelToExit(
 }
 
 /**
+ * 轮询等地图名变成目标图(与 travelToExit 第 4 步同一判定:地图名变了、或包含目标名即算成功)。
+ * 供「与 NPC 对话后传送」(飞空艇等)这类不走传送点的切图使用 —— 配方跑完后地图会自己变。
+ *
+ * @param readMapName 地图名读取函数
+ * @param startMap    出发地图名(读不到可传 null);用于"地图名变了"这一判据
+ * @param targetMapName 目标地图名
+ * @returns 超时前切到目标图 = true;超时 / 被外部停止 = false
+ */
+export async function waitForMapName(
+  readMapName: MapNameReader,
+  startMap: string | null,
+  targetMapName: string,
+  opts?: TravelOptions,
+): Promise<boolean> {
+  const options: TravelOptions = opts ?? {};
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const mapPollIntervalMs = options.mapPollIntervalMs ?? DEFAULT_MAP_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (options.isStopped?.() === true) {
+      reportWarn(options, '外部停止,放弃等待切图');
+      return false;
+    }
+    const current = await readMapNameSafe(readMapName);
+    if (current !== null && ((startMap !== null && current !== startMap) || current.includes(targetMapName))) {
+      report(options, `已切图:「${startMap ?? '?'}」→「${current}」`);
+      return true;
+    }
+    await sleep(mapPollIntervalMs);
+  }
+
+  reportWarn(options, `等待切图超时(${timeoutMs} ms):仍未从「${startMap ?? '?'}」切到「${targetMapName}」`);
+  return false;
+}
+
+/**
+ * 轮询等地图名变化(用回城卷轴后不知道会落到哪张图,只能等"地图名变了")。
+ * 与 waitForMapName 同源,区别是它不关心目标图名,只要求读到一张与 startMap 不同的图。
+ *
+ * @returns 在超时前读到一张不同的地图 = true;超时 / 被外部停止 = false
+ */
+export async function waitForMapChange(readMapName: MapNameReader, startMap: string | null, opts?: TravelOptions): Promise<boolean> {
+  const options: TravelOptions = opts ?? {};
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const mapPollIntervalMs = options.mapPollIntervalMs ?? DEFAULT_MAP_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (options.isStopped?.() === true) {
+      reportWarn(options, '外部停止,放弃等待切图');
+      return false;
+    }
+    const current = await readMapNameSafe(readMapName);
+    if (current !== null && (startMap === null || current !== startMap)) {
+      report(options, `已切图:「${startMap ?? '?'}」→「${current}」`);
+      return true;
+    }
+    await sleep(mapPollIntervalMs);
+  }
+
+  reportWarn(options, `等待切图超时(${timeoutMs} ms):地图名仍为「${startMap ?? '?'}」`);
+  return false;
+}
+
+/**
  * 同图多点行走的薄封装(补给点之间、城内几个 NPC 之间走路用)
  *
  * 不做过图检测(目标 map 传 null,moveTo 的跨图分支不生效);逐点 moveTo,

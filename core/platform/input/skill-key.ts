@@ -82,8 +82,13 @@ export async function pressSkillKey(input: IInputProvider, key: SkillKey): Promi
     return;
   }
   await input.pressKey('Tab', PAGE_SWITCH_HOLD_MS);
+
   try {
+    // 停顿100ms,确保切页完成
+    await input.delay(100);
     await input.pressKey(baseKeyOf(key));
+    // 停顿100ms,确保切页完成
+    await input.delay(100);
   } finally {
     // 无论如何都切回第一页,保证下一次技能从第一页出发
     await input.pressKey('Tab', PAGE_SWITCH_HOLD_MS);

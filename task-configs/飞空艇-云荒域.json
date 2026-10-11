@@ -1,0 +1,20 @@
+{
+  "id": "task-飞空艇-云荒域-1791732319656",
+  "name": "飞空艇-云荒域",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791709708898-jd8m",
+        "kind": "click-text",
+        "text": "云荒域",
+        "offsetX": 50,
+        "offsetY": 0,
+        "onMissing": "skip"
+      }
+    ]
+  },
+  "createdAt": 1791732319656,
+  "updatedAt": 1791732319656
+}

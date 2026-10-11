@@ -175,10 +175,11 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
   const npcErr = validateCrossingNpcRecipes(mapProfiles, recipes);
   if (npcErr) return { ok: false, error: npcErr };
 
-  // 城镇档案只在开回城补给时才需要(没开补给时角色从链首图出发,不经过城镇)
+  // 城镇档案:开回城补给时必须下发;没开补给但配了地图跨越、又指定了城镇档案时也下发
+  // (这样「不开补给、只想从出发城镇启动」也能走 NPC 传送 / 出城口)
+  const townProfileName = String(farm.resupply?.townProfileName ?? '').trim();
   let townProfile: TownProfileConfig | undefined;
-  if (resupplyOn) {
-    const townProfileName = String(farm.resupply?.townProfileName ?? '').trim();
+  if (resupplyOn || (crossings.length > 0 && townProfileName)) {
     if (!townProfileName) {
       return { ok: false, error: '回城补给已开启,但没有选择城镇档案' };
     }
@@ -202,25 +203,39 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
       }),
     };
 
-    // 启动前校验:补给得有事可做 —— 引用的配方必须都存在,且至少有一个 NPC 配了配方
-    const referenced = townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter(Boolean);
-    const missing = [...new Set(referenced.filter((x) => !recipes.some((r) => r.name === x)))];
-    if (missing.length > 0) {
-      return { ok: false, error: `城镇档案「${townProfileName}」里有 NPC 引用的对话配方不存在:${missing.join('、')}(可能已被删除或改名)` };
-    }
-    if (referenced.length === 0) {
-      return {
-        ok: false,
-        error: `城镇档案「${townProfileName}」里的 NPC 都没有引用对话配方,回城补给会无事可做(请在档案里给 NPC 选一份配方)`,
-      };
+    // 回城补给的启动前校验:补给得有事可做 —— 引用的配方必须都存在,且至少有一个 NPC 配了配方
+    if (resupplyOn) {
+      const referenced = townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter(Boolean);
+      const missing = [...new Set(referenced.filter((x) => !recipes.some((r) => r.name === x)))];
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          error: `城镇档案「${townProfileName}」里有 NPC 引用的对话配方不存在:${missing.join('、')}(可能已被删除或改名)`,
+        };
+      }
+      if (referenced.length === 0) {
+        return {
+          ok: false,
+          error: `城镇档案「${townProfileName}」里的 NPC 都没有引用对话配方,回城补给会无事可做(请在档案里给 NPC 选一份配方)`,
+        };
+      }
     }
 
-    // 配了地图跨越时,城镇要能走到链首(或链为空时直达挂机图)
+    // 传送出口校验:via='npc' 的出口必须填传送 NPC 与已存在的对话配方
+    const teleportErr = validateTownTeleportExits(townProfile, recipes);
+    if (teleportErr) return { ok: false, error: teleportErr };
+
+    // 配了地图跨越时,城镇要能到链首(走到出城口过图,或与传送 NPC 对话后传送)
     if (mapProfiles.length > 0) {
       const firstTarget = mapProfiles[0].mapName;
       const hasExit = (townProfile.exits ?? []).some((e) => (e.toMap ?? '').trim() === firstTarget);
       if (!hasExit) {
-        return { ok: false, error: `城镇档案「${townProfileName}」里没有去「${firstTarget}」的出口(exits[].toMap 要和第一张中间图名一致)` };
+        return {
+          ok: false,
+          error:
+            `城镇档案「${townProfileName}」里没有去「${firstTarget}」的出口(exits[].toMap 要和第一张中间图名一致;` +
+            `若靠 NPC 传送就把该出口的通行方式设为「对话传送」)`,
+        };
       }
     }
   }
@@ -229,4 +244,35 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
     ok: true,
     auxConfigs: { townProfile, recipes, farmMapName, mapProfiles },
   };
+}
+
+/**
+ * 校验城镇档案的传送类引用(启动前就拦下,避免跑到一半才发现配置不对):
+ *   - 出口 via='npc':必须填传送 NPC 与配方,且配方要存在
+ *   - 其它主城中转(transitFrom):必须填地图名/NPC/配方,且配方要存在
+ */
+function validateTownTeleportExits(town: TownProfileConfig, recipes: ResupplyRecipe[]): string | null {
+  for (const exit of town.exits ?? []) {
+    if (exit.via !== 'npc') continue;
+    const to = (exit.toMap ?? '').trim() || '(未填地图名)';
+    const npcName = (exit.npcName ?? '').trim();
+    const recipeName = (exit.recipeName ?? '').trim();
+    if (!npcName) return `城镇档案「${town.mapName}」的出口「→${to}」选了「对话传送」,但没有填传送 NPC 名`;
+    if (!recipeName) return `城镇档案「${town.mapName}」的出口「→${to}」选了「对话传送」,但没有选对话配方`;
+    if (!recipes.some((r) => r.name === recipeName)) {
+      return `城镇档案「${town.mapName}」的出口「→${to}」引用的对话配方「${recipeName}」不存在(可能已被删除或改名)`;
+    }
+  }
+
+  for (const transit of town.transitFrom ?? []) {
+    const from = (transit.mapName ?? '').trim() || '(未填地图名)';
+    const npcName = (transit.npcName ?? '').trim();
+    const recipeName = (transit.recipeName ?? '').trim();
+    if (!npcName) return `城镇档案「${town.mapName}」的「其它主城中转」(${from})没有填飞空艇 NPC 名`;
+    if (!recipeName) return `城镇档案「${town.mapName}」的「其它主城中转」(${from})没有选对话配方`;
+    if (!recipes.some((r) => r.name === recipeName)) {
+      return `城镇档案「${town.mapName}」的「其它主城中转」(${from})引用的对话配方「${recipeName}」不存在(可能已被删除或改名)`;
+    }
+  }
+  return null;
 }

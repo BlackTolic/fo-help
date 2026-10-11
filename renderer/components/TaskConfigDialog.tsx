@@ -14,6 +14,7 @@ import type {
   FarmPickupConfig,
   FarmResupplyConfig,
   FarmPetRideConfig,
+  FarmReturnScrollConfig,
   SkillCastMethod,
   TeamInviteAction,
   Waypoint,
@@ -31,6 +32,7 @@ import { isConfigOnlyTaskType, referencedByFarmTasks } from '../aux-configs';
 import { NPC, normalizeNpcName } from '../../shared/npc';
 import { FarmResupplySection, DEFAULT_RESUPPLY, normalizeResupply } from './FarmResupplySection';
 import { FarmPetRideSection, DEFAULT_PET_RIDE, normalizePetRide } from './FarmPetRideSection';
+import { FarmReturnScrollSection, DEFAULT_RETURN_SCROLL, normalizeReturnScroll } from './FarmReturnScrollSection';
 import { TownProfileForm } from './TownProfileForm';
 import { DialogRecipeForm } from './DialogRecipeForm';
 import { MapProfileForm } from './MapProfileForm';
@@ -133,7 +135,7 @@ const DEFAULT_PICKUP: PickupUiState = {
   clickOffset: { x: 0, y: 0 },
 };
 
-/** 新建城镇档案的默认值(空的,让用户自己加 NPC/出口 —— 至少 1 个 NPC 才能保存) */
+/** 新建城镇档案的默认值(空的,让用户自己加 NPC/出口 —— 至少 1 个 NPC 或 1 个出城口才能保存) */
 const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
   type: 'town-profile',
   mapName: '',
@@ -141,6 +143,7 @@ const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
   npcs: [],
   routes: [],
   exits: [],
+  transitFrom: [],
 };
 
 /** 新建对话配方的默认值(配方是纯步骤脚本,由城镇档案里的 NPC 按名字引用) */
@@ -336,6 +339,8 @@ export function TaskConfigDialog({
   const [mapCrossings, setMapCrossings] = useState<string[]>([]);
   // 宠物骑乘:回到城里上骑、到挂机点下骑(上骑/下骑从「宠物技能」里选)
   const [petRide, setPetRide] = useState<FarmPetRideConfig>({ ...DEFAULT_PET_RIDE });
+  // 回城卷轴:起点在野外/任意地图时先按它回主城(见 worker 的 returnViaScroll)
+  const [returnScroll, setReturnScroll] = useState<FarmReturnScrollConfig>({ ...DEFAULT_RETURN_SCROLL });
   // 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4,见 shared/game-hotkeys.ts)
   const [blockAllPlayersOnNewMap, setBlockAllPlayersOnNewMap] = useState(false);
   // 启动时的一次性环境处理(默认开启;见 shared/types.ts 的 zoomOutMinimap / closeChatBackground)
@@ -390,6 +395,7 @@ export function TaskConfigDialog({
       npcs: town.npcs ?? [],
       routes: town.routes ?? [],
       exits: town.exits ?? [],
+      transitFrom: town.transitFrom ?? [],
     });
     setEditingName(stored.name);
     setSaveError(null);
@@ -544,6 +550,8 @@ export function TaskConfigDialog({
       setMapCrossings(farm.mapCrossings ?? []);
       // 旧配置没有 petRide 字段:回显成"不开启"
       setPetRide(normalizePetRide(farm.petRide));
+      // 旧配置没有 returnScroll 字段:回显成"不开启"
+      setReturnScroll(normalizeReturnScroll(farm.returnScroll));
       // 旧配置没有这个字段:回显成"不开启"
       setBlockAllPlayersOnNewMap(farm.blockAllPlayersOnNewMap === true);
       // 旧配置没有这两个字段:缺省 = 开启
@@ -565,6 +573,7 @@ export function TaskConfigDialog({
         npcs: town.npcs ?? [],
         routes: town.routes ?? [],
         exits: town.exits ?? [],
+        transitFrom: town.transitFrom ?? [],
       });
     } else if (cfg.type === 'dialog-recipe') {
       const recipe = cfg as DialogRecipeConfig;
@@ -716,6 +725,8 @@ export function TaskConfigDialog({
           mountSkillId: isPetSkillId(skills, petRide.mountSkillId) ? petRide.mountSkillId : undefined,
           dismountSkillId: isPetSkillId(skills, petRide.dismountSkillId) ? petRide.dismountSkillId : undefined,
         },
+        // 回城卷轴:整份保存(没开启也留着参数)
+        returnScroll: normalizeReturnScroll(returnScroll),
         // 进入新地图时屏蔽所有人:只在勾选时写入(缺省不写,等价于关闭)
         blockAllPlayersOnNewMap: blockAllPlayersOnNewMap || undefined,
         // 小地图缩放 / 关闭聊天背景:缺省开启,只在取消勾选时写入 false
@@ -773,6 +784,21 @@ export function TaskConfigDialog({
             id: (e.id ?? '').trim(),
             toMap: (e.toMap ?? '').trim(),
             position: { x: (e.position?.x ?? 0) | 0, y: (e.position?.y ?? 0) | 0 },
+            // 离城方式:walk 不写(缺省);npc 要带上 NPC 名与对话配方,否则 worker 只能当"走过去"处理
+            via: e.via === 'npc' ? ('npc' as const) : undefined,
+            npcName: e.via === 'npc' ? normalizeNpcName(e.npcName) || undefined : undefined,
+            recipeName: e.via === 'npc' ? (e.recipeName ?? '').trim() || undefined : undefined,
+          })),
+        // 其它主城中转:地图名/NPC 全空的记录丢掉(留着只会让 worker 白走一趟)
+        transitFrom: (townProfile.transitFrom ?? [])
+          .filter((t) => (t.mapName ?? '').trim() || (t.npcName ?? '').trim())
+          .map((t) => ({
+            id: (t.id ?? '').trim(),
+            mapName: (t.mapName ?? '').trim(),
+            npcName: normalizeNpcName(t.npcName) || NPC.AIRSHIP_FAIRY,
+            position: { x: (t.position?.x ?? 0) | 0, y: (t.position?.y ?? 0) | 0 },
+            recipeName: (t.recipeName ?? '').trim(),
+            waypoints: (t.waypoints ?? []).map((w) => ({ x: (w.x ?? 0) | 0, y: (w.y ?? 0) | 0 })),
           })),
       };
     }
@@ -821,14 +847,23 @@ export function TaskConfigDialog({
         return '已开启宠物骑乘,但没有选择有效的「下骑」宠物技能';
       }
     }
+    if (taskType === 'farm' && returnScroll.enabled === true) {
+      if (!skills.some((s) => s.id === returnScroll.skillId && s.method === 'item')) {
+        return '已开启回城卷轴,但没有选择有效的「物品」技能(先在「技能设置」里添加施法方式为「物品」的技能)';
+      }
+      if (resupply.enabled !== true) {
+        return '回城卷轴需要配合「回城补给」使用:请开启回城补给并选择出发城镇档案(出发城镇由它决定)';
+      }
+    }
     if (taskType === 'town-profile') {
       const cfg = buildConfig();
       const npcs = cfg.type === 'town-profile' ? cfg.npcs : [];
-      if (npcs.length === 0) {
-        return '城镇档案至少需要 1 个 NPC';
+      const exits = cfg.type === 'town-profile' ? (cfg.exits ?? []) : [];
+      if (npcs.length === 0 && exits.length === 0) {
+        return '城镇档案至少需要 1 个 NPC 或 1 个出城口';
       }
-      if (!npcs.some((n) => (n.recipeName ?? '').trim())) {
-        return '城镇档案里至少要有一个 NPC 选了「配方」,否则回城补给不会访问任何 NPC';
+      if (npcs.length > 0 && !npcs.some((n) => (n.recipeName ?? '').trim()) && exits.length === 0) {
+        return '城镇档案里至少要有一个 NPC 选了「配方」,或至少配一个出城口';
       }
     }
     if (taskType === 'dialog-recipe') {
@@ -1124,6 +1159,8 @@ export function TaskConfigDialog({
               setResupply={setResupply}
               petRide={petRide}
               setPetRide={setPetRide}
+              returnScroll={returnScroll}
+              setReturnScroll={setReturnScroll}
               townProfileNames={townProfileNames}
               recipeIssue={recipeIssue}
               mapCrossings={mapCrossings}
@@ -1644,6 +1681,9 @@ interface FarmConfigProps {
   /** 宠物骑乘(回城上骑、到挂机点下骑;上骑/下骑引用「宠物技能」) */
   petRide: FarmPetRideConfig;
   setPetRide: (v: FarmPetRideConfig | ((prev: FarmPetRideConfig) => FarmPetRideConfig)) => void;
+  /** 回城卷轴(起点不认识时先回主城;引用「物品」技能) */
+  returnScroll: FarmReturnScrollConfig;
+  setReturnScroll: (v: FarmReturnScrollConfig | ((prev: FarmReturnScrollConfig) => FarmReturnScrollConfig)) => void;
   /** 可选城镇档案名(历史任务里所有 town-profile 的 name) */
   townProfileNames: string[];
   /** 当前编辑的城镇档案里 NPC 引用配方的问题(提示用,不阻断保存) */
@@ -1703,6 +1743,8 @@ function FarmConfig(props: FarmConfigProps) {
     setResupply,
     petRide,
     setPetRide,
+    returnScroll,
+    setReturnScroll,
     townProfileNames,
     recipeIssue,
     mapCrossings,
@@ -2784,6 +2826,9 @@ function FarmConfig(props: FarmConfigProps) {
 
       {/* 宠物骑乘:回城后检查宠物激活并上骑,到挂机点下骑再打怪 */}
       <FarmPetRideSection readOnly={readOnly} value={petRide} onChange={setPetRide} petSkills={petSkills} />
+
+      {/* 回城卷轴:起点在野外/任意地图时,先按卷轴回主城,再前往挂机图 */}
+      <FarmReturnScrollSection readOnly={readOnly} value={returnScroll} onChange={setReturnScroll} itemSkills={itemSkills} />
 
       {/* 备注 */}
       <div>

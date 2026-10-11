@@ -25,7 +25,7 @@ import type { Point } from '../../../../core/platform/vision/IVisionProvider';
 import type { IInputProvider } from '../../../../core/platform/input/IInputProvider';
 import { isEquipmentDamaged } from '../../../../core/perception/EquipDamageDetector';
 import { readPotionCount } from '../../../../core/perception/PotionCounter';
-import { resolveAnchoredRoute, travelToExit, travelWithinMap } from '../../../../core/navigation/RouteTraveler';
+import { resolveAnchoredRoute, travelWithinMap } from '../../../../core/navigation/RouteTraveler';
 import { crossMapProfiles } from '../../../../core/navigation/MapCrossing';
 import type { MapCrossingProfile } from '../../../../core/navigation/MapCrossing';
 import type { MovementController } from '../../../../core/navigation/MovementController';
@@ -37,6 +37,7 @@ import type { WorkerContext } from '../context';
 import { mountPet } from '../pet-ride';
 import type { ResolvedPetRide } from '../pet-ride';
 import { talkToNpc } from './talk-npc';
+import { departTownTo } from './town-departure';
 
 /** 复活点锚点 id(与 shared/types.ts 的 TownProfileRoute.from 约定一致) */
 export const REVIVE_ANCHOR = 'revive';
@@ -464,8 +465,10 @@ interface StartPositionConfirm {
 /**
  * 开工补给的位置确认(替代死亡模式的「复活 + confirmTownMap」):
  *   已在挂机地图 → skipped:用户就是从挂机图里点的启动,没必要特意跑一趟城镇;
+ *   已在过图链路 → skipped:不在城镇没商人可找,交给 farm 的「地图跨越」直接前进;
  *   已在城镇     → 继续往下走(状态检查 → 商人 → 返程);
- *   两者都不是   → 失败:角色既不在商人/出城口的锚点地图里,后面所有路线坐标都无从谈起。
+ *   以上都不是   → skipped:交给 farm 的「地图跨越/回城卷轴」处理(只有它知道出发城镇与回城卷轴)。
+ * 只有地图名连续读不到才失败(OCR 失败时无从判断起点)。
  * 地图名 OCR 偶发读空,沿用 confirmTownMap 的重读次数与间隔。
  */
 async function confirmStartPosition(flow: ResupplyFlow): Promise<StartPositionConfirm> {
@@ -496,13 +499,18 @@ async function confirmStartPosition(flow: ResupplyFlow): Promise<StartPositionCo
     await sleep(RESUPPLY.mapNameRetryMs);
   }
 
+  // 读到地图名、但既不在城镇也不在挂机图/过图链路:开工补给无从下手 → 跳过它,
+  // 交给 farm 的「地图跨越」(它掌握出发城镇 / 回城卷轴 / 主城中转,能把角色带到挂机图)。
+  // 不能在这里直接判失败:否则「从任意地图启动 + 回城卷轴自动回城」会被开工补给提前打死。
   const elsewhere = farmMapName ? `也不在挂机地图「${farmMapName}」` : '';
-  return {
-    ok: false,
-    detail: last
-      ? `当前不在城镇「${town.mapName}」(读到「${last}」)${elsewhere},无法导航到商人/挂机点(开工补给需要角色站在城镇里再启动任务)`
-      : `连续 ${RESUPPLY.mapNameAttempts} 次读不到地图名(OCR 失败:核对地图名区域/颜色与设置里的分辨率)`,
-  };
+  if (last) {
+    return {
+      ok: true,
+      skipped: true,
+      detail: `当前在「${last}」(不在城镇「${town.mapName}」${elsewhere}),跳过开工补给,交给「地图跨越/回城卷轴」前往挂机图`,
+    };
+  }
+  return { ok: false, detail: `连续 ${RESUPPLY.mapNameAttempts} 次读不到地图名(OCR 失败:核对地图名区域/颜色与设置里的分辨率)` };
 }
 
 /**
@@ -597,7 +605,8 @@ async function visitNpc(flow: ResupplyFlow, npc: TownProfileNpc, fromAnchor: str
 }
 
 /**
- * 返程:按路线走到出城口切到「链首图」(有地图跨越时;没有则直接切回挂机图),
+ * 返程:先从城镇出发到「链首图」(有地图跨越时;没有则直接切回挂机图) ——
+ * 出城口走过去,或与传送 NPC 对话后传送(见 town-departure.ts 的 departTownTo),
  * 再沿过图链路逐跳穿越回挂机图,最后走入图点。
  */
 async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise<ResupplyResult> {
@@ -610,30 +619,30 @@ async function travelBackToFarm(flow: ResupplyFlow, fromAnchor: string): Promise
 
   // 第一跳目标:配了地图跨越 = 链首那张中间图;否则 = 挂机图(旧行为)
   const firstTarget = profiles[0]?.mapName ?? farmMapName;
-  const exit = town.exits.find((e) => (e.toMap ?? '').trim() === firstTarget);
-  if (!exit) {
-    return { ok: false, detail: `城镇档案里没有去「${firstTarget}」的出口(需要一条 exits[].toMap 与该图名一致)` };
-  }
-
-  const points = resolveAnchoredRoute(town.routes ?? [], fromAnchor, exit.id);
   ctx.setStatus('resupply', `${label}:返程`);
   ctx.sendLog(
     'info',
-    `[${label}] 返程:${points.length} 个途经点 → 出城口 (${exit.position.x},${exit.position.y}) → 「${firstTarget}」` +
+    `[${label}] 返程:从城镇「${town.mapName}」前往「${firstTarget}」` +
       (profiles.length > 0 ? `,再穿越 ${profiles.map((p) => p.mapName).join(' → ')} 回「${farmMapName}」` : ''),
   );
 
-  const ok = await travelToExit(deps.movement, () => deps.readMapName(), points, exit.position, firstTarget, {
+  // 离城:走到出城口踩传送点,或与传送 NPC(飞空艇等)对话后传送(见 town-departure.ts)
+  const depart = await departTownTo({
+    ctx,
+    client: deps.client,
+    size: deps.size,
+    movement: deps.movement,
+    readMapName: deps.readMapName,
+    label,
+    town,
+    fromAnchor,
+    targetMapName: firstTarget,
     timeoutMs: RESUPPLY.travelTimeoutMs,
     moveOptions: RESUPPLY.moveOptions,
     isStopped: stopped,
-    onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
   });
-  if (!ok) {
-    return {
-      ok: false,
-      detail: stopped() ? '任务已停止(返程途中)' : `返程失败:没能走到出城口并切到「${firstTarget}」(核对城镇档案的出口坐标与路线)`,
-    };
+  if (!depart.ok) {
+    return { ok: false, detail: stopped() ? '任务已停止(返程途中)' : `返程失败:${depart.detail}` };
   }
   // 切到链首图(或挂机图)= 换图:让 farm 侧按开关决定要不要重新屏蔽所有人(先屏蔽,入图路上也生效)
   await deps.onMapMaybeChanged?.();

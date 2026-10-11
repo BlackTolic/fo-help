@@ -191,6 +191,20 @@ export interface FarmPickupConfig {
   clickOffset?: { x: number; y: number };
 }
 
+/**
+ * 回城卷轴(farm 专属):在野外/任意地图启动任务时,先按物品栏里的回城卷轴回主城,
+ * 再从主城走到飞空艇 NPC 传送(见 TownProfileConfig.transitFrom / exits)前往挂机图。
+ * 只在「起点既不是挂机图、也不在过图链路、也不是出发城镇」时才按(正常起点不消耗卷轴)。
+ */
+export interface FarmReturnScrollConfig {
+  /** 是否开启 */
+  enabled: boolean;
+  /** 回城卷轴技能 id(引用 FarmSkillConfig.id;该技能 method 必须是 'item',即物品栏快捷栏位) */
+  skillId?: string;
+  /** 按下后等切图的超时(毫秒);不配 = 60000 */
+  timeoutMs?: number;
+}
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -241,11 +255,14 @@ export interface FarmTaskConfig {
   pickup?: FarmPickupConfig;
   /** 宠物骑乘(回城后上骑、到挂机点下骑;依赖回城补给/开工补给的回城时机);不配 = 不开启 */
   petRide?: FarmPetRideConfig;
+  /** 回城卷轴(野外/任意地图启动时先按它回主城,再坐飞空艇中转/去挂机图);不配 = 不开启 */
+  returnScroll?: FarmReturnScrollConfig;
   /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
   resupply?: FarmResupplyConfig;
   /**
    * 地图跨越:出发图 → 挂机图之间要依次穿越的中间地图(引用 map-profile 任务名,按顺序)。
-   * 不含出发城镇、不含挂机图本身(城镇→首图由城镇档案 exits 负责,挂机图内由入图点负责);
+   * 不含出发城镇、不含挂机图本身(城镇→首图由城镇档案 exits 负责,可以是走过去出城口,也可以是
+   * 与飞空艇等传送 NPC 对话后传送,见 TownProfileExit.via;挂机图内由入图点负责);
    * 空/不配 = 不跨图(行为与旧配置一致)。任务启动与死亡返程都会按它逐跳穿越。
    */
   mapCrossings?: string[];
@@ -327,11 +344,41 @@ export interface TownProfileRoute {
   waypoints: { x: number; y: number }[];
 }
 
-/** 城镇出口(传送口);toMap 是游戏内 OCR 地图名(中文),如 '无泪南郊' */
+/**
+ * 城镇出口(离城方式);toMap 是游戏内 OCR 地图名(中文),如 '无泪南郊'。
+ * 两种通行方式(见 via):
+ *   - walk(缺省):走到 position 踩上传送点,游戏自动切图
+ *   - npc:走到 position 与 npcName 对话、跑完 recipeName 后传送(飞空艇/传送 NPC 用这种)
+ */
 export interface TownProfileExit {
   id: string;
   toMap: string;
   position: { x: number; y: number };
+  /** 通行方式:不填/'walk' = 踩传送点过图;'npc' = 与 NPC 对话后传送(飞空艇等) */
+  via?: 'walk' | 'npc';
+  /** via='npc' 时必填:NPC 绿字名(游戏内找字用,取值见 shared/npc.ts) */
+  npcName?: string;
+  /** via='npc' 时必填:对话配方名(= dialog-recipe 的任务名),配方里点「使用传送 → 目的地 → 确认」 */
+  recipeName?: string;
+}
+
+/**
+ * 从某个主城坐飞空艇来到本城镇(出发城镇)的中转配置:
+ * 回城卷轴可能落在别的主城 → 在那个主城走到飞空艇 NPC 跑配方传送回本城镇,再接本城镇的 exits。
+ * 不配 = 回城后必须正好落在本城镇(mapName)。
+ */
+export interface TownTransitCity {
+  id: string;
+  /** 该主城的 OCR 中文地图名 */
+  mapName: string;
+  /** 该主城飞空艇 NPC 的绿字名(取值见 shared/npc.ts) */
+  npcName: string;
+  /** 该主城飞空艇 NPC 的位置(游戏内地图坐标) */
+  position: { x: number; y: number };
+  /** 对话配方名(点「使用传送 → 本城镇 → 确认」) */
+  recipeName: string;
+  /** 从落地位置走到该 NPC 的途经点(可空;有障碍时配) */
+  waypoints?: { x: number; y: number }[];
 }
 
 export interface TownProfileConfig {
@@ -343,6 +390,8 @@ export interface TownProfileConfig {
   npcs: TownProfileNpc[];
   routes: TownProfileRoute[];
   exits: TownProfileExit[];
+  /** 从其它主城坐飞空艇回到本城镇的中转(回城卷轴落在别的主城时用);不配 = 只能落在本城镇 */
+  transitFrom?: TownTransitCity[];
 }
 
 // ===== 过图路线(map-profile):一张中间地图的两个出入口 + 途经点,供 farm 的「地图跨越」逐跳穿越 =====

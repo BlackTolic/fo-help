@@ -14,6 +14,7 @@ export interface FarmMapOption {
 export const FARM_MAPS: FarmMapOption[] = [
   { id: 'long-cheng', name: '龙城' },
   { id: 'yun-huang-bu-luo', name: '云荒部落' },
+  { id: 'yun-ze-mi-jing', name: '云泽秘径' },
   { id: 'bi-yi-cheng', name: '比翼城' },
   { id: 'lou-lan-cheng', name: '楼兰城' },
   { id: 'chu-yun-cheng', name: '出云城' },

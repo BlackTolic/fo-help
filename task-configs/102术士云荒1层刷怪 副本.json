@@ -4,8 +4,7 @@
   "taskType": "farm",
   "config": {
     "type": "farm",
-    "mapId": "custom",
-    "customMapName": "云荒部落",
+    "mapId": "yun-ze-mi-jing",
     "mode": "fixed",
     "castMode": "smart",
     "waypoints": [
@@ -286,12 +285,21 @@
       },
       {
         "id": "skill-1791700490261-c2nq",
-        "key": "TF8",
+        "key": "TF10",
         "name": "上骑",
         "cooldownMs": 0,
         "castMs": 400,
         "rangePx": 0,
         "method": "pet",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791731822606-qagp",
+        "key": "TF7",
+        "cooldownMs": 0,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
         "enabled": true
       }
     ],
@@ -311,7 +319,7 @@
     },
     "resupply": {
       "enabled": true,
-      "townProfileName": "云荒到龙城",
+      "townProfileName": "云泽秘径",
       "reviveMode": "immediate",
       "reviveTimeoutMs": 180000,
       "checkDurability": true,
@@ -322,8 +330,12 @@
       "mountSkillId": "skill-1791700490261-c2nq",
       "dismountSkillId": "skill-1791700490261-c2nq"
     },
+    "returnScroll": {
+      "enabled": true,
+      "skillId": "skill-1791731822606-qagp"
+    },
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791725263995
+  "updatedAt": 1791733729729
 }

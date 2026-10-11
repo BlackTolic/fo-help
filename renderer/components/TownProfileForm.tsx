@@ -1,14 +1,15 @@
 // 城镇档案编辑器(town-profile 任务的 config 表单)
 //
-// 数据面:TownProfileConfig(见 shared/types.ts)= 城镇地图名 + 复活点 + NPC 列表 + 锚点间路线 + 出城口
-// 这份配置由 farm 的「死亡回城补给」整份下发(auxConfigs.townProfile),worker 用它:
-//   复活点确认城镇 → 按路线走到道具商人 → 按路线走到出口 → 切回挂机图
+// 数据面:TownProfileConfig(见 shared/types.ts)= 城镇地图名 + 复活点 + NPC 列表 + 锚点间路线 + 出城口 + 其它主城中转
+// 这份配置由 farm 的「回城补给」/「地图跨越」整份下发(auxConfigs.townProfile),worker 用它:
+//   复活点确认城镇 → 按路线走到道具商人 → 按路线走到出口(走过去 / 与传送 NPC 对话)→ 切回挂机图
+//   回城卷轴落在别的主城时,再用「其它主城中转」里的飞空艇 NPC 传送回本城镇
 //
 // 锚点 id 约定(worker 侧 resolveRoute 用):'revive' = 复活点、各 npc.id、各 exit.id
 
 import { useState } from 'react';
 import { Plus, Trash2, Loader2, MapPin } from '../icons';
-import type { TownProfileConfig, TownProfileExit, TownProfileNpc, TownProfileRoute } from '../../shared/types';
+import type { TownProfileConfig, TownProfileExit, TownProfileNpc, TownProfileRoute, TownTransitCity } from '../../shared/types';
 import { NPC, normalizeNpcName, npcSelectOptions } from '../../shared/npc';
 import { useStore } from '../store/useStore';
 
@@ -89,6 +90,7 @@ export function TownProfileForm(props: TownProfileFormProps) {
   const npcs = value.npcs ?? [];
   const routes = value.routes ?? [];
   const exits = value.exits ?? [];
+  const transitFrom = value.transitFrom ?? [];
   const revivePoint = value.revivePoint ?? { x: 0, y: 0 };
 
   /** 当前聚焦的坐标字段(采集当前坐标填这里);null = 还没点过任何坐标框 → 填复活点 */
@@ -118,6 +120,30 @@ export function TownProfileForm(props: TownProfileFormProps) {
   const renameExitId = (oldId: string, newId: string) => {
     setActiveXy((cur) => (cur?.key === `exit:${oldId}` ? { key: `exit:${newId}`, label: cur.label } : cur));
     patchExit(oldId, { id: newId });
+  };
+
+  // ---- 其它主城中转(回城卷轴落在别的主城时,在该主城坐飞空艇回本城镇) ----
+  const addTransit = () =>
+    patch({
+      transitFrom: [
+        ...transitFrom,
+        {
+          id: makeId('transit'),
+          mapName: '',
+          npcName: NPC.AIRSHIP_FAIRY,
+          position: { x: 0, y: 0 },
+          recipeName: '',
+          waypoints: [],
+        } satisfies TownTransitCity,
+      ],
+    });
+  const removeTransit = (id: string) => patch({ transitFrom: transitFrom.filter((t) => t.id !== id) });
+  const patchTransit = (id: string, p: Partial<TownTransitCity>) =>
+    patch({ transitFrom: transitFrom.map((t) => (t.id === id ? { ...t, ...p } : t)) });
+  /** 改 id 时把"当前聚焦的坐标字段"一起改名,否则采集当前坐标会往一个不存在的 id 上写(静默失效) */
+  const renameTransitId = (oldId: string, newId: string) => {
+    setActiveXy((cur) => (cur?.key === `transit:${oldId}` ? { key: `transit:${newId}`, label: cur.label } : cur));
+    patchTransit(oldId, { id: newId });
   };
 
   // ---- 路线 ----
@@ -182,6 +208,10 @@ export function TownProfileForm(props: TownProfileFormProps) {
     }
     if (key.startsWith('exit:')) {
       patchExit(key.slice(5), { position: { x, y } });
+      return;
+    }
+    if (key.startsWith('transit:')) {
+      patchTransit(key.slice(8), { position: { x, y } });
       return;
     }
     if (key.startsWith('route:')) {
@@ -295,7 +325,7 @@ export function TownProfileForm(props: TownProfileFormProps) {
 
         {npcs.length === 0 ? (
           <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
-            暂无 NPC,点"添加 NPC"配置(至少 1 个才能保存)
+            暂无 NPC,点"添加 NPC"配置(至少要有一个 NPC 或一个出城口才能保存)
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -442,7 +472,7 @@ export function TownProfileForm(props: TownProfileFormProps) {
       <div>
         <div className="flex items-center justify-between mb-1.5">
           <label className="text-sm text-text-secondary">
-            出城口 <span className="text-text-muted text-[11px]">(toMap 必须和挂机地图的中文名一致,worker 靠它找回家的口)</span>
+            出城口 <span className="text-text-muted text-[11px]">(目的地 = 挂机地图名或跨图链首图名;可走过去,也可与传送 NPC 对话)</span>
           </label>
           {!readOnly && (
             <button onClick={addExit} className="text-xs btn btn-secondary flex items-center gap-1">
@@ -476,9 +506,51 @@ export function TownProfileForm(props: TownProfileFormProps) {
                   onChange={(e) => patchExit(exit.id, { toMap: e.target.value })}
                   disabled={readOnly}
                   placeholder="通往的地图名(如:无泪南郊)"
-                  title="出口通往的野外地图中文名,要和挂机地图名一致"
+                  title="出口通往的野外地图中文名,要和目的地一致(挂机地图名,或跨图链的首张图名)"
                   className={`w-48 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
                 />
+                <select
+                  value={exit.via ?? 'walk'}
+                  onChange={(e) => patchExit(exit.id, { via: e.target.value === 'npc' ? 'npc' : undefined })}
+                  disabled={readOnly}
+                  title="离城方式:走过去踩传送点,或与传送 NPC 对话后传送"
+                  className={`w-24 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                >
+                  <option value="walk">走过去</option>
+                  <option value="npc">对话传送</option>
+                </select>
+                {exit.via === 'npc' && (
+                  <>
+                    <select
+                      value={normalizeNpcName(exit.npcName)}
+                      onChange={(e) => patchExit(exit.id, { npcName: e.target.value || undefined })}
+                      disabled={readOnly}
+                      title="传送 NPC 名称(取值见 shared/npc.ts);游戏里按绿字找它"
+                      className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                    >
+                      {!normalizeNpcName(exit.npcName) && <option value="">(选择 NPC)</option>}
+                      {npcSelectOptions(exit.npcName).map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={exit.recipeName ?? ''}
+                      onChange={(e) => patchExit(exit.id, { recipeName: e.target.value || undefined })}
+                      disabled={readOnly}
+                      title="对话配方(内容为「使用传送 → 目的地 → 确认」)"
+                      className={`w-44 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                    >
+                      <option value="">(选择对话配方)</option>
+                      {npcRecipeOptions(exit.recipeName, recipeNames).map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 <XyField
                   x={exit.position?.x ?? 0}
                   y={exit.position?.y ?? 0}
@@ -497,7 +569,108 @@ export function TownProfileForm(props: TownProfileFormProps) {
             ))}
           </div>
         )}
-        <div className="text-[10px] text-text-muted mt-1">出城口点击后人会走到传送点并切图;worker 等地图名变成挂机地图名才算返程成功</div>
+        <div className="text-[10px] text-text-muted mt-1">
+          「走过去」= 走到坐标踩传送点自动切图;「对话传送」= 走到传送 NPC(飞空艇仙子等)跑对话配方后传送。 两种方式 worker
+          都等地图名变成出口填的「通往的地图名」才算成功
+        </div>
+      </div>
+
+      {/* 其它主城中转:回城卷轴落在别的主城时,用该主城的飞空艇 NPC 传送回本城镇 */}
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <label className="text-sm text-text-secondary">
+            其它主城中转{' '}
+            <span className="text-text-muted text-[11px]">(在这些主城启动、或回城卷轴落在这些主城时,用该城的飞空艇 NPC 传送回本城镇)</span>
+          </label>
+          {!readOnly && (
+            <button onClick={addTransit} className="text-xs btn btn-secondary flex items-center gap-1">
+              <Plus size={12} />
+              添加中转主城
+            </button>
+          )}
+        </div>
+
+        {transitFrom.length === 0 ? (
+          <div className="text-center py-4 text-text-muted text-xs border border-dashed border-border-base rounded">
+            暂无中转 = 回城卷轴必须正好落在本城镇(落在别的主城时走不回来)
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {transitFrom.map((transit, i) => (
+              <div key={transit.id} className="flex items-center gap-1.5 bg-bg-input p-1.5 rounded flex-wrap">
+                <span className="text-text-muted text-[11px] w-6 text-center">#{i + 1}</span>
+                <input
+                  type="text"
+                  value={transit.id}
+                  onChange={(e) => renameTransitId(transit.id, e.target.value)}
+                  disabled={readOnly}
+                  placeholder="id"
+                  title="这条中转记录的 id(仅界面内使用)"
+                  className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none font-mono ${disabledCls}`}
+                />
+                <input
+                  type="text"
+                  value={transit.mapName}
+                  onChange={(e) => patchTransit(transit.id, { mapName: e.target.value })}
+                  disabled={readOnly}
+                  placeholder="该主城地图名(如:龙城)"
+                  title="回城卷轴可能落到的另一座主城的中文地图名(和游戏内 OCR 读到的名字一致)"
+                  className={`w-48 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                />
+                <select
+                  value={normalizeNpcName(transit.npcName)}
+                  onChange={(e) => patchTransit(transit.id, { npcName: e.target.value })}
+                  disabled={readOnly}
+                  title="该主城的飞空艇 NPC(取值见 shared/npc.ts);游戏里按绿字找它"
+                  className={`w-32 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                >
+                  {!normalizeNpcName(transit.npcName) && <option value="">(选择 NPC)</option>}
+                  {npcSelectOptions(transit.npcName).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={transit.recipeName ?? ''}
+                  onChange={(e) => patchTransit(transit.id, { recipeName: e.target.value })}
+                  disabled={readOnly}
+                  title="对话配方(内容为「使用传送 → 本城镇 → 确认」)"
+                  className={`w-44 bg-bg-card border border-border-base rounded px-1.5 py-0.5 text-xs outline-none ${disabledCls}`}
+                >
+                  <option value="">(选择对话配方)</option>
+                  {npcRecipeOptions(transit.recipeName, recipeNames).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <XyField
+                  x={transit.position?.x ?? 0}
+                  y={transit.position?.y ?? 0}
+                  readOnly={readOnly}
+                  onFocus={() => setActiveXy({ key: `transit:${transit.id}`, label: `中转主城 ${transit.mapName || transit.id} 的飞空艇` })}
+                  onX={(v) => patchTransit(transit.id, { position: { x: v, y: transit.position?.y ?? 0 } })}
+                  onY={(v) => patchTransit(transit.id, { position: { x: transit.position?.x ?? 0, y: v } })}
+                />
+                <div className="flex-1" />
+                {!readOnly && (
+                  <button
+                    onClick={() => removeTransit(transit.id)}
+                    className="text-accent-red/70 hover:text-accent-red"
+                    title="删除该中转主城"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="text-[10px] text-text-muted mt-1">
+          每座你可能会落到 / 从那里启动的主城都配一条:在这些主城启动,或回城卷轴落在这些主城时,都会用该城的飞空艇 NPC
+          传送回本城镇;不含途经点也能走(直接走过去)
+        </div>
       </div>
     </div>
   );

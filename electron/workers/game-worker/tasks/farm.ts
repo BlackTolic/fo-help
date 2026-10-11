@@ -71,8 +71,8 @@ import { detectDeath } from '../../../../core/perception/DeathDetector';
 import type { DeathDetection } from '../../../../core/perception/DeathDetector';
 import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
-import { resolveAnchoredRoute, travelToExit } from '../../../../core/navigation/RouteTraveler';
 import { crossMapProfiles } from '../../../../core/navigation/MapCrossing';
+import { travelWithinMap } from '../../../../core/navigation/RouteTraveler';
 import type { MapCrossingProfile } from '../../../../core/navigation/MapCrossing';
 import type { IInputProvider, MouseButton } from '../../../../core/platform/input/IInputProvider';
 import { SKILL_KEYS, normalizeSkillKey, pressSkillKey } from '../../../../core/platform/input/skill-key';
@@ -85,10 +85,12 @@ import { resolveWindowSizeKey, syncInterruptWatcher, stopInterruptWatcher } from
 import { REVIVE_ANCHOR, resolveResupplyConfig, runResupplyFlow } from '../resupply/resupply-runner';
 import type { ResolvedResupply } from '../resupply/resupply-runner';
 import { talkToNpc } from '../resupply/talk-npc';
+import { departTownTo, returnViaScroll, transitCityToTown } from '../resupply/town-departure';
 import { dismountPet, mountPet } from '../pet-ride';
 import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
 import { pressGameHotkey } from '../../../../shared/game-hotkeys';
+import { isMainCity } from '../../../../shared/main-cities';
 import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
@@ -183,6 +185,8 @@ interface ResolvedConfig {
   pickup: ResolvedPickup;
   /** 宠物骑乘(回城上骑 / 到挂机点下骑;缺省关闭,配置见 shared/types.ts 的 FarmPetRideConfig) */
   petRide: ResolvedPetRide;
+  /** 回城卷轴(起点不认识时先回城;缺省关闭,配置见 shared/types.ts 的 FarmReturnScrollConfig) */
+  returnScroll: ResolvedReturnScroll;
   /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
   resupply: ResolvedResupply;
   /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 blockAllPlayersIfMapChanged);缺省 false */
@@ -754,16 +758,21 @@ const CROSS_TRAVEL_TIMEOUT_MS = 120_000;
  * 开工跨图(地图跨越):进主循环之前,若角色不在挂机图,沿 conf.mapProfiles 逐跳穿越过去。
  *   - 已在挂机图 → 跳过(开工补给返程若已把角色带回来,这里也是 no-op)
  *   - 在过图链路上某图 → 逐跳穿越(见 core/navigation/MapCrossing)
- *   - 在城镇(且下发过城镇档案)→ 先走城镇出口到链首图,再逐跳
+ *   - 在出发城镇(且下发过城镇档案)→ 先从城镇出发到链首图(走到出城口过图,或与传送 NPC 对话后传送,
+ *     见 resupply/town-departure.ts),再逐跳;没配中间图时可直接传送到挂机图
  *   - 其它情况 → 结束任务并给出清晰原因(不会带着错误起点硬跑)
  * 返回 { exit: 结束结果 | null, crossed: 是否真的跨过图 }。
  */
 async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult | null; crossed: boolean }> {
   const { ctx, conf, label, readMapName, travelMovement } = run;
   const profiles = conf.mapProfiles;
-  if (profiles.length === 0) return { exit: null, crossed: false };
-
+  const town = ctx.init.auxConfigs?.townProfile;
   const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
+  const stopped = () => !ctx.moveAttack.running;
+
+  // 既没配地图跨越、也没下发城镇档案:保持旧行为(不跨图)
+  if (profiles.length === 0 && !town) return { exit: null, crossed: false };
+
   if (!farmMapName) {
     ctx.sendLog('warn', `[${label}] 配了地图跨越但没下发挂机地图名,跳过跨图`);
     return { exit: null, crossed: false };
@@ -778,41 +787,40 @@ async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult 
   if (cur === farmMapName) return { exit: null, crossed: false };
 
   const chainDesc = [...profiles.map((p) => p.mapName), farmMapName].join(' → ');
-  ctx.setStatus('moving', `${label} 地图跨越`);
-  ctx.sendLog('info', `[${label}] 地图跨越:当前在「${cur}」,目标「${farmMapName}」,链路 ${chainDesc}`);
-
-  const stopped = () => !ctx.moveAttack.running;
-  const town = ctx.init.auxConfigs?.townProfile;
+  // 起点恢复(回城卷轴 / 主城中转)已在 runFarmLoop 更早的步骤里做过:
+  // 走到这里时角色要么已在出发城镇,要么确实无处可去(下面给出清晰报错)。
   const inChain = profiles.some((p) => p.mapName === cur);
 
+  // 不在过图链路上:只在「出发城镇」时才出发(走到出城口过图,或与传送 NPC 对话后传送)
   if (!inChain) {
     if (town && cur === town.mapName) {
-      // 在城镇:先走到链首图的出口过图,再交给跨图链
-      const firstTarget = profiles[0].mapName;
-      const exit = (town.exits ?? []).find((e) => (e.toMap ?? '').trim() === firstTarget);
-      if (!exit) {
-        const detail = `地图跨越:城镇档案「${town.mapName}」里没有去「${firstTarget}」的出口`;
-        ctx.sendLog('warn', `[${label}] ${detail}`);
-        return { exit: { ok: false, detail }, crossed: false };
-      }
-      const points = resolveAnchoredRoute(town.routes ?? [], REVIVE_ANCHOR, exit.id);
-      ctx.sendLog(
-        'info',
-        `[${label}] 地图跨越:从城镇走 ${points.length} 个途经点 → 出口 (${exit.position.x},${exit.position.y}) → 「${firstTarget}」`,
-      );
-      const hopOk = await travelToExit(travelMovement, readMapName, points, exit.position, firstTarget, {
+      const firstTarget = profiles[0]?.mapName ?? farmMapName;
+      ctx.setStatus('moving', `${label} 从城镇出发`);
+      ctx.sendLog('info', `[${label}] 从城镇「${cur}」出发前往「${firstTarget}」` + (profiles.length > 0 ? `(跨图链路 ${chainDesc})` : ''));
+      const depart = await departTownTo({
+        ctx,
+        client: dmApi,
+        size: run.size,
+        movement: travelMovement,
+        readMapName,
+        label,
+        town,
+        fromAnchor: REVIVE_ANCHOR,
+        targetMapName: firstTarget,
         timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
         moveOptions: CROSS_MOVE_OPTIONS,
         isStopped: stopped,
-        onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
       });
-      if (!hopOk) {
-        const detail = stopped() ? '任务已停止(地图跨越途中)' : `地图跨越:没能从城镇走到「${firstTarget}」并切图`;
+      if (!depart.ok) {
+        const detail = stopped() ? '任务已停止(从城镇出发途中)' : `地图跨越:${depart.detail}`;
         ctx.sendLog('warn', `[${label}] ${detail}`);
         return { exit: { ok: false, detail }, crossed: false };
       }
+      ctx.sendLog('info', `[${label}] ${depart.detail}`);
       await blockAllPlayersIfMapChanged(run);
-    } else {
+      // 城镇直达挂机图(没配中间图):出发即到位;否则继续沿下面的过图链走
+      if (firstTarget === farmMapName) return { exit: null, crossed: true };
+    } else if (profiles.length > 0) {
       const detail =
         `地图跨越:当前在「${cur}」,不在过图链路上(链路:${chainDesc})。` +
         (town
@@ -820,8 +828,22 @@ async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult 
           : `请把角色走到链首图「${profiles[0].mapName}」再启动任务(想从城镇出发需开启「回城补给」并选好城镇档案)`);
       ctx.sendLog('warn', `[${label}] ${detail}`);
       return { exit: { ok: false, detail }, crossed: false };
+    } else {
+      // 只有城镇档案、没有过图链,人又不在城镇/链路:无法自动前往,报错(别带着错误起点进主循环)
+      const townName = town?.mapName || '未配';
+      const detail =
+        `当前在「${cur}」,既不是出发城镇「${townName}」也不是挂机图「${farmMapName}」,也没有配「地图跨越」链路。` +
+        `请把角色走到出发城镇「${townName}」再启动,或配上过图链路 / 回城卷轴`;
+      ctx.sendLog('warn', `[${label}] ${detail}`);
+      return { exit: { ok: false, detail }, crossed: false };
     }
   }
+
+  ctx.setStatus('moving', `${label} 地图跨越`);
+  ctx.sendLog('info', `[${label}] 地图跨越:当前在「${cur}」,目标「${farmMapName}」,链路 ${chainDesc}`);
+
+  // 已在链路上但没配中间图:没有可跨的跳(理论上前面已 return,这里兜底)
+  if (profiles.length === 0) return { exit: null, crossed: false };
 
   const cross = await crossMapProfiles(travelMovement, readMapName, profiles, farmMapName, {
     timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
@@ -876,6 +898,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     pickup: resolvePickup(ctx, cfg, view),
     // 宠物骑乘:上骑/下骑必须是 method='pet' 的技能(见 resolvePetRide),缺省关闭
     petRide: resolvePetRide(cfg, skills),
+    // 回城卷轴:必须是 method='item' 的技能(见 resolveReturnScroll),缺省关闭
+    returnScroll: resolveReturnScroll(cfg, skills),
     // 回城补给:清洗交给 resupply 模块(默认值与补给流程共用同一份,见 resolveResupplyConfig)
     // runOnStart 也在那份清洗里(缺省 false,旧配置不受影响),主循环开工时读它
     resupply: resolveResupplyConfig(cfg?.resupply),
@@ -925,6 +949,104 @@ function resolvePetRide(cfg: FarmTaskConfig | null, skills: MoveAttackSkill[]): 
     return s ? { id: s.id, key: s.key, name: s.name } : null;
   };
   return { enabled: raw?.enabled === true, mount: pick(raw?.mountSkillId), dismount: pick(raw?.dismountSkillId) };
+}
+
+/** 回城卷轴(见 shared/types.ts 的 FarmReturnScrollConfig):只认 method='item' 且键位合法的技能 */
+interface ResolvedReturnScroll {
+  enabled: boolean;
+  key: SkillKey | null;
+  timeoutMs: number;
+}
+
+/**
+ * 回城卷轴:引用技能表里 method='item'(物品栏快捷栏位)的技能。
+ * 引用的 id 找不到对应物品技能 = 关闭(按"没配"处理,见 resupply/town-departure.ts 的 returnViaScroll)。
+ */
+function resolveReturnScroll(cfg: FarmTaskConfig | null, skills: MoveAttackSkill[]): ResolvedReturnScroll {
+  const raw = cfg?.returnScroll;
+  const skill = skills.find((s) => s.id === raw?.skillId && s.method === 'item');
+  const timeoutMs = typeof raw?.timeoutMs === 'number' && raw.timeoutMs >= 1000 ? Math.round(raw.timeoutMs) : 60_000;
+  return { enabled: raw?.enabled === true && !!skill, key: skill ? skill.key : null, timeoutMs };
+}
+
+/**
+ * 把角色弄到出发城镇(准备在出发城镇做开工补给 / 从出发城镇出发)。按当前所在分成三种:
+ *   1. 已在出发城镇 → 什么都不做;
+ *   2. 当前就在某个主城(见 shared/main-cities.ts) → **不用回城卷轴**,直接坐该主城的飞空艇去出发城镇
+ *      (走城镇档案的「其它主城中转」);
+ *   3. 当前在野外/任意图 → 先按回城卷轴回主城;回城落在出发城镇就结束,落在别的主城同样坐飞空艇过去。
+ * 返回 { exit: 失败结果 | null, map: 恢复后所在的地图名 | null }(map=null = 没恢复,交给调用方报错)。
+ */
+async function recoverToDepartureTown(run: FarmRun, cur: string): Promise<{ exit: FarmLoopResult | null; map: string | null }> {
+  const { ctx, conf, label, readMapName, travelMovement, input } = run;
+  const scroll = conf.returnScroll;
+  const town = ctx.init.auxConfigs?.townProfile;
+  if (!town) {
+    ctx.sendLog('warn', `[${label}] 起点「${cur}」不在出发城镇,但没有下发城镇档案(auxConfigs.townProfile),无法自动前往`);
+    return { exit: null, map: null };
+  }
+  if (cur === town.mapName) return { exit: null, map: cur };
+
+  const stopped = (): boolean => !ctx.moveAttack.running;
+  let landed = cur;
+
+  // 在主城之外(野外/任意图):必须先用回城卷轴回到某个主城
+  if (!isMainCity(cur)) {
+    if (!scroll.enabled || !scroll.key) {
+      ctx.sendLog('warn', `[${label}] 起点「${cur}」是野外地图,但回城卷轴未开启或没选到有效的「物品」技能,无法自动回城`);
+      return { exit: null, map: null };
+    }
+    ctx.setStatus('moving', `${label} 回城卷轴`);
+    ctx.sendLog('info', `[${label}] 起点「${cur}」不在主城,先按回城卷轴回城`);
+    const back = await returnViaScroll({
+      ctx,
+      input,
+      readMapName,
+      label,
+      key: scroll.key,
+      timeoutMs: scroll.timeoutMs,
+      isStopped: stopped,
+    });
+    if (!back.ok || !back.map) return { exit: { ok: false, detail: `回城卷轴:${back.detail}` }, map: null };
+    await blockAllPlayersIfMapChanged(run);
+    landed = back.map;
+    // 正好落在出发城镇:不用再中转
+    if (landed === town.mapName) return { exit: null, map: landed };
+  } else {
+    ctx.sendLog('info', `[${label}] 起点「${cur}」是主城且不是出发城镇,不用回城卷轴,直接坐飞空艇前往「${town.mapName}」`);
+  }
+
+  // 现在在某个主城但不是出发城镇:按档案里的「其它主城中转」坐飞空艇过去
+  const transit = (town.transitFrom ?? []).find((t) => (t.mapName ?? '').trim() === landed);
+  if (!transit) {
+    return {
+      exit: {
+        ok: false,
+        detail:
+          `当前在「${landed}」,既不是出发城镇「${town.mapName}」,` +
+          `也没有配从该主城到出发城镇的飞空艇中转(在城镇档案里加一条「其它主城中转」)`,
+      },
+      map: null,
+    };
+  }
+
+  ctx.setStatus('moving', `${label} 主城中转`);
+  const hop = await transitCityToTown({
+    ctx,
+    client: dmApi,
+    size: run.size,
+    movement: travelMovement,
+    readMapName,
+    label,
+    city: transit,
+    targetMapName: town.mapName,
+    timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
+    moveOptions: CROSS_MOVE_OPTIONS,
+    isStopped: stopped,
+  });
+  if (!hop.ok) return { exit: { ok: false, detail: `主城中转:${hop.detail}` }, map: null };
+  await blockAllPlayersIfMapChanged(run);
+  return { exit: null, map: town.mapName };
 }
 
 /**
@@ -1894,6 +2016,23 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       await runStartupEnvSetup(run);
     }
 
+    // 起点恢复(进主循环之前):把角色弄到出发城镇 ——
+    //   已在出发城镇 → 不动;已在某个主城(见 shared/main-cities.ts)→ 不用回城卷轴,直接坐飞空艇去出发城镇;
+    //   在野外/任意图 → 先用回城卷轴回主城,再坐飞空艇过去(细节见 recoverToDepartureTown)。
+    // 必须在开工补给之前:补给的状态检查(装备/药水)与「城镇出发」都以出发城镇为立足点。
+    // 已在挂机图/链路/出发城镇 = 什么都不做(不消耗卷轴)。
+    if (opts?.allowStartupResupply !== false) {
+      const town = ctx.init.auxConfigs?.townProfile;
+      const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
+      const at = String((await run.readMapName()) ?? '').trim();
+      const known =
+        !!town && (at === town.mapName || (!!farmMapName && at === farmMapName) || conf.mapProfiles.some((p) => p.mapName === at));
+      if (town && at && !known) {
+        const recovered = await recoverToDepartureTown(run, at);
+        if (recovered.exit) return recovered.exit;
+      }
+    }
+
     // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
     // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),
     // 且只跑这一次 —— 循环里不会重复触发。补给途中角色是活的,死亡检查不会被误触发。
@@ -1912,6 +2051,21 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       const cross = await crossMapsOnStartup(run);
       if (cross.exit) return cross.exit;
       crossedMaps = cross.crossed;
+    }
+
+    // 跨图/城镇出发把角色带进了挂机图、但没走开工补给(角色从别处用回城卷轴过来的情况):
+    // 这里补走「入图点」—— 从地图入口直冲第一个挂机点容易被地形挡住。
+    // 开工补给那条路已在 travelBackToFarm 里走过入图点,此时 crossMapsOnStartup 会判"已在挂机图"跳过,
+    // crossedMaps=false,不会重复走。
+    if (crossedMaps && conf.entryPath.length > 0) {
+      ctx.setStatus('moving', `${label} 入图`);
+      ctx.sendLog('info', `[${label}] 已进入挂机地图,按入图路径走 ${conf.entryPath.length} 个点回到挂机点`);
+      await travelWithinMap(run.travelMovement, conf.entryPath, {
+        timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
+        moveOptions: CROSS_MOVE_OPTIONS,
+        isStopped: () => !ctx.moveAttack.running,
+        onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+      });
     }
 
     // 起点重读:开工补给 / 地图跨越会把角色带到挂机地图(走位 + 切图),上面读到的 start 已经过期 ——

@@ -1,4 +1,4 @@
-export const DEFAULT_SIM = 0.95;
+export const DEFAULT_SIM = 0.9;
 
 import type { WindowSizeKey } from './popup';
 
