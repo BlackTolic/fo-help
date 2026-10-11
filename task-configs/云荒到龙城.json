@@ -1,0 +1,37 @@
+{
+  "id": "task-云荒到龙城-1791710030488",
+  "name": "云荒到龙城",
+  "taskType": "town-profile",
+  "config": {
+    "type": "town-profile",
+    "mapName": "云荒部落",
+    "revivePoint": {
+      "x": 142,
+      "y": 197
+    },
+    "npcs": [
+      {
+        "id": "npc-1791709929358-r13q",
+        "name": "飞空艇仙子",
+        "position": {
+          "x": 144,
+          "y": 98
+        },
+        "recipeName": "飞空艇-龙城"
+      }
+    ],
+    "routes": [],
+    "exits": [
+      {
+        "id": "exit-1791553118167-ipeu",
+        "toMap": "云泽秘径",
+        "position": {
+          "x": 261,
+          "y": 119
+        }
+      }
+    ]
+  },
+  "createdAt": 1791710030488,
+  "updatedAt": 1791710125042
+}

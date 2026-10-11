@@ -1,0 +1,35 @@
+{
+  "id": "task-飞空艇-龙城-1791709891292",
+  "name": "飞空艇-龙城",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791709708898-jd8m",
+        "kind": "click-text",
+        "text": "使用传送",
+        "offsetX": 50,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791709771781-9305",
+        "kind": "click-text",
+        "text": "龙城",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791710551936-qnpu",
+        "kind": "click-at",
+        "x": 482,
+        "y": 463,
+        "note": "点击确认"
+      }
+    ]
+  },
+  "createdAt": 1791709891292,
+  "updatedAt": 1791710591118
+}

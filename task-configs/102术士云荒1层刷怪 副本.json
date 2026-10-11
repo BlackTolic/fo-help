@@ -311,7 +311,7 @@
     },
     "resupply": {
       "enabled": true,
-      "townProfileName": "云泽秘径",
+      "townProfileName": "云荒到龙城",
       "reviveMode": "immediate",
       "reviveTimeoutMs": 180000,
       "checkDurability": true,
@@ -325,5 +325,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791552010285,
-  "updatedAt": 1791707111783
+  "updatedAt": 1791710054298
 }
