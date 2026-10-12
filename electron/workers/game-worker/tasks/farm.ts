@@ -35,8 +35,8 @@
 //
 // ── 死亡回城补给 / 开工补给(taskConfig.resupply,见 resupply/resupply-runner.ts)──
 //   死亡检查 = core/perception/DeathDetector(主判据:找字「原地复活」;兜底:OCR「死亡」标题),两个检查点共用 checkDeath
-//   配了补给(resupply.enabled + auxConfigs.townProfile)= 复活 → 检查耐久/药水 → 按需找道具商人
-//     跑对话配方 → 走回野外图,然后继续挂机;补给失败才结束任务(原因写进 detail)
+//   配了补给(resupply.enabled + auxConfigs.townProfile)= 复活 → 按档案检查耐久/药水 → 按需访问商人 NPC
+//     跑对话配方 → 走回野外图,然后继续挂机;档案里没配商人 NPC 就直接去出城口返程;只有真的走不通才结束任务
 //   同一段流程的第二个触发器 = 任务启动(resupply.runOnStart,见 runStartupResupply):
 //     进主循环之前先跑一遍(不复活,位置已在挂机图则整段跳过),成功后才开始挂机
 //   没配补给 = 老行为:检测到死亡即结束任务
@@ -94,7 +94,7 @@ import { isMainCity } from '../../../../shared/main-cities';
 import { DEFAULT_ROLE_POSITION, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
-import { DEFAULT_SIM } from '../../../../core/constant-ocr/sim';
+import { DEFAULT_FUZZY_SIM, DEFAULT_SIM } from '../../../../core/constant-ocr/sim';
 
 // ===== 类型 =====
 
@@ -903,7 +903,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     returnScroll: resolveReturnScroll(cfg, skills),
     // 回城补给:清洗交给 resupply 模块(默认值与补给流程共用同一份,见 resolveResupplyConfig)
     // runOnStart 也在那份清洗里(缺省 false,旧配置不受影响),主循环开工时读它
-    resupply: resolveResupplyConfig(cfg?.resupply),
+    // 耐久/药水检查项在城镇档案里(auxConfigs.townProfile),清洗时一并读入(旧 farm 配置兜底)
+    resupply: resolveResupplyConfig(cfg?.resupply, ctx.init.auxConfigs?.townProfile),
     // 进入新地图时屏蔽所有人(缺省 false,旧配置不受影响)
     blockAllPlayersOnNewMap: cfg?.blockAllPlayersOnNewMap === true,
     // 启动时的一次性环境处理(缺省开启,旧配置不受影响)
@@ -1220,7 +1221,7 @@ function mapCoordConfig(ctx: WorkerContext): MapCoordConfig {
   return {
     coordRoi: DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
     coordColor: COLOR_WHITE,
-    similarity: DEFAULT_SIM,
+    similarity: DEFAULT_FUZZY_SIM,
   };
 }
 

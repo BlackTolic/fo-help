@@ -203,7 +203,8 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
       }),
     };
 
-    // 回城补给的启动前校验:补给得有事可做 —— 引用的配方必须都存在,且至少有一个 NPC 配了配方
+    // 回城补给的启动前校验:只拦"引用了不存在的配方"(配置错误)。
+    // 档案里一个配方都没配是允许的 —— 没商人可找就直接去出城口返程(见 resupply-runner)
     if (resupplyOn) {
       const referenced = townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter(Boolean);
       const missing = [...new Set(referenced.filter((x) => !recipes.some((r) => r.name === x)))];
@@ -211,12 +212,6 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
         return {
           ok: false,
           error: `城镇档案「${townProfileName}」里有 NPC 引用的对话配方不存在:${missing.join('、')}(可能已被删除或改名)`,
-        };
-      }
-      if (referenced.length === 0) {
-        return {
-          ok: false,
-          error: `城镇档案「${townProfileName}」里的 NPC 都没有引用对话配方,回城补给会无事可做(请在档案里给 NPC 选一份配方)`,
         };
       }
     }

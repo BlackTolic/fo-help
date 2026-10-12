@@ -116,8 +116,8 @@ export function FarmPetRideSection(props: FarmPetRideSectionProps) {
               <div className="text-[10px] text-accent-yellow/80">上骑、下骑都要选,否则无法保存</div>
             )}
             <div className="text-[10px] text-text-muted">
-              上骑 3 次后仍未出现骑乘提示(飞毛腿来啦 / 骑驴看唱板儿)= 当前宠物不可骑乘或已睡眠,只记日志不中断任务; 没开「死亡回城补给 /
-              开工前补给」时角色不会回城,骑乘不会触发
+              上骑 3 次后仍未出现骑乘提示(飞毛腿来啦 / 骑驴看唱板儿)= 当前宠物不可骑乘或已睡眠,只记日志不中断任务; 没开「城市事件 /
+              开工前处理」时角色不会回城,骑乘不会触发
             </div>
           </>
         )}

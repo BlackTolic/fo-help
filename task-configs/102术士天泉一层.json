@@ -1,0 +1,467 @@
+{
+  "id": "task-102术士天泉一层-1791814831939",
+  "name": "102术士天泉一层",
+  "taskType": "farm",
+  "config": {
+    "type": "farm",
+    "mapId": "custom",
+    "customMapName": "天空之泉一层",
+    "mode": "fixed",
+    "castMode": "smart",
+    "waypoints": [
+      {
+        "id": "wp-1791820000001-001",
+        "x": 161,
+        "y": 76,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-002",
+        "x": 173,
+        "y": 75,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-003",
+        "x": 180,
+        "y": 83,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-004",
+        "x": 180,
+        "y": 90,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-005",
+        "x": 189,
+        "y": 97,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-006",
+        "x": 191,
+        "y": 106,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-007",
+        "x": 178,
+        "y": 111,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-008",
+        "x": 172,
+        "y": 119,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-009",
+        "x": 162,
+        "y": 113,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-010",
+        "x": 148,
+        "y": 115,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-011",
+        "x": 134,
+        "y": 113,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-012",
+        "x": 125,
+        "y": 107,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-013",
+        "x": 117,
+        "y": 100,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-014",
+        "x": 108,
+        "y": 94,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-015",
+        "x": 115,
+        "y": 86,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-016",
+        "x": 101,
+        "y": 79,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-017",
+        "x": 91,
+        "y": 73,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-018",
+        "x": 99,
+        "y": 64,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-019",
+        "x": 105,
+        "y": 55,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-020",
+        "x": 114,
+        "y": 47,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-021",
+        "x": 127,
+        "y": 43,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-022",
+        "x": 139,
+        "y": 38,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-023",
+        "x": 152,
+        "y": 38,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-024",
+        "x": 164,
+        "y": 41,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-025",
+        "x": 178,
+        "y": 47,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-026",
+        "x": 191,
+        "y": 51,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-027",
+        "x": 204,
+        "y": 58,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-028",
+        "x": 217,
+        "y": 65,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-029",
+        "x": 230,
+        "y": 72,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-030",
+        "x": 247,
+        "y": 76,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-031",
+        "x": 249,
+        "y": 69,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-032",
+        "x": 242,
+        "y": 61,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-033",
+        "x": 234,
+        "y": 53,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-034",
+        "x": 224,
+        "y": 45,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-035",
+        "x": 214,
+        "y": 38,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-036",
+        "x": 200,
+        "y": 33,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-037",
+        "x": 185,
+        "y": 28,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-038",
+        "x": 175,
+        "y": 21,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-039",
+        "x": 161,
+        "y": 19,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-040",
+        "x": 147,
+        "y": 16,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-041",
+        "x": 133,
+        "y": 21,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-042",
+        "x": 120,
+        "y": 28,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-043",
+        "x": 105,
+        "y": 31,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-044",
+        "x": 94,
+        "y": 37,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-045",
+        "x": 82,
+        "y": 45,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-046",
+        "x": 71,
+        "y": 51,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-047",
+        "x": 61,
+        "y": 58,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-048",
+        "x": 53,
+        "y": 66,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-049",
+        "x": 58,
+        "y": 74,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-050",
+        "x": 58,
+        "y": 82,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-051",
+        "x": 71,
+        "y": 89,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1791820000001-052",
+        "x": 76,
+        "y": 97,
+        "type": "farm-spot"
+      }
+    ],
+    "mobFilter": {
+      "nameKeywords": [
+        "野",
+        "狼",
+        "鸡",
+        "鹿",
+        "狐",
+        "猫"
+      ],
+      "nameColors": [
+        "FFFFFF-FFFFFF"
+      ]
+    },
+    "skills": [
+      {
+        "id": "skill-1790561668551-2lfl",
+        "key": "F1",
+        "cooldownMs": 6000,
+        "castMs": 500,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668768-0lrx",
+        "key": "F2",
+        "cooldownMs": 5000,
+        "castMs": 750,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668944-a5gb",
+        "key": "F3",
+        "cooldownMs": 10000,
+        "castMs": 0,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561669095-36q7",
+        "key": "F4",
+        "cooldownMs": 25000,
+        "castMs": 0,
+        "rangePx": 100,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561749975-tw2o",
+        "key": "F7",
+        "cooldownMs": 300000,
+        "castMs": 100,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561750353-3c79",
+        "key": "F8",
+        "cooldownMs": 60000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790569034369-qqxi",
+        "key": "F10",
+        "cooldownMs": 120000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790595746624-r8cm",
+        "key": "F5",
+        "name": "喂草",
+        "cooldownMs": 1800000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "quick",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791700490261-c2nq",
+        "key": "TF10",
+        "name": "上骑",
+        "cooldownMs": 0,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "pet",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791731822606-qagp",
+        "key": "TF7",
+        "cooldownMs": 0,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
+        "enabled": true
+      }
+    ],
+    "movementSpeed": 500,
+    "watchdog": {
+      "verifyCode": true,
+      "autoHeal": {
+        "itemIds": [
+          "skill-1790569034369-qqxi"
+        ]
+      }
+    },
+    "pickup": {
+      "enabled": false,
+      "rangeMode": "default",
+      "rules": []
+    },
+    "resupply": {
+      "enabled": true,
+      "townProfileName": "天都-刷天泉副本",
+      "reviveMode": "immediate",
+      "reviveTimeoutMs": 180000,
+      "checkDurability": true,
+      "runOnStart": true
+    },
+    "petRide": {
+      "enabled": false,
+      "mountSkillId": "skill-1791700490261-c2nq",
+      "dismountSkillId": "skill-1791700490261-c2nq"
+    },
+    "returnScroll": {
+      "enabled": true,
+      "skillId": "skill-1791731822606-qagp"
+    },
+    "blockAllPlayersOnNewMap": true
+  },
+  "createdAt": 1791814831939,
+  "updatedAt": 1791820820632
+}

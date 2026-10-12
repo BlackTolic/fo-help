@@ -63,9 +63,15 @@ const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; 
   { type: 'catch-pet', name: '捕捉宠物', icon: '🐾', desc: '识别 + 捕捉技能循环', ready: false },
   { type: 'refine', name: '装备炼化', icon: '⚒', desc: '炼化界面操作', ready: false },
   { type: 'reputation', name: '名誉任务', icon: '🏆', desc: '接取/交付 NPC 任务', ready: false },
-  // 配置型"任务":可存储/编辑/被 farm 的回城补给引用,但不可作为任务运行(保存后不启动 worker)
-  { type: 'town-profile', name: '城镇档案', icon: '🏙', desc: '复活点 / 道具商人 / 出城口 + 寻路路线(供死亡回城补给用)', ready: true },
-  { type: 'dialog-recipe', name: '对话配方', icon: '💬', desc: '与某类 NPC 对话的步骤脚本(修理 / 买药;供死亡回城补给用)', ready: true },
+  // 配置型"任务":可存储/编辑/被 farm 的「城市事件」引用,但不可作为任务运行(保存后不启动 worker)
+  {
+    type: 'town-profile',
+    name: '城镇档案',
+    icon: '🏙',
+    desc: '复活点 / 回城检查项 / 商人 NPC / 出城口 + 寻路路线(供「城市事件」用)',
+    ready: true,
+  },
+  { type: 'dialog-recipe', name: '对话配方', icon: '💬', desc: '与某类 NPC 对话的步骤脚本(修理 / 买药;供「城市事件」用)', ready: true },
   {
     type: 'map-profile',
     name: '过图路线',
@@ -76,7 +82,7 @@ const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; 
 ];
 
 /** 配置型"任务"提示(城镇档案/对话配方/过图路线:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
-const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「死亡回城补给 / 地图跨越」引用,不会启动 worker';
+const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「城市事件 / 地图跨越」引用,不会启动 worker';
 
 /** footer 主操作按钮(实心 cyan,与历史任务列表里的「启动」一致) */
 const PRIMARY_BTN_CLS =
@@ -140,6 +146,8 @@ const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
   type: 'town-profile',
   mapName: '',
   revivePoint: { x: 0, y: 0 },
+  // 回城检查项:缺省不检查(没触发就不去访问商人 NPC,直接去出城口)
+  checkDurability: false,
   npcs: [],
   routes: [],
   exits: [],
@@ -301,7 +309,7 @@ export function TaskConfigDialog({
   // 历史任务列表(全局,store.taskHistory)
   const taskHistory = useStore((s) => s.taskHistory);
   const deleteTaskByName = useStore((s) => s.deleteTaskByName);
-  /** 死亡回城补给可选的城镇档案名(历史任务里所有 town-profile,按 name 存/取) */
+  /** 城市事件可选的城镇档案名(历史任务里所有 town-profile,按 name 存/取) */
   const townProfileNames = taskHistory.filter((h) => h.config.type === 'town-profile').map((h) => h.name);
   /** 全部对话配方名(城镇档案里的 NPC 用它指名要执行的配方) */
   const recipeNames = taskHistory.filter((h) => h.config.type === 'dialog-recipe').map((h) => h.name);
@@ -333,7 +341,7 @@ export function TaskConfigDialog({
   const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
   // 物品拾取:打怪间隙捡掉落物(范围/颜色/名称;关掉 = worker 不产生任何扫描开销)
   const [pickup, setPickup] = useState<PickupUiState>(DEFAULT_PICKUP);
-  // 死亡回城补给(farm 专属):引用已保存的城镇档案 + 全部对话配方(启动时解析成 auxConfigs)
+  // 城市事件(farm 专属):引用已保存的城镇档案 + 全部对话配方(启动时解析成 auxConfigs)
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
   // 地图跨越(farm 专属):出发图 → 挂机图之间依次穿越的中间地图名(引用 map-profile 任务)
   const [mapCrossings, setMapCrossings] = useState<string[]>([]);
@@ -350,17 +358,17 @@ export function TaskConfigDialog({
 
   // 城镇档案 / 对话配方(配置型"任务":只存储/编辑,保存后不启动 worker)
   const [townProfile, setTownProfile] = useState<TownProfileConfig>(DEFAULT_TOWN_PROFILE);
-  /** 当前编辑的城镇档案里,NPC 的配方引用问题(只提示,不阻断保存;启动时 resolveAuxConfigs 还会再拦一次) */
+  // 当前 farm 选中的城镇档案里,NPC 引用的配方不存在的问题(只提示,不阻断保存;启动时 resolveAuxConfigs 还会再拦一次)。
+  // 注:档案里一个配方都没配是允许的 —— 没商人可找就直接去出城口返程,不再当成问题提示
+  const selectedTown = savedTownProfiles.find((p) => p.name === String(resupply.townProfileName ?? '').trim());
   const missingRecipes = [
-    ...new Set(townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter((x) => x && !recipeNames.includes(x))),
+    ...new Set(
+      ((selectedTown?.config as TownProfileConfig | undefined)?.npcs ?? [])
+        .map((n) => (n.recipeName ?? '').trim())
+        .filter((x) => x && !recipeNames.includes(x)),
+    ),
   ];
-  const referencedRecipes = townProfile.npcs.map((n) => (n.recipeName ?? '').trim()).filter(Boolean);
-  const recipeIssue =
-    missingRecipes.length > 0
-      ? `NPC 引用的对话配方不存在:${missingRecipes.join('、')}`
-      : referencedRecipes.length === 0
-        ? '档案里的 NPC 都没有选配方,补给时不会访问任何 NPC'
-        : null;
+  const recipeIssue = missingRecipes.length > 0 ? `NPC 引用的对话配方不存在:${missingRecipes.join('、')}` : null;
   const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
   // 过图路线(配置型"任务":只存储/编辑,保存后不启动 worker)
   const [mapProfile, setMapProfile] = useState<MapProfileConfig>(DEFAULT_MAP_PROFILE);
@@ -392,6 +400,9 @@ export function TaskConfigDialog({
       type: 'town-profile',
       mapName: town.mapName ?? '',
       revivePoint: town.revivePoint ?? { x: 0, y: 0 },
+      // 回城检查项:旧档案没有这两个字段 → undefined(启动时 worker 回退旧 farm 配置)
+      checkDurability: town.checkDurability,
+      potionThreshold: town.potionThreshold,
       npcs: town.npcs ?? [],
       routes: town.routes ?? [],
       exits: town.exits ?? [],
@@ -570,6 +581,9 @@ export function TaskConfigDialog({
         type: 'town-profile',
         mapName: town.mapName ?? '',
         revivePoint: town.revivePoint ?? { x: 0, y: 0 },
+        // 回城检查项:旧档案没有这两个字段 → undefined(启动时 worker 回退旧 farm 配置)
+        checkDurability: town.checkDurability,
+        potionThreshold: town.potionThreshold,
         npcs: town.npcs ?? [],
         routes: town.routes ?? [],
         exits: town.exits ?? [],
@@ -760,6 +774,12 @@ export function TaskConfigDialog({
         type: 'town-profile',
         mapName: townProfile.mapName.trim(),
         revivePoint: { x: (townProfile.revivePoint?.x ?? 0) | 0, y: (townProfile.revivePoint?.y ?? 0) | 0 },
+        // 回城检查项:显式写布尔(勾了 true / 没勾 false),迁移期 worker 就不会再回退到旧 farm 配置
+        checkDurability: townProfile.checkDurability === true,
+        potionThreshold:
+          typeof townProfile.potionThreshold === 'number' && townProfile.potionThreshold > 0
+            ? Math.round(townProfile.potionThreshold)
+            : undefined,
         // id / 名字全空的记录丢掉(留着只会让 worker 白走一趟);recipeName 空 = 只当路线锚点,不会被访问
         npcs: townProfile.npcs
           .filter((n) => (n.id ?? '').trim() || (n.name ?? '').trim())
@@ -837,7 +857,7 @@ export function TaskConfigDialog({
    */
   const validateConfig = (): string | null => {
     if (taskType === 'farm' && resupply.enabled === true && !String(resupply.townProfileName ?? '').trim()) {
-      return '已开启死亡回城补给,但没有选择城镇档案(没有的话先建一份「城镇档案」并保存)';
+      return '已开启城市事件,但没有选择城镇档案(没有的话先建一份「城镇档案」并保存)';
     }
     if (taskType === 'farm' && petRide.enabled === true) {
       if (!isPetSkillId(skills, petRide.mountSkillId)) {
@@ -1377,7 +1397,7 @@ export function TaskConfigDialog({
                 {nameError && <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">{nameError}</div>}
                 <div className="text-[11px] text-text-muted">
                   {isConfigOnlyTaskType(taskType)
-                    ? '💡 保存后这份配置会出现在「选择任务」里对应的卡片中,供挂机打怪的「死亡回城补给」引用'
+                    ? '💡 保存后这份配置会出现在「选择任务」里对应的卡片中,供挂机打怪的「城市事件」引用'
                     : '💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口'}
                 </div>
                 {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
@@ -1490,7 +1510,7 @@ export function TaskConfigDialog({
                         className="btn btn-secondary flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
                         title={
                           isConfigOnlyTaskType(taskType)
-                            ? '把这份配置保存到对应卡片,供挂机打怪的「死亡回城补给」引用'
+                            ? '把这份配置保存到对应卡片,供挂机打怪的「城市事件」引用'
                             : '执行并保存当前任务，以便下次直接在“历史任务”中使用'
                         }
                       >
@@ -1675,7 +1695,7 @@ interface FarmConfigProps {
   /** 物品拾取配置(nameKeywords 在界面里是逗号分隔文本) */
   pickup: PickupUiState;
   setPickup: (v: PickupUiState | ((prev: PickupUiState) => PickupUiState)) => void;
-  /** 死亡回城补给(引用已保存的城镇档案;启动 farm 时由 WindowCard 解析成 auxConfigs 下发) */
+  /** 城市事件(引用已保存的城镇档案;启动 farm 时由 WindowCard 解析成 auxConfigs 下发) */
   resupply: FarmResupplyConfig;
   setResupply: (v: FarmResupplyConfig | ((prev: FarmResupplyConfig) => FarmResupplyConfig)) => void;
   /** 宠物骑乘(回城上骑、到挂机点下骑;上骑/下骑引用「宠物技能」) */
@@ -2307,7 +2327,7 @@ function FarmConfig(props: FarmConfigProps) {
         </div>
         {waypoints.some((w) => w.type === 'entry') && !resupply.enabled && (
           <div className="text-[10px] text-accent-yellow/80 mt-1 pl-0.5">
-            ⚠ 已配入图点,但「死亡回城补给」没开启 —— 入图点只在回城/开工补给重新进图时才会走
+            ⚠ 已配入图点,但「城市事件」没开启 —— 入图点只在回城/开工处理重新进图时才会走
           </div>
         )}
       </div>
@@ -2815,7 +2835,7 @@ function FarmConfig(props: FarmConfigProps) {
       {/* 地图跨越:出发图 → 挂机图之间依次穿越的中间地图(引用「过图路线」) */}
       <MapCrossingsSection readOnly={readOnly} value={mapCrossings} onChange={setMapCrossings} mapProfileNames={mapProfileNames} />
 
-      {/* 死亡回城补给:死亡后复活 → 检查耐久/药水 → 回城找道具商人 → 返回野外 */}
+      {/* 城市事件:死亡后复活回城 / 开工前先处理一遍 → 按城镇档案(检查项 + 商人 NPC)→ 走到出城口返回野外 */}
       <FarmResupplySection
         readOnly={readOnly}
         value={resupply}

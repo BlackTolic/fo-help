@@ -1,0 +1,39 @@
+{
+  "id": "task-天都-刷天泉副本-1791816597101",
+  "name": "天都-刷天泉副本",
+  "taskType": "town-profile",
+  "config": {
+    "type": "town-profile",
+    "mapName": "天都",
+    "revivePoint": {
+      "x": 338,
+      "y": 126
+    },
+    "checkDurability": false,
+    "npcs": [],
+    "routes": [
+      {
+        "id": "route-1791817235369-huo6",
+        "from": "revive",
+        "to": "exit-1791814970304-cg8r",
+        "waypoints": []
+      }
+    ],
+    "exits": [
+      {
+        "id": "exit-1791814970304-cg8r",
+        "toMap": "天空之泉一层",
+        "position": {
+          "x": 338,
+          "y": 126
+        },
+        "via": "npc",
+        "npcName": "杨戬",
+        "recipeName": "杨戬-天泉副本"
+      }
+    ],
+    "transitFrom": []
+  },
+  "createdAt": 1791816597101,
+  "updatedAt": 1791819354191
+}

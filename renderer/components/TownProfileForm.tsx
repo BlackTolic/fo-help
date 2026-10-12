@@ -250,11 +250,11 @@ export function TownProfileForm(props: TownProfileFormProps) {
         <div className="flex items-center gap-2">
           <MapPin size={14} className="text-accent-cyan" />
           <span className="font-medium text-text-primary">城镇档案</span>
-          <span className="text-text-muted text-[11px]">(坐标都是游戏内地图坐标;farm 死亡回城补给时按这份档案走)</span>
+          <span className="text-text-muted text-[11px]">(坐标都是游戏内地图坐标;farm 的「城市事件」按这份档案走)</span>
         </div>
         <div className="text-text-muted text-[11px]">
-          流程:复活在复活点 → 按「复活点 → 道具商人」的路线走到商人 → 按对话配方补给 → 按「商人 → 出城口」的路线走到出口 →
-          切回挂机地图。路线只配一个方向也行(worker 会反着走)。
+          流程:复活在复活点 → 按需访问商人(触发「回城检查项」时,按「复活点 → 商人」的路线走过去跑配方)→ 按「商人 → 出城口」的路线走到出口 →
+          切回挂机地图。没配商人 NPC、或检查项没触发时,直接走到出城口返程。 路线只配一个方向也行(worker 会反着走)。
         </div>
         {hwnd !== undefined && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -304,6 +304,48 @@ export function TownProfileForm(props: TownProfileFormProps) {
               onX={(v) => patch({ revivePoint: { ...revivePoint, x: v } })}
               onY={(v) => patch({ revivePoint: { ...revivePoint, y: v } })}
             />
+          </div>
+        </div>
+      </div>
+
+      {/* 回城检查项:触发条件 —— 满足才去访问配了配方的商人 NPC;都不触发就直接去出城口 */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          回城检查项 <span className="text-text-muted text-[11px]">(触发条件:满足才去访问配了配方的商人 NPC;都不触发就直接去出城口)</span>
+        </label>
+        <div className="space-y-1.5 bg-bg-input/40 border border-border-base rounded p-2.5">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={value.checkDurability === true}
+              onChange={(e) => patch({ checkDurability: e.target.checked })}
+            />
+            <span>检查装备耐久</span>
+            <span className="text-text-muted text-[10px]">开角色面板看装备耐久,见底才去访问商人 NPC 修理</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-secondary shrink-0">红药购买阈值</span>
+            <input
+              type="number"
+              min={0}
+              step={10}
+              value={value.potionThreshold ?? ''}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                patch({ potionThreshold: v === '' ? undefined : Math.max(0, parseInt(v) || 0) });
+              }}
+              disabled={readOnly}
+              placeholder="留空 = 不检查"
+              className={`w-28 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
+              title="红药数量少于该值就去访问商人 NPC 买药;留空 = 不检查药水"
+            />
+            <span className="text-text-muted text-[10px]">个(留空 = 不检查药水)</span>
+          </div>
+          <div className="text-[10px] text-text-muted">
+            勾了检查项、且回城时真的触发(装备见底 / 红药不足)才会去访问下面「配了配方」的商人 NPC; 没勾或都没触发时不访问任何
+            NPC,直接走到出城口返程
           </div>
         </div>
       </div>

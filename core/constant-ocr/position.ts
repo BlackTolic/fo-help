@@ -1,3 +1,4 @@
+import { COLOR_WHITE } from './color';
 import type { WindowSizeKey } from './popup';
 import { DEFAULT_FUZZY_SIM, DEFAULT_SIM } from './sim';
 
@@ -15,8 +16,8 @@ export const DEFAULT_ROLE_POSITION = {
  * MapCoordReader 构造时给了分辨率档位且配置里没配 mapNameRoi,就按档位取这里做默认值
  */
 export const MAP_NAME_ROI: DM_OCR = {
-  '1600*900': { x1: 1458, y1: 0, x2: 1563, y2: 20, color: 'e8f0e8-111111', sim: DEFAULT_FUZZY_SIM },
-  '1280*800': { x1: 1159, y1: 2, x2: 1226, y2: 19, color: 'e8f0e8-111111', sim: DEFAULT_FUZZY_SIM },
+  '1600*900': { x1: 1458, y1: 0, x2: 1563, y2: 20, color: COLOR_WHITE, sim: DEFAULT_FUZZY_SIM },
+  '1280*800': { x1: 1130, y1: 0, x2: 1258, y2: 19, color: COLOR_WHITE, sim: DEFAULT_FUZZY_SIM },
 };
 
 // 已锁定怪物名称(怪物被锁定后,HUD 会在该区域显示它的名字;没锁定时为空)

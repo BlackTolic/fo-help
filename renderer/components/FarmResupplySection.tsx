@@ -1,26 +1,25 @@
-// 死亡回城补给配置分组(farm 表单里的一段)
+// 城市事件配置分组(farm 表单里的一段):死亡自动复活回城 / 开工前先处理一遍
 //
 // 数据面:写进 FarmTaskConfig.resupply;启动 farm 时由 renderer 解析成 auxConfigs 下发
 // (见 renderer/aux-configs.ts:城镇档案整份下发 + 全部对话配方 + 挂机地图中文名)
 //
 // 两个触发器(同一段流程,见 worker 的 resupply-runner):
-//   死亡       = enabled 开启就生效(死亡后复活 → 补给 → 回野外)
-//   任务启动   = runOnStart 勾上才生效(不复活,直接补给 → 前往挂机地图;已在挂机图则跳过)
+//   死亡       = enabled 开启就生效(死亡后复活 → 按档案处理 → 回野外)
+//   任务启动   = runOnStart 勾上才生效(不复活,直接处理 → 前往挂机地图;已在挂机图则跳过)
 //
 // worker 侧约定(见 electron/workers/game-worker/resupply/):
-//   - 城镇档案里每个要访问的 NPC 用 recipeName 指名一份对话配方
-//   - 补给时按档案顺序依次访问这些 NPC,各跑它自己那份配方
+//   - 是否检查耐久/药水配在城镇档案里(TownProfileConfig.checkDurability / potionThreshold);
+//     触发了才按档案顺序访问配了配方的商人 NPC,都不触发就直接去出城口返程(没配 NPC 也一样)
 //   引用的配方不存在会在启动时被 resolveAuxConfigs 拦下(这里只提示,不硬拦保存)
 
 import type { FarmResupplyConfig, FarmReviveMode } from '../../shared/types';
 
-/** 新建 farm 任务时的默认值(与 worker 的兜底默认保持一致:立即复活 / 180s / 查耐久 / 不跑开工补给) */
+/** 新建 farm 任务时的默认值(与 worker 的兜底默认保持一致:立即复活 / 180s / 不跑开工补给) */
 export const DEFAULT_RESUPPLY: FarmResupplyConfig = {
   enabled: false,
   townProfileName: '',
   reviveMode: 'immediate',
   reviveTimeoutMs: 180_000,
-  checkDurability: true,
   runOnStart: false,
 };
 
@@ -32,14 +31,18 @@ function normalizeReviveMode(raw: unknown): FarmReviveMode {
   return raw === 'huihun' || raw === 'tishen' || raw === 'immediate' ? raw : 'immediate';
 }
 
-/** 回填:旧配置没有 resupply 字段 → 用默认值;字段缺失按默认值补齐(与 worker 的 resolveResupplyConfig 对齐) */
+/**
+ * 回填:旧配置没有 resupply 字段 → 用默认值;字段缺失按默认值补齐(与 worker 的 resolveResupplyConfig 对齐)。
+ * 耐久/药水检查项已迁到城镇档案:这里把旧配置里的值原样留着(worker 读不到档案值时回退用它),不回显也不改写。
+ */
 export function normalizeResupply(raw?: FarmResupplyConfig | null): FarmResupplyConfig {
   return {
     enabled: raw?.enabled === true,
     townProfileName: String(raw?.townProfileName ?? ''),
     reviveMode: normalizeReviveMode(raw?.reviveMode),
     reviveTimeoutMs: typeof raw?.reviveTimeoutMs === 'number' && raw.reviveTimeoutMs >= 1000 ? Math.round(raw.reviveTimeoutMs) : 180_000,
-    checkDurability: raw?.checkDurability !== false,
+    // 旧配置里可能还留着这两个字段:原样保留,迁移期由 worker 兜底读取
+    checkDurability: raw?.checkDurability,
     potionThreshold: typeof raw?.potionThreshold === 'number' && raw.potionThreshold > 0 ? Math.round(raw.potionThreshold) : undefined,
     // 旧配置没有这个字段 = 不开工补给(保持升级前的行为)
     runOnStart: raw?.runOnStart === true,
@@ -67,8 +70,10 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
   return (
     <div>
       <label className="text-sm text-text-secondary mb-1.5 block">
-        死亡回城补给{' '}
-        <span className="text-text-muted text-[11px]">(死亡后自动复活 / 开工前先跑一遍 → 检查耐久/药水 → 回城找商人 → 返回野外)</span>
+        城市事件{' '}
+        <span className="text-text-muted text-[11px]">
+          (死亡后自动复活回城 / 开工前先处理一遍 → 按所选城镇档案处理:有检查项与商人 NPC 时按需补给 → 走到出城口返回野外)
+        </span>
       </label>
       <div className="space-y-2.5 bg-bg-input/40 border border-border-base rounded p-2.5">
         <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
@@ -79,7 +84,7 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
             checked={enabled}
             onChange={(e) => patch({ enabled: e.target.checked })}
           />
-          <span>开启死亡回城补给</span>
+          <span>开启城市事件</span>
           <span className="text-text-muted text-[10px]">关掉 = 死亡后按原逻辑直接结束任务</span>
         </label>
 
@@ -88,7 +93,7 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
             {/* 城镇档案:从已保存的 town-profile 里按名字选 */}
             <div>
               <div className="text-xs text-text-secondary mb-1">
-                城镇档案 <span className="text-text-muted text-[10px]">(城镇地图名 / 复活点 / 商人 / 出城口 + 路线)</span>
+                城镇档案 <span className="text-text-muted text-[10px]">(城镇地图名 / 复活点 / 检查项 / 商人 NPC / 出城口 + 路线)</span>
               </div>
               {townProfileNames.length === 0 ? (
                 <div className="text-[11px] text-accent-yellow/80">
@@ -109,7 +114,7 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
                   ))}
                 </select>
               )}
-              {missingProfile && <div className="text-[10px] text-accent-yellow/80 mt-1">开启补给必须选一份城镇档案,否则无法启动</div>}
+              {missingProfile && <div className="text-[10px] text-accent-yellow/80 mt-1">开启城市事件必须选一份城镇档案,否则无法启动</div>}
             </div>
 
             {/* 第二个触发器:任务启动时也跑一遍同一条补给流程(见 worker 的 runStartupResupply) */}
@@ -122,10 +127,10 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
                   checked={value.runOnStart === true}
                   onChange={(e) => patch({ runOnStart: e.target.checked })}
                 />
-                <span>开工前先补给一次(买药/修装备)再前往挂机点</span>
+                <span>开工前先处理一次(买药/修装备)再前往挂机点</span>
               </label>
               <div className="text-[10px] text-text-muted pl-5">
-                勾上后:每次启动任务先进这段流程,到达挂机地图才开始循环打怪(死亡回城照旧)。
+                勾上后:每次启动任务先进这段流程(按城镇档案检查/访问商人),到达挂机地图才开始循环打怪(死亡回城照旧)。
                 起点按城镇档案里的「复活点」理解;若启动时角色已经在挂机地图,整段自动跳过
               </div>
             </div>
@@ -172,38 +177,12 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
               <span className="text-text-muted text-[10px]">ms(超时按异常处理)</span>
             </div>
 
-            {/* 检查项 */}
-            <div className="space-y-1.5">
-              <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="accent-accent-cyan"
-                  disabled={readOnly}
-                  checked={value.checkDurability === true}
-                  onChange={(e) => patch({ checkDurability: e.target.checked })}
-                />
-                <span>检查装备耐久</span>
-                <span className="text-text-muted text-[10px]">开角色面板看装备耐久,见底才去商人修理</span>
-              </label>
-
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-secondary shrink-0">红药购买阈值</span>
-                <input
-                  type="number"
-                  min={0}
-                  step={10}
-                  value={value.potionThreshold ?? ''}
-                  onChange={(e) => {
-                    const v = e.target.value.trim();
-                    patch({ potionThreshold: v === '' ? undefined : Math.max(0, parseInt(v) || 0) });
-                  }}
-                  disabled={readOnly}
-                  placeholder="留空 = 不检查"
-                  className={`w-28 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none font-mono ${disabledCls}`}
-                  title="红药数量少于该值就去买;留空 = 不检查药水"
-                />
-                <span className="text-text-muted text-[10px]">个(留空 = 不检查药水)</span>
-              </div>
+            {/* 检查项已迁到城镇档案(是否检查耐久/药水决定"要不要去访问商人 NPC"),这里只留说明 */}
+            <div className="text-[10px] text-text-muted">
+              「检查装备耐久 / 红药购买阈值」已挪到城镇档案里配(见「创建任务 → 城镇档案 → 回城检查项」):
+              触发了才按档案顺序访问所有「配了配方」的商人 NPC;都没触发就直接去出城口返程
+              <br />
+              档案里没有配商人 NPC 也能跑:没商人可找时跳过访问,直接走到出城口返回挂机图
             </div>
 
             {/* 依赖提示:补给按城镇档案里 NPC 的「配方」引用依次访问,引用的配方必须存在 */}
@@ -213,7 +192,7 @@ export function FarmResupplySection(props: FarmResupplySectionProps) {
               <br />
               耐久与药水都没问题时会跳过所有 NPC 直接返程;引用的配方不存在会在启动时就被拦下
               <br />
-              开工补给失败(如启动时角色既不在城镇也不在挂机地图)同样会结束任务,不会带着错误的起点继续挂机
+              开工失败(如启动时角色既不在城镇也不在挂机地图)同样会结束任务,不会带着错误的起点继续挂机
             </div>
           </>
         )}

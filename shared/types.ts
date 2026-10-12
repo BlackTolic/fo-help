@@ -295,13 +295,18 @@ export interface FarmTaskConfig {
 export type FarmReviveMode = 'immediate' | 'huihun' | 'tishen';
 
 /**
- * 回城补给配置(farm 专属):
- * 角色死亡后 自动复活 → (可选)检查装备耐久/药水 → 按城镇档案走到道具商人 → 按对话配方修理/买药 → 走回野外地图续跑
- * 同一段流程挂在第二个触发器上:runOnStart=true 时任务启动也先跑一遍(不复活,直接检查状态 → 商人 → 挂机地图)
+ * 回城处理配置(farm 专属,界面叫「城市事件」):
+ * 角色死亡后 自动复活 → 按所选城镇档案走一遍(可选检查耐久/药水 → 按需访问商人 NPC → 出城口 → 走回野外地图续跑);
+ * 没配 NPC / 检查项没触发时,就只是"复活 → 直接去出城口返程"。
+ * 同一段流程挂在第二个触发器上:runOnStart=true 时任务启动也先跑一遍(不复活,直接确认位置 → 检查状态 → 必要时访问 NPC → 挂机地图)
  * 依赖 StartTaskAuxConfigs 下发的 townProfile(城镇档案)与 recipes(对话配方)
+ *
+ * 注:是否检查耐久/药水已迁到城镇档案(TownProfileConfig.checkDurability / potionThreshold)——
+ * 它们决定"要不要去访问档案里配了配方的商人 NPC",跟城镇绑定更自然。
+ * 这里的同名字段仅为兼容旧配置保留,worker 读不到档案里的值时回退读它。
  */
 export interface FarmResupplyConfig {
-  /** 是否开启死亡回城补给 */
+  /** 是否开启回城处理(死亡复活 / 开工前先处理一遍) */
   enabled: boolean;
   /** 城镇档案名(按"任务名"存储的那份 TownProfileConfig 的 name) */
   townProfileName: string;
@@ -309,11 +314,11 @@ export interface FarmResupplyConfig {
   reviveMode: FarmReviveMode;
   /** 等复活超时(毫秒),超时按异常处理 */
   reviveTimeoutMs: number;
-  /** 是否开角色面板检查装备耐久(装备红/快红 → 触发修理) */
-  checkDurability: boolean;
-  /** 红药 OCR 数量少于该值则触发购买;不配 = 不检查药水 */
+  /** @deprecated 已迁到 TownProfileConfig.checkDurability;仅为兼容旧配置保留 */
+  checkDurability?: boolean;
+  /** @deprecated 已迁到 TownProfileConfig.potionThreshold;仅为兼容旧配置保留 */
   potionThreshold?: number;
-  /** 任务启动时先跑一次补给(检查状态 → 必要时找道具商人修理/买药 → 前往挂机地图)再进入打怪循环;缺省 false */
+  /** 任务启动时先跑一次(检查状态 → 必要时访问商人 NPC → 前往挂机地图)再进入打怪循环;缺省 false */
   runOnStart: boolean;
 }
 
@@ -387,6 +392,13 @@ export interface TownProfileConfig {
   mapName: string;
   /** 复活点(原地复活后所在位置) */
   revivePoint: { x: number; y: number };
+  /**
+   * 回城时是否开角色面板检查装备耐久(装备红/快红 → 触发访问配了配方的商人 NPC)。
+   * 这是「要不要找商人」的触发条件,跟城镇绑定;都不触发就直接去出城口返程。
+   */
+  checkDurability?: boolean;
+  /** 红药 OCR 数量少于该值则触发访问配了配方的商人 NPC;不配 = 不检查药水 */
+  potionThreshold?: number;
   npcs: TownProfileNpc[];
   routes: TownProfileRoute[];
   exits: TownProfileExit[];

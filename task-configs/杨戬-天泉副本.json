@@ -1,0 +1,20 @@
+{
+  "id": "task-杨戬-天泉副本-1791816712272",
+  "name": "杨戬-天泉副本",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791816629080-ylca",
+        "kind": "click-text",
+        "text": "进入天空之泉",
+        "offsetX": 50,
+        "offsetY": 0,
+        "onMissing": "skip"
+      }
+    ]
+  },
+  "createdAt": 1791816712272,
+  "updatedAt": 1791816712272
+}

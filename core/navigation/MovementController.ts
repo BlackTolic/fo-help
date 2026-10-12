@@ -397,7 +397,7 @@ export class MovementControllerByPrecisePoint extends MovementController {
       y: selfScreen.y + (aim.y - selfScreen.y) * this.stepGain.y,
     });
     // 落点压在 UI 上时,再沿同一方向缩到 UI 之外(否则这一步点的是 UI,角色不动)
-    const { point, blocked } = this.avoidBlockRects(inView);
+    const { point } = this.avoidBlockRects(inView);
 
     await this.input.moveMouse(point, { kind: 'instant' });
     await this.input.delay(this.pressDelayMs);

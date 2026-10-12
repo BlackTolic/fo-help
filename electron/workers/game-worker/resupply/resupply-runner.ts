@@ -4,6 +4,7 @@
 //   death(缺省) = 死亡回城补给:复活 → 确认回到城镇 → 状态检查 → 访问 NPC → 返程(触发点见 tasks/farm.ts 的 checkDeath)
 //   start        = 开工补给:任务启动时跑一遍同一条流程(不复活;已在挂机地图则整段跳过,见 confirmStartPosition)
 //   这里不判断"该不该补给",只负责把一次补给跑完并把结果(ok/detail)交回去。
+//   档案里没配商人 NPC(或检查项全没触发)时,就只是"复活/确认位置 → 直接去出城口返程",不报错。
 //
 // 依赖从 farm 侧注入(见 ResupplyDeps):dm client / 分辨率档位 / movement 实例 / 读地图名。
 //   ⚠️ 不在这里新建 MovementController、也不重新 bindWindow:同一个窗口同一时刻只该有一个
@@ -147,15 +148,17 @@ function normalizeReviveMode(raw: unknown): FarmReviveMode {
 }
 
 /**
- * 清洗回城补给配置:未配 / 字段缺失一律按"关闭 + 安全默认"处理
+ * 清洗回城处理配置:未配 / 字段缺失一律按"关闭 + 安全默认"处理
  * (enabled / runOnStart 缺省 false;reviveMode 缺省 immediate;reviveTimeoutMs 缺省 180s;potionThreshold 非正数 = 不检查)
  * farm 的 resolveConfig 与补给流程都调它,避免两处默认值各写一套。
+ *
+ * 耐久/药水检查项已迁到城镇档案(town):档案里没写时回退读旧 farm 配置的同名字段(迁移用)。
  */
-export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null): ResolvedResupply {
-  const threshold = raw?.potionThreshold;
+export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null, town?: TownProfileConfig | null): ResolvedResupply {
+  const threshold = town?.potionThreshold ?? raw?.potionThreshold;
   const timeout = raw?.reviveTimeoutMs;
   return {
-    // 是否开启回城补给(缺省 false):
+    // 是否开启回城处理(缺省 false):
     enabled: raw?.enabled === true,
     // 城镇档案名(只用于日志:档案本体由 auxConfigs.townProfile 下发)
     townProfileName: String(raw?.townProfileName ?? '').trim(),
@@ -163,11 +166,11 @@ export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null
     reviveMode: normalizeReviveMode(raw?.reviveMode),
     // 复活超时(ms):配置缺省时的兜底,与 renderer 的默认值保持一致
     reviveTimeoutMs: typeof timeout === 'number' && timeout >= 1000 ? Math.round(timeout) : DEFAULT_REVIVE_TIMEOUT_MS,
-    // 是否检查装备耐久见底(缺省 false):
-    checkDurability: raw?.checkDurability === true,
-    // 红药低于该值触发购买;null = 不检查药水
+    // 是否检查装备耐久见底(缺省 false):以城镇档案为准,旧 farm 配置兜底
+    checkDurability: (town?.checkDurability ?? raw?.checkDurability) === true,
+    // 红药低于该值触发访问商人;null = 不检查药水:以城镇档案为准,旧 farm 配置兜底
     potionThreshold: typeof threshold === 'number' && threshold > 0 ? Math.round(threshold) : null,
-    // 任务启动时先跑一次补给(只有 farm 主循环开工时读它,见 tasks/farm.ts 的 runStartupResupply)
+    // 任务启动时先跑一次(只有 farm 主循环开工时读它,见 tasks/farm.ts 的 runStartupResupply)
     runOnStart: raw?.runOnStart === true,
   };
 }
@@ -202,9 +205,9 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
     return { ok: false, detail };
   }
 
-  // 解析配置
-  const cfg = resolveResupplyConfig(ctx.init.taskConfig?.resupply);
+  // 解析配置(耐久/药水检查项在城镇档案里,清洗时一并读入)
   const town: TownProfileConfig | undefined = ctx.init.auxConfigs?.townProfile;
+  const cfg = resolveResupplyConfig(ctx.init.taskConfig?.resupply, town);
   const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
   if (!cfg.enabled) {
     return { ok: false, detail: '回城补给未开启(taskConfig.resupply.enabled != true)' };
@@ -301,10 +304,12 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
   if (reasons.length === 0) {
     ctx.sendLog('info', `[${label}] 装备耐久与药水都没问题,不访问任何 NPC,直接返程`);
   } else if (targets.length === 0) {
-    return {
-      ok: false,
-      detail: `触发了补给(${reasons.join('、')}),但城镇档案里没有任何 NPC 引用对话配方,不知道该做什么`,
-    };
+    // 触发了补给但档案里没配任何"商人 NPC":不报错 —— 没商人可找就直接去出城口返程
+    ctx.sendLog(
+      'warn',
+      `[${label}] 触发了补给(${reasons.join('、')}),但城镇档案「${town.mapName}」里没有任何 NPC 引用对话配方,` +
+        `跳过商人直接去出城口返程(要修装备/买药就在档案里加一个商人 NPC 并选好配方)`,
+    );
   } else {
     ctx.sendLog(
       'info',
