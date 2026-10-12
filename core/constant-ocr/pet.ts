@@ -2,7 +2,7 @@
 // 坐标来源:移植自 ffo-auto-tool 的 constant/OCR-pos.ts(DEFAULT_PET_ACTIVE,实测值)
 // 按窗口客户区分辨率分档,与 DEFAULT_ROLE_POSITION 同风格
 
-import { DEFAULT_SIM } from './position';
+import { DEFAULT_SIM } from './sim';
 import type { WindowSizeKey } from './popup';
 
 type DM_OCR = Record<WindowSizeKey, { x1: number; y1: number; x2: number; y2: number; color: string; sim: number }>;

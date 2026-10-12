@@ -2,7 +2,7 @@
 // 坐标来源:移植自 ffo-auto-tool 的 constant/OCR-pos.ts(实测值)
 // 按窗口客户区分辨率分档,与 DEFAULT_ROLE_POSITION 同风格
 
-import { DEFAULT_SIM } from './position';
+import { DEFAULT_SIM } from './sim';
 import { COLOR_VERIFY_CODE } from './color';
 
 /** 支持的游戏窗口客户区分辨率 */

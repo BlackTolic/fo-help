@@ -121,6 +121,7 @@ function buildWatchdogPlan(ctx: WorkerContext, sizeKey: WindowSizeKey): Watchdog
 
   const teamInvite: TeamInviteAction | null = wd?.teamInvite?.action ?? null;
   const verifyCode = wd?.verifyCode === true;
+  // 回血物品
   const healItems = resolveHealItems(ctx, wd?.autoHeal?.itemIds ?? []);
   const stopLevelUp = wd?.stopLevelUp === true;
 
@@ -153,6 +154,8 @@ function buildWatchdogPlan(ctx: WorkerContext, sizeKey: WindowSizeKey): Watchdog
       cooldownMs: 3000,
     });
   }
+  console.log('回血物品Items', healItems);
+  console.log('上一次吃药lastCast', ctx.lastCast);
 
   if (healItems.length > 0) {
     rules.push({

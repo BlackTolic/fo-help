@@ -8,7 +8,7 @@
 // 坐标系:dm.Function(x1,y1,x2,y2,...) 用的是「窗口客户区相对坐标」,与 MonsterNameDetector 一致。
 
 import { PET_ACTIVE_ROI, PET_INACTIVE_TEXT, PET_MOUNT_TEXT_COLOR, PET_MOUNT_TEXT_ROI, PET_MOUNT_TEXTS } from '../constant-ocr/pet';
-import { DEFAULT_SIM } from '../constant-ocr/position';
+import { DEFAULT_SIM } from '../constant-ocr/sim';
 import type { WindowSizeKey } from '../constant-ocr/popup';
 import type { DamooClient } from '../platform/damoo/dm-api';
 import { parseTextPos } from '../utils/parse';

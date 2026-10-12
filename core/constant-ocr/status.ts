@@ -2,7 +2,7 @@
 // 坐标来源:移植自 ffo-auto-tool 的 constant/OCR-pos.ts(DEFAULT_BLOOD_STATUS / DEFAULT_EXP_BAR 实测值)
 // 判定语义与参考工程 utils/ocr-check/base.ts 的 getBloodStatus / checkExpBar 一致
 
-import { DEFAULT_SIM } from './position';
+import { DEFAULT_SIM } from './sim';
 import type { WindowSizeKey } from './popup';
 
 type DM_FIND_COLOR = Record<WindowSizeKey, { x1: number; y1: number; x2: number; y2: number; color: string; sim: number }>;

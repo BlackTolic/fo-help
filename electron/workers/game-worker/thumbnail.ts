@@ -7,15 +7,13 @@ import { dmErrorFull } from '../../../core/platform/damoo/dm-errors';
 import { DamooVisionProvider } from '../../../core/platform/vision/damoo/DamooProvider';
 import { DamooInputProvider } from '../../../core/platform/input/damoo/DamooInputProvider';
 import { MapCoordReader } from '../../../core/perception/MapCoordReader';
-import {
-  MovementControllerByDirection8,
-  MovementControllerByRandom,
-} from '../../../core/navigation/MovementController';
+import { MovementControllerByRandom } from '../../../core/navigation/MovementController';
 import type { MapCoordConfig, MapPosition } from '../../../core/perception/types';
 import type { WorkerContext } from './context';
 import { resolveWindowSizeKey } from './interrupts';
 import { runMoveAttackTest } from './move-attack';
-import { DEFAULT_ROLE_POSITION, DEFAULT_SIM } from '../../../core/constant-ocr/position';
+import { DEFAULT_ROLE_POSITION } from '../../../core/constant-ocr/position';
+import { DEFAULT_SIM } from '../../../core/constant-ocr/sim';
 import { COLOR_WHITE } from '../../../core/constant-ocr/color';
 
 export async function takeAndSendThumbnail(ctx: WorkerContext, hwnd: number): Promise<boolean> {
@@ -41,9 +39,7 @@ export async function takeAndSendThumbnail(ctx: WorkerContext, hwnd: number): Pr
       // code=0 时大漠自身无错误码,最常见原因是窗口大部分位于屏幕外/被遮挡:
       // dx.graphic.2d 靠 hook D3D 渲染取图,屏幕外区域不渲染,Capture 返回 0
       const extra = code === 0 ? ' | 建议:将当前游戏模式设置为软件模式' : '';
-      notifyFailure(
-        `截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}${extra}`,
-      );
+      notifyFailure(`截图失败: dmApi.capture 返回 ${ret}, code=${code} ${message}${advice ? ' | 建议:' + advice : ''}${extra}`);
       return false;
     }
     if (!fs.existsSync(filePath)) {
@@ -71,8 +67,7 @@ export async function takeAndSendThumbnail(ctx: WorkerContext, hwnd: number): Pr
 // coordColor — 坐标文字颜色 hex(dm 的颜色格式,如 'FFFFFF' 或 'FFFFFF-000000')
 function testMapCoordConfig(ctx: WorkerContext): MapCoordConfig {
   return {
-    coordRoi:
-      DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
+    coordRoi: DEFAULT_ROLE_POSITION[resolveWindowSizeKey(ctx.init.hwnd, ctx.init.settings?.resolution)],
     coordColor: COLOR_WHITE,
     similarity: DEFAULT_SIM,
   };
@@ -104,10 +99,7 @@ export async function testMovement(ctx: WorkerContext, hwnd: number): Promise<vo
       report(false, '读不到当前坐标(检查设置里的分辨率与坐标区域/颜色是否匹配)');
       return;
     }
-    ctx.sendLog(
-      'info',
-      `[移动测试] 当前坐标: (${current.x}, ${current.y}) 地图=${current.map ?? '未知'}`,
-    );
+    ctx.sendLog('info', `[移动测试] 当前坐标: (${current.x}, ${current.y}) 地图=${current.map ?? '未知'}`);
 
     const target: MapPosition = { map: current.map, x: current.x + 80, y: current.y };
     // 是否已经到达目标位置

@@ -91,9 +91,10 @@ import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
 import { pressGameHotkey } from '../../../../shared/game-hotkeys';
 import { isMainCity } from '../../../../shared/main-cities';
-import { DEFAULT_ROLE_POSITION, DEFAULT_SIM, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
+import { DEFAULT_ROLE_POSITION, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
+import { DEFAULT_SIM } from '../../../../core/constant-ocr/sim';
 
 // ===== 类型 =====
 
