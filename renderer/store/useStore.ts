@@ -9,6 +9,7 @@ import type {
   AppSettings,
   StartTaskAuxConfigs,
   WorkerPositionResult,
+  AppToastPayload,
 } from '../../shared/types';
 
 interface LogEntry {
@@ -17,6 +18,11 @@ interface LogEntry {
   level: string;
   msg: string;
   timestamp: number;
+}
+
+/** 应用内提醒(主进程推来的右下角浮层) */
+interface ToastItem extends AppToastPayload {
+  id: number;
 }
 
 interface AppState {
@@ -121,9 +127,17 @@ interface AppState {
   loadSettings: () => Promise<AppSettings | null>;
   /** 合并保存设置到本地,返回保存后的完整设置 */
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings | null>;
+
+  /** 应用内提醒(右下角浮层,如"未配置图鉴账号");由主进程推送 */
+  toasts: ToastItem[];
+  /** 加一条提醒(同 key 已存在则忽略) */
+  pushToast: (toast: AppToastPayload) => void;
+  /** 关掉一条提醒 */
+  dismissToast: (id: number) => void;
 }
 
 let logIdCounter = 1;
+let toastIdCounter = 1;
 
 export const useStore = create<AppState>((set) => ({
   gameWindows: [],
@@ -411,6 +425,18 @@ export const useStore = create<AppState>((set) => ({
     set({ settings: res.settings });
     return res.settings;
   },
+
+  // 应用内提醒(右下角浮层)
+  toasts: [],
+  pushToast: (toast) => {
+    set((prev) => {
+      if (prev.toasts.some((t) => t.key === toast.key)) return prev;
+      return { toasts: [...prev.toasts, { ...toast, id: toastIdCounter++ }] };
+    });
+  },
+  dismissToast: (id) => {
+    set((prev) => ({ toasts: prev.toasts.filter((t) => t.id !== id) }));
+  },
 }));
 
 // 启动时订阅 IPC 事件
@@ -465,5 +491,10 @@ export function subscribeToIpc() {
 
   window.fohelp.onThumbnailUpdate(({ hwnd, dataUrl }) => {
     useStore.getState().setThumbnail(hwnd, dataUrl);
+  });
+
+  // 应用内提醒(右下角浮层,如"未配置图鉴账号")
+  window.fohelp.onAppToast((toast) => {
+    useStore.getState().pushToast(toast);
   });
 }

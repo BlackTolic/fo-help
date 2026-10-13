@@ -62,14 +62,22 @@ export function resolveWindowSizeKey(hwnd: number, preferred?: GameResolution | 
  * 创建验证码求解器(图鉴):
  *   账号密码取设置面板(app-settings.json 的 tuJianAccount / tuJianPassword,
  *   每次启动 worker 前由主进程新鲜读盘下发)
- * 没配账号不打断流程,只是每次都走兜底策略(点第一个选项),日志里会提示。
+ * 没配账号不打断流程,只是每次都走兜底策略(点第一个选项),并在第一次用到时提醒一次。
  */
 function createSolver(ctx: WorkerContext): CaptchaSolver {
   const account = (ctx.init.settings?.tuJianAccount || '').trim();
   const password = (ctx.init.settings?.tuJianPassword || '').trim();
   if (!account || !password) {
     ctx.sendLog('warn', '[弹框看门狗] 未配置图鉴账号/密码(设置面板 → 图鉴账号),验证码将兜底点第一个选项');
-    return new StaticCaptchaSolver('I');
+    return new StaticCaptchaSolver('I', () => {
+      // 第一次真要用到识别时才提醒:交给主进程弹系统通知(同一 key 全局只弹一次,多开不会重复提醒)
+      ctx.postMessage({
+        type: 'notify',
+        key: 'tujian-not-configured',
+        title: '未配置验证码识别',
+        body: '当前未配置识别神医验证码的接口信息,请打开设置进行配置',
+      });
+    });
   }
   return new TuJianSolver({
     account,

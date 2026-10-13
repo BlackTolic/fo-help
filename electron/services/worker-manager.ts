@@ -25,6 +25,7 @@ import { PushChannel } from '../../shared/ipc-channels';
 import { createLogger } from '../../core/logger';
 import { ThumbnailService } from './thumbnail-service';
 import { getAppSettings } from './app-settings-service';
+import { notifyOnce } from './notification-service';
 import { getThumbsDir, getVerifyCodesDir } from '../main';
 
 const log = createLogger('worker-manager');
@@ -600,6 +601,11 @@ export class WorkerManager {
         `[WorkerManager] [w-${m.state.hwnd}] 弹框事件 ${event.kind}: ${event.popupType} ${event.detail || ''}`,
       );
       this.broadcast(PushChannel.WorkerInterrupt, event);
+    } else if (msg.type === 'notify') {
+      // worker 想让用户看到提醒(如未配置图鉴账号):主进程弹系统通知,同一 key 只弹一次
+      if (msg.key && msg.title) {
+        notifyOnce({ key: msg.key, title: msg.title, body: msg.body || '' });
+      }
     } else if (msg.type === 'thumbnail') {
       // 缩略图:缓存到主进程 ThumbnailService + 推给 renderer
       // (renderer 主要用 onThumbnailUpdate 订阅推送,但 CaptureWindow IPC handler

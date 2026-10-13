@@ -13,6 +13,7 @@ import {
 import { useStore, subscribeToIpc } from './store/useStore';
 import { WindowCard } from './components/WindowCard';
 import { SettingsDialog } from './components/SettingsDialog';
+import { ToastHost } from './components/ToastHost';
 
 function App() {
   const gameWindows = useStore((s) => s.gameWindows);
@@ -257,6 +258,9 @@ function App() {
           }}
         />
       )}
+
+      {/* 右下角提醒浮层(主进程推送,如"未配置图鉴账号") */}
+      <ToastHost />
     </div>
   );
 }

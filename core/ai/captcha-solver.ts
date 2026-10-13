@@ -28,11 +28,23 @@ export interface CaptchaSolver {
 /**
  * 固定答案的兜底/联调实现
  * 没配识别账号时用它:直接点第一个选项,避免弹框超时把角色踢下线
+ *
+ * onFirstSolve:solve 首次被调用时触发一次(用于"第一次真要用到识别时才提醒用户去配置账号"),
+ *   之后不再触发;不传则该类只是纯粹的固定答案。
  */
 export class StaticCaptchaSolver implements CaptchaSolver {
-  constructor(private answer: VerifyAnswer | null = 'I') {}
+  private firstSolveDone = false;
+
+  constructor(
+    private answer: VerifyAnswer | null = 'I',
+    private onFirstSolve?: () => void,
+  ) {}
 
   async solve(): Promise<VerifyAnswer | null> {
+    if (this.onFirstSolve && !this.firstSolveDone) {
+      this.firstSolveDone = true;
+      this.onFirstSolve();
+    }
     return this.answer;
   }
 }

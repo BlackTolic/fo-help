@@ -608,6 +608,14 @@ export interface AppSettings {
   tuJianPassword: string;
 }
 
+/** 应用内提醒(主进程 → 渲染进程右下角浮层,如"未配置图鉴账号") */
+export interface AppToastPayload {
+  /** 去重键,同一件事在本次运行内只提醒一次 */
+  key: string;
+  title: string;
+  body: string;
+}
+
 /** 看门狗中断事件(检测命中与处理结果) */
 export interface InterruptEvent {
   /** detected=检测命中 / handled=处理完成 / failed=处理失败 */

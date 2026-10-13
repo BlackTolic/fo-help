@@ -484,6 +484,11 @@ function cleanupDmDllSideFiles(): void {
 
 // 启动 app
 app.whenReady().then(() => {
+  // Windows 系统通知(右下角 toast)要求 AppUserModelID 与开始菜单快捷方式一致:
+  //   安装版:electron-builder 的 appId(NSIS 安装时写进快捷方式的 AUMI,见 build 配置)
+  //   开发期:按 Electron 文档用 electron.exe 路径(需把 electron.exe 固定到开始菜单才会显示)
+  app.setAppUserModelId(app.isPackaged ? 'com.fohelp.assistant' : process.execPath);
+
   // 缩略图目录 + 自定义协议
   if (!fs.existsSync(THUMBS_DIR)) fs.mkdirSync(THUMBS_DIR, { recursive: true });
   protocol.handle('thumb', (request) => {

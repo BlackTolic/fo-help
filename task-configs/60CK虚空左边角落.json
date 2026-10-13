@@ -131,12 +131,25 @@
             "e0e4a8-111111"
           ],
           "nameKeywords": [
-            "+4|+5|+6|+7|捆|仙|索|药水|生命"
+            "+4|+5|+6|+7|捆|仙|索|药水|生命|幻蝶|之|羽|玩具"
           ]
         }
       ]
+    },
+    "resupply": {
+      "enabled": false,
+      "townProfileName": "",
+      "reviveMode": "immediate",
+      "reviveTimeoutMs": 180000,
+      "runOnStart": false
+    },
+    "petRide": {
+      "enabled": false
+    },
+    "returnScroll": {
+      "enabled": false
     }
   },
   "createdAt": 1790753436919,
-  "updatedAt": 1790847594028
+  "updatedAt": 1791868103178
 }

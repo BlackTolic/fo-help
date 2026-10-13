@@ -200,7 +200,7 @@ log.info(...); log.warn(...); log.error(...);
 
 - 入口：`dist-electron/electron/workers/game-utility-worker.js`，路径用 `path.join(app.getAppPath(), 'dist-electron', 'electron', 'workers', ...)` 解析。
 - 启动参数通过 **`process.argv` 传 JSON 字符串**（`JSON.stringify` 作唯一 argv），子进程 `JSON.parse(process.argv[process.argv.length - 1])`。
-- 通信：父→子统一 `{ type: 'command', command: 'start-task' | 'stop' | 'pause' | 'resume' | 'screenshot' | 'read-position', ... }`；子→父 `{ type: 'state' | 'log' | 'error' | 'interrupt' | 'thumbnail' | 'position' | 'ready' }`。父↔子消息目前无共享 TS 类型，靠约定 + 注释，改时两边同步。
+- 通信：父→子统一 `{ type: 'command', command: 'start-task' | 'stop' | 'pause' | 'resume' | 'screenshot' | 'read-position', ... }`；子→父 `{ type: 'state' | 'log' | 'error' | 'interrupt' | 'notify' | 'thumbnail' | 'position' | 'ready' }`（`notify` = 请求主进程弹一次系统通知，见 `electron/services/notification-service.ts`）。父↔子消息目前无共享 TS 类型，靠约定 + 注释，改时两边同步。
 - **`ready` 握手时序**：子进程必须在**顶层同步代码末尾**立即发 `{ type: 'ready' }`（不能等 async main resolve），父进程要等收到 `ready` 才 `postMessage`。
 - Electron 32 的 UtilityProcess 会把父→子消息包成 `MessageEvent`，收端要解包 `event.data`。
 - **清理方法命名**：管理器用 `stop()`（优雅）/ `kill()`（强杀）/ `shutdownAll()`（批量）；缓存用 `clear()` / `clearAll()`。**不要用 `dispose()`**。

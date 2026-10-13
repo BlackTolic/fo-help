@@ -9,6 +9,7 @@ import type {
   AppSettings,
   StartTaskAuxConfigs,
   WorkerPositionResult,
+  AppToastPayload,
 } from '../shared/types';
 
 interface FohelpAPI {
@@ -111,6 +112,8 @@ interface FohelpAPI {
     }) => void,
   ) => () => void;
   onThumbnailUpdate: (cb: (data: { hwnd: number; dataUrl: string | null }) => void) => () => void;
+  /** 应用内提醒(右下角浮层,如"未配置图鉴账号") */
+  onAppToast: (cb: (toast: AppToastPayload) => void) => () => void;
 }
 
 declare global {

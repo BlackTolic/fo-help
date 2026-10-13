@@ -48,4 +48,5 @@ export enum PushChannel {
   WorkerError = 'worker:error', // Worker 错误
   WorkerInterrupt = 'worker:interrupt', // 弹框中断事件(验证码/组队邀请等)
   ThumbnailUpdate = 'thumbnail:update', // 后台截图推送
+  AppToast = 'app:toast', // 应用内提醒(右下角浮层,如"未配置图鉴账号")
 }

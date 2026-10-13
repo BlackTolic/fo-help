@@ -18,6 +18,7 @@ import type {
   AppSettings,
   StartTaskAuxConfigs,
   WorkerPositionResult,
+  AppToastPayload,
 } from '../shared/types';
 
 type Unsubscribe = () => void;
@@ -230,6 +231,9 @@ const api = {
   /** 订阅后台缩略图更新。 */
   onThumbnailUpdate: (cb: (data: ThumbnailUpdatePayload) => void): Unsubscribe =>
     onPush(PushChannel.ThumbnailUpdate, cb),
+
+  /** 订阅应用内提醒(右下角浮层,如"未配置图鉴账号")。 */
+  onAppToast: (cb: (toast: AppToastPayload) => void): Unsubscribe => onPush(PushChannel.AppToast, cb),
 };
 
 contextBridge.exposeInMainWorld('fohelp', api);
