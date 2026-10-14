@@ -98,7 +98,7 @@ export interface ResupplyDeps {
   movement: MovementController;
   /** farm 主循环正在用的输入模拟(复用同一实例;上骑/下骑按技能键用) */
   input: IInputProvider;
-  /** 宠物骑乘配置(回到城里检查宠物激活并上骑;缺省关闭,见 shared/types.ts 的 FarmPetRideConfig) */
+  /** 宠物技能配置(回到城里检查宠物激活并上骑;缺省关闭,见 shared/types.ts 的 FarmPetRideConfig) */
   petRide: ResolvedPetRide;
   /** 读当前地图名(OCR 中文名,读不到返回空串) */
   readMapName: () => Promise<string>;
@@ -295,6 +295,10 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     // 已在挂机地图:整段补给跳过 —— 没必要为了买药/修装备特意跑一趟城镇
     if (position.skipped) return { ok: true, detail: position.detail };
     if (stopped()) return { ok: false, detail: `任务已停止,放弃${label}` };
+    // 人在城镇 = 刚从挂机图回来(条件回城:按卷轴回城 / 小退重新上线,都等于"重新进过游戏")。
+    // 跟死亡重生那条一样,让 farm 侧按「进入新地图时屏蔽所有人」决定要不要重新屏蔽 ——
+    // 游戏重新进图/回到城镇会把屏蔽状态清掉,不补一次就一直是"没屏蔽"的状态。
+    await deps.onMapMaybeChanged?.();
     // 位置离档案复活点太远只提醒不阻断:后面的寻路是"从当前位置按坐标走"(见 travelWithinMap)
     await warnIfFarFromRevivePoint(flow);
     // 人在城镇:检查宠物是否激活并上骑,骑着回挂机图更快(到挂机点主循环再下骑)

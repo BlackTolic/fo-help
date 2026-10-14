@@ -12,6 +12,7 @@
 //
 // 坐标系:dm.Function(x1,y1,x2,y2,...) 用的是「窗口客户区相对坐标」,与 MonsterNameDetector 一致。
 
+import path from 'path';
 import type { WindowSizeKey } from '../constant-ocr/popup';
 import { TEAM_DISBAND_TEXT, TEAM_JOIN_TEXT, TEAM_PANEL_ROI } from '../constant-ocr/team';
 import type { DamooClient } from '../platform/damoo/dm-api';
@@ -43,6 +44,9 @@ export interface TeamPanelDetection {
 export function detectTeamPanelState(client: DamooClient, size: WindowSizeKey): TeamPanelDetection {
   const roi = TEAM_PANEL_ROI[size];
   if (!roi) return { state: 'unknown', text: '', unsupported: true };
+
+  // 截图测试
+  client.capturePng(roi.x1, roi.y1, roi.x2, roi.y2, `${path.join(process.cwd(), '/logs')}/team-panel.png`);
 
   const join = parseTextPos(client.findStrE(roi.x1, roi.y1, roi.x2, roi.y2, TEAM_JOIN_TEXT, roi.color, roi.findSim));
   if (join) return { state: 'join', text: TEAM_JOIN_TEXT, pos: join, unsupported: false };

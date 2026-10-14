@@ -1,0 +1,204 @@
+{
+  "id": "task-102术士八仙副本-1791981816445",
+  "name": "102术士八仙副本",
+  "taskType": "farm",
+  "config": {
+    "type": "farm",
+    "mapId": "custom",
+    "customMapName": "八仙",
+    "mode": "fixed",
+    "castMode": "smart",
+    "waypoints": [
+      {
+        "id": "wp-1791820000001-052",
+        "x": 76,
+        "y": 97,
+        "type": "farm-spot"
+      }
+    ],
+    "mobFilter": {
+      "nameKeywords": [
+        "野",
+        "狼",
+        "鸡",
+        "鹿",
+        "狐",
+        "猫"
+      ],
+      "nameColors": [
+        "FFFFFF-FFFFFF"
+      ]
+    },
+    "skills": [
+      {
+        "id": "skill-1790561668551-2lfl",
+        "key": "F1",
+        "cooldownMs": 6000,
+        "castMs": 500,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668768-0lrx",
+        "key": "F2",
+        "cooldownMs": 5000,
+        "castMs": 750,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561668944-a5gb",
+        "key": "F3",
+        "cooldownMs": 10000,
+        "castMs": 0,
+        "rangePx": 180,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561669095-36q7",
+        "key": "F4",
+        "cooldownMs": 25000,
+        "castMs": 0,
+        "rangePx": 100,
+        "method": "target",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561749975-tw2o",
+        "key": "F7",
+        "cooldownMs": 300000,
+        "castMs": 100,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790561750353-3c79",
+        "key": "F8",
+        "cooldownMs": 60000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "self",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790569034369-qqxi",
+        "key": "F10",
+        "cooldownMs": 120000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
+        "enabled": true
+      },
+      {
+        "id": "skill-1790595746624-r8cm",
+        "key": "F5",
+        "name": "喂草",
+        "cooldownMs": 1800000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "quick",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791700490261-c2nq",
+        "key": "TF10",
+        "name": "上骑",
+        "cooldownMs": 0,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "pet",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791731822606-qagp",
+        "key": "TF7",
+        "cooldownMs": 0,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "item",
+        "enabled": true
+      },
+      {
+        "id": "skill-1791979894451-cp6y",
+        "key": "TF8",
+        "name": "收集",
+        "cooldownMs": 1000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "pet",
+        "enabled": true
+      }
+    ],
+    "movementSpeed": 500,
+    "watchdog": {
+      "verifyCode": true,
+      "autoHeal": {
+        "itemIds": [
+          "skill-1790569034369-qqxi"
+        ]
+      }
+    },
+    "pickup": {
+      "enabled": false,
+      "rangeMode": "default",
+      "rules": []
+    },
+    "resupply": {
+      "enabled": true,
+      "townProfileName": "龙城-华山脚找墨玉",
+      "reviveMode": "immediate",
+      "reviveTimeoutMs": 180000,
+      "checkDurability": true,
+      "runOnStart": true
+    },
+    "mapCrossings": [
+      "龙城-华山"
+    ],
+    "petRide": {
+      "enabled": false,
+      "mountSkillId": "skill-1791700490261-c2nq",
+      "dismountSkillId": "skill-1791700490261-c2nq",
+      "preFarmSkillEnabled": true,
+      "preFarmSkillId": "skill-1791979894451-cp6y"
+    },
+    "returnScroll": {
+      "enabled": true,
+      "skillId": "skill-1791731822606-qagp"
+    },
+    "endReturn": {
+      "enabled": true,
+      "loops": 1,
+      "method": "relogin",
+      "scroll": {
+        "maxAttempts": 5,
+        "pressIntervalMs": 4000
+      },
+      "relogin": {
+        "clearMobs": true,
+        "clearTimeoutMs": 120000,
+        "maxAttempts": 3,
+        "mobFilter": {
+          "nameColors": [
+            "a8a8a0-111111"
+          ],
+          "nameKeywords": [
+            "天泉|精英|头目"
+          ],
+          "ocrRange": {
+            "x": 465,
+            "y": 207,
+            "w": 353,
+            "h": 327
+          }
+        }
+      }
+    },
+    "blockAllPlayersOnNewMap": true
+  },
+  "createdAt": 1791981816445,
+  "updatedAt": 1791983234683
+}

@@ -349,7 +349,7 @@ export function TaskConfigDialog({
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
   // 地图跨越(farm 专属):出发图 → 挂机图之间依次穿越的中间地图名(引用 map-profile 任务)
   const [mapCrossings, setMapCrossings] = useState<string[]>([]);
-  // 宠物骑乘:回到城里上骑、到挂机点下骑(上骑/下骑从「宠物技能」里选)
+  // 宠物技能:回到城里上骑、到挂机点下骑;到达挂机点打怪前再按需开启宠物技能(都从「宠物技能」里选)
   const [petRide, setPetRide] = useState<FarmPetRideConfig>({ ...DEFAULT_PET_RIDE });
   // 回城卷轴:起点在野外/任意地图时先按它回主城(见 worker 的 returnViaScroll)
   const [returnScroll, setReturnScroll] = useState<FarmReturnScrollConfig>({ ...DEFAULT_RETURN_SCROLL });
@@ -752,11 +752,13 @@ export function TaskConfigDialog({
         resupply: normalizeResupply(resupply),
         // 地图跨越:只留非空的名字(空数组 = 不写,等价于不跨图)
         mapCrossings: mapCrossings.filter(Boolean).length > 0 ? mapCrossings.filter(Boolean) : undefined,
-        // 宠物骑乘:整份保存,上骑/下骑只保留仍然存在且仍是「宠物技能」的 id,避免失效引用
+        // 宠物技能:整份保存,上骑/下骑/打怪前技能只保留仍然存在且仍是「宠物技能」的 id,避免失效引用
         petRide: {
           enabled: petRide.enabled === true,
           mountSkillId: isPetSkillId(skills, petRide.mountSkillId) ? petRide.mountSkillId : undefined,
           dismountSkillId: isPetSkillId(skills, petRide.dismountSkillId) ? petRide.dismountSkillId : undefined,
+          preFarmSkillEnabled: petRide.preFarmSkillEnabled === true,
+          preFarmSkillId: isPetSkillId(skills, petRide.preFarmSkillId) ? petRide.preFarmSkillId : undefined,
         },
         // 回城卷轴:整份保存(没开启也留着参数)
         returnScroll: normalizeReturnScroll(returnScroll),
@@ -889,6 +891,9 @@ export function TaskConfigDialog({
       if (!isPetSkillId(skills, petRide.dismountSkillId)) {
         return '已开启宠物骑乘,但没有选择有效的「下骑」宠物技能';
       }
+    }
+    if (taskType === 'farm' && petRide.preFarmSkillEnabled === true && !isPetSkillId(skills, petRide.preFarmSkillId)) {
+      return '已开启「打怪前开启宠物技能」,但没有选择有效的宠物技能(先在「技能设置」里添加施法方式为「宠物技能」的技能)';
     }
     if (taskType === 'farm' && returnScroll.enabled === true) {
       if (!skills.some((s) => s.id === returnScroll.skillId && s.method === 'item')) {
@@ -1587,7 +1592,7 @@ const SKILL_KEY_PAGE2 = ['TF1', 'TF2', 'TF3', 'TF4', 'TF5', 'TF6', 'TF7', 'TF8',
 /** 旧配置第二页写成 SF*,读入时归一成 TF*(与 worker 的 normalizeSkillKey 一致) */
 const normalizeSkillKey = (key: string): string => key.replace(/^SF(\d+)$/, 'TF$1');
 
-/** 某个技能 id 是否是启用中的「宠物技能」(宠物骑乘的上骑/下骑只能引用它) */
+/** 某个技能 id 是否是启用中的「宠物技能」(骑乘/打怪前技能的引用只能指向它) */
 function isPetSkillId(skills: FarmSkillConfig[], id?: string): boolean {
   if (!id) return false;
   return skills.some((s) => s.id === id && s.enabled !== false && s.method === 'pet');
@@ -1599,7 +1604,7 @@ const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string
   { value: 'target', label: '缺省施法', desc: '按键 + 左键点击目标坐标' },
   { value: 'self', label: '状态施法', desc: '点击角色自身 + 按键' },
   { value: 'item', label: '物品使用', desc: '只按快捷键使用快捷栏物品(可由「生命回复」按血量自动使用)' },
-  { value: 'pet', label: '宠物技能', desc: '只按技能键的宠物技能(不参与打怪,供「宠物骑乘」的上骑/下骑选择)' },
+  { value: 'pet', label: '宠物技能', desc: '只按技能键的宠物技能(不参与打怪,供「宠物技能」的骑乘/打怪前技能选择)' },
 ];
 
 /** 新建任务时的看门狗默认值:只开验证码(与升级前行为一致,其余项按需勾选) */
@@ -1646,7 +1651,7 @@ interface FarmConfigProps {
   /** 城市事件(引用已保存的城镇档案;启动 farm 时由 WindowCard 解析成 auxConfigs 下发) */
   resupply: FarmResupplyConfig;
   setResupply: (v: FarmResupplyConfig | ((prev: FarmResupplyConfig) => FarmResupplyConfig)) => void;
-  /** 宠物骑乘(回城上骑、到挂机点下骑;上骑/下骑引用「宠物技能」) */
+  /** 宠物技能(回城上骑、到挂机点下骑、打怪前开启宠物技能;都引用「宠物技能」) */
   petRide: FarmPetRideConfig;
   setPetRide: (v: FarmPetRideConfig | ((prev: FarmPetRideConfig) => FarmPetRideConfig)) => void;
   /** 回城卷轴(起点不认识时先回主城;引用「物品」技能) */
@@ -1740,9 +1745,9 @@ function FarmConfig(props: FarmConfigProps) {
 
   /** 「物品使用」技能 = 生命回复可选的药品池(与技能设置共用同一份快捷栏配置) */
   const itemSkills = skills.filter((s) => s.method === 'item' && s.enabled !== false);
-  /** 「宠物技能」= 宠物骑乘的上骑/下骑可选池(不参与打怪循环) */
+  /** 「宠物技能」= 宠物骑乘的上骑/下骑、打怪前开启宠物技能的可选池(不参与打怪循环) */
   const petSkills = skills.filter((s) => s.method === 'pet' && s.enabled !== false);
-  /** 参与打怪的技能(路径点绑定用;宠物技能只用于骑乘,不参与打怪) */
+  /** 参与打怪的技能(路径点绑定用;宠物技能只在骑乘/打怪前开启时用,不参与打怪) */
   const combatSkills = skills.filter((s) => s.method !== 'pet');
   const autoHealIds = watchdog.autoHeal?.itemIds ?? [];
   /** 把某个技能 id 从生命回复的药品选择里摘掉(技能被删/改成别的施法方式时) */
@@ -1753,14 +1758,15 @@ function FarmConfig(props: FarmConfigProps) {
       return { ...w, autoHeal: { itemIds } };
     });
   };
-  /** 把某个技能 id 从宠物骑乘的上骑/下骑里摘掉(技能被删/改成别的施法方式时) */
+  /** 把某个技能 id 从宠物技能的引用(上骑/下骑/打怪前技能)里摘掉(技能被删/改成别的施法方式时) */
   const dropPetRideSkill = (id: string) => {
     setPetRide((p) => {
-      if (p.mountSkillId !== id && p.dismountSkillId !== id) return p;
+      if (p.mountSkillId !== id && p.dismountSkillId !== id && p.preFarmSkillId !== id) return p;
       return {
         ...p,
         mountSkillId: p.mountSkillId === id ? undefined : p.mountSkillId,
         dismountSkillId: p.dismountSkillId === id ? undefined : p.dismountSkillId,
+        preFarmSkillId: p.preFarmSkillId === id ? undefined : p.preFarmSkillId,
       };
     });
   };
@@ -1811,7 +1817,7 @@ function FarmConfig(props: FarmConfigProps) {
     setWaypoints((ws) => ws.map((w) => (w.skillIds ? { ...w, skillIds: w.skillIds.filter((sid) => sid !== id) } : w)));
     // 同时从生命回复的药品选择里摘掉
     dropHealItem(id);
-    // 以及从宠物骑乘的上骑/下骑里摘掉
+    // 以及从宠物技能的引用(上骑/下骑/打怪前技能)里摘掉
     dropPetRideSkill(id);
   };
 
@@ -1998,7 +2004,7 @@ function FarmConfig(props: FarmConfigProps) {
                         updateSkill(skill.id, { method: next });
                         // 改成非「物品使用」后,不能再作为生命回复的药品
                         if (next !== 'item') dropHealItem(skill.id);
-                        // 改成非「宠物技能」后,不能再被宠物骑乘的上骑/下骑引用
+                        // 改成非「宠物技能」后,不能再被宠物技能的引用(骑乘/打怪前技能)指向
                         if (next !== 'pet') dropPetRideSkill(skill.id);
                       }}
                       disabled={readOnly}
@@ -2089,7 +2095,7 @@ function FarmConfig(props: FarmConfigProps) {
                           : method === 'item'
                             ? '只按快捷键使用物品,不需要吟唱/施法距离(可在下方「生命回复」里选用)'
                             : method === 'pet'
-                              ? '只按键的宠物技能,不需要吟唱/施法距离(在下方「宠物骑乘」里选用)'
+                              ? '只按键的宠物技能,不需要吟唱/施法距离(在下方「宠物技能」里选用)'
                               : '点角色自身 + 按键,不需要吟唱/施法距离'}
                       </span>
                     )}
@@ -2102,7 +2108,7 @@ function FarmConfig(props: FarmConfigProps) {
         <div className="text-[10px] text-text-muted mt-1">
           施法方式:快捷施法 = 只按键;缺省施法 = 按键 + 左键点击目标(定点打怪时点「移动反方向、 施法距离处」,定点识别时点已锁定的怪);状态施法
           = 点击角色自身 + 按键;物品使用 = 只按快捷键消耗快捷栏物品(血药等,可在下方「生命回复」里勾选);宠物技能 =
-          只按键的宠物技能(不参与打怪,供下方「宠物骑乘」的上骑/下骑选择)。配好技能后,
+          只按键的宠物技能(不参与打怪,供下方「宠物技能」的骑乘/打怪前技能选择)。配好技能后,
           {castMode === 'smart'
             ? mode === 'fixed-detect'
               ? '定点识别 + 智能施法会在每个挂机点循环释放全部已配置技能,直到锁定的怪名消失,再重新识别'
@@ -2800,7 +2806,7 @@ function FarmConfig(props: FarmConfigProps) {
         recipeIssue={recipeIssue}
       />
 
-      {/* 宠物骑乘:回城后检查宠物激活并上骑,到挂机点下骑再打怪 */}
+      {/* 宠物技能:回城后检查宠物激活并上骑,到挂机点下骑;打怪前按需再开启宠物技能 */}
       <FarmPetRideSection readOnly={readOnly} value={petRide} onChange={setPetRide} petSkills={petSkills} />
 
       {/* 回城卷轴:起点在野外/任意地图时,先按卷轴回主城,再前往挂机图 */}

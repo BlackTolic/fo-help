@@ -8,7 +8,7 @@
 //   判定见 core/perception/TeamPanelDetector.ts,补给流程里的用法见
 //   electron/workers/game-worker/resupply/team-check.ts。
 //
-// 坐标来源:1280*800 = 用户实测(区域 1144,700 → 1250,721,宽 106 高 21;建队确认坐标 551,451);
+// 坐标来源:1280*800 = 用户实测(区域 1129,697 → 1266,727,宽 137 高 30;建队确认坐标 551,451);
 //   1600*900 = 按比例换算(x × 1600/1280,y × 900/800,与 core/constant-ocr/relogin.ts 同一套算法),⚠️ 未实测。
 //
 // 颜色:用户实测 b@282420-141414,整串原样传给大漠(不要在代码里自己解析)。
@@ -47,16 +47,16 @@ export interface TeamPanelRoi {
  * 缺档位 = 该分辨率没有实测值,检测不生效,由调用方提示一次并跳过(不阻断补给流程)
  */
 export const TEAM_PANEL_ROI: Partial<Record<WindowSizeKey, TeamPanelRoi>> = {
-  '1280*800': { x1: 1144, y1: 700, x2: 1250, y2: 721, color: TEAM_PANEL_COLOR, findSim: DEFAULT_FUZZY_SIM, ocrSim: DEFAULT_FUZZY_SIM },
+  '1280*800': { x1: 1129, y1: 697, x2: 1266, y2: 727, color: TEAM_PANEL_COLOR, findSim: DEFAULT_FUZZY_SIM, ocrSim: DEFAULT_FUZZY_SIM },
   // 1600*900:按比例推算,未实测(见文件头)
-  '1600*900': { x1: 1430, y1: 788, x2: 1563, y2: 811, color: TEAM_PANEL_COLOR, findSim: DEFAULT_FUZZY_SIM, ocrSim: DEFAULT_FUZZY_SIM },
+  '1600*900': { x1: 1411, y1: 784, x2: 1583, y2: 818, color: TEAM_PANEL_COLOR, findSim: DEFAULT_FUZZY_SIM, ocrSim: DEFAULT_FUZZY_SIM },
 };
 
 /** 面板上「组队」二字:找到它 = 当前未组队(点它建队) */
-export const TEAM_JOIN_TEXT = '组队';
+export const TEAM_JOIN_TEXT = '组队|组|队';
 
 /** 面板上「解散」二字:找到它 = 已经在队伍里(不用建队) */
-export const TEAM_DISBAND_TEXT = '解散';
+export const TEAM_DISBAND_TEXT = '解散|解|散';
 
 /**
  * 点掉「组队」之后要点的确认坐标(建队按钮;客户区相对坐标)
@@ -70,10 +70,17 @@ export const TEAM_CREATE_POS: Partial<Record<WindowSizeKey, { x: number; y: numb
 
 /** 面板打开/点击/关闭的等待时间(ms):给面板展开动画、点击生效、面板收起留时间 */
 export const TEAM_PANEL_TIMING = {
-  /** 按 Alt+Q 打开后等面板展开(与宠物面板的 panelOpenWaitMs 同量级) */
-  openMs: 600,
-  /** 每次点击前后的稳定等待(移到坐标后 / 点完之后) */
-  clickMs: 300,
+  /** 按 Alt+Q 打开后等面板展开:用户要求停 2 秒再开始识别 */
+  openMs: 2500,
+  /** 「点组队」与「点建队确认」这两次点击前后的稳定等待(移到坐标后 / 点完之后):用户要求 500ms */
+  clickMs: 500,
   /** 按 Alt+Q 关闭后等面板收起 */
   closeMs: 200,
+  /**
+   * 一次检查里最多"按 Alt+Q + 扫描"几次:网速慢时按了快捷键可能没能立刻生效(面板还没出来),
+   * 没读到任何文案就隔 retryOpenMs 再按一次重扫 —— 用户要求:2 秒后重试,一共 3 次
+   */
+  detectAttempts: 3,
+  /** 上一条里"重按 Alt+Q 并重扫"之前的间隔(ms):用户要求 2 秒 */
+  retryOpenMs: 2000,
 };

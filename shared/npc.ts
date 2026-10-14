@@ -17,8 +17,8 @@ export const NPC = {
   GENERAL_MERCHANT: '杂货商人',
   /** 飞空艇(载具 / 传送) */
   AIRSHIP_FAIRY: '飞空艇仙子',
-  /** 杨戬(游戏内 NPC 名) */
-  YANG_JIAN: '杨戬',
+  /** 二郎神(游戏内 NPC 名,旧名杨戬) */
+  ER_LANG_SHEN: '二郎神',
   /** 荣光使者(游戏内 NPC 名) */
   GLORY_ENVOY: '荣光使者',
 } as const;
@@ -29,9 +29,10 @@ export type NpcName = (typeof NPC)[keyof typeof NPC];
 /** NPC 下拉选项(值即中文名) */
 export const NPC_OPTIONS: readonly NpcName[] = Object.values(NPC);
 
-/** 历史英文 id → 当前中文名(只用于读取旧配置) */
+/** 历史英文 id / 旧名 → 当前中文名(只用于读取旧配置) */
 const LEGACY_NPC_ALIASES: Record<string, NpcName> = {
   'item-merchant': NPC.ITEM_MERCHANT,
+  杨戬: NPC.ER_LANG_SHEN,
 };
 
 /**

@@ -1,4 +1,5 @@
-// 小退回城:Alt+O 打开系统菜单 → 点「选择角色」→ 等进入选择角色界面 → 停留 3 秒 → 按 Enter 回到游戏
+// 小退回城:Alt+O 打开系统菜单 → 点「选择角色」→ 停 3 秒 → 识别到「保护未成年人健康」→ 按 Enter
+//   → 停顿(见 RELOGIN.enterSettleMs) → 等回到游戏(能读到地图名/坐标)→ 点掉「游戏IP登录提示」
 //
 // 为什么用这条路子:回城卷轴在野外被攻击时可能按不动,小退是"退出到选择角色再上线"的兜底方式。
 // 上线后落在哪张图不用这里管 —— 与回城卷轴一样交给「回城补给」的城镇/跨境逻辑返程
@@ -46,6 +47,8 @@ const RELOGIN = {
   pollMs: 500,
   /** 点完「选择角色」后固定等待的时间(ms):用户要求先停 3 秒,再开始识别「未成年人」文案 */
   selectHoldMs: 3000,
+  /** 按 Enter 之后再停顿的时间(ms):用户要求停 7 秒才开始后面的动作(等回到游戏 / 点掉IP登录提示) */
+  enterSettleMs: 7000,
   /** 点掉「游戏IP登录提示」之后的等待(ms) */
   ipTipAfterMs: 500,
   /** 一次尝试失败后、下一次尝试之前的等待(ms) */
@@ -254,7 +257,7 @@ async function closeIpLoginTip(deps: ReloginDeps): Promise<void> {
  * 一次小退尝试:
  *   已经在选择角色界面(上一次尝试按了 Enter 却没进游戏)→ 跳过开菜单那两步
  *   否则:Alt+O 打开系统菜单 → 点「选择角色」→ 等进入选择角色界面
- *   → 停留 3s → 按 Enter → 等回到游戏 → 点掉「游戏IP登录提示」
+ *   → 停留 3s → 按 Enter → 停顿(见 RELOGIN.enterSettleMs) → 等回到游戏 → 点掉「游戏IP登录提示」
  */
 async function reloginOnce(deps: ReloginDeps): Promise<ReloginResult> {
   const { ctx, label, input } = deps;
@@ -289,6 +292,10 @@ async function reloginOnce(deps: ReloginDeps): Promise<ReloginResult> {
 
   ctx.sendLog('info', `[${label}] 小退:按 Enter 重新进入游戏`);
   await input.pressKey('Enter');
+
+  // 用户要求:按 Enter 之后先停顿(见 RELOGIN.enterSettleMs),才开始后面的动作(等回到游戏 / 点掉IP登录提示)
+  await sleep(RELOGIN.enterSettleMs);
+  if (stopped()) return { ok: false, detail: '任务已停止(小退途中)' };
 
   const back = await waitBackToGame(deps);
   if (!back.ok) return back;

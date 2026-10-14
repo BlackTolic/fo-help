@@ -1,0 +1,33 @@
+{
+  "id": "task-龙城-华山脚找墨玉-1791982498984",
+  "name": "龙城-华山脚找墨玉",
+  "taskType": "town-profile",
+  "config": {
+    "type": "town-profile",
+    "mapName": "龙城",
+    "revivePoint": {
+      "x": 225,
+      "y": 181
+    },
+    "checkDurability": false,
+    "createTeam": false,
+    "npcs": [],
+    "routes": [],
+    "exits": [
+      {
+        "id": "exit-1791982433581-ii0k",
+        "toMap": "华山脚",
+        "position": {
+          "x": 235,
+          "y": 184
+        },
+        "via": "npc",
+        "npcName": "飞空艇仙子",
+        "recipeName": "飞空艇-华山脚"
+      }
+    ],
+    "transitFrom": []
+  },
+  "createdAt": 1791982498984,
+  "updatedAt": 1791983306600
+}

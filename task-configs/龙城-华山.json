@@ -1,0 +1,35 @@
+{
+  "id": "task-龙城-华山-1791983030632",
+  "name": "龙城-华山",
+  "taskType": "map-profile",
+  "config": {
+    "type": "map-profile",
+    "mapName": "华山脚",
+    "entrance": {
+      "position": {
+        "x": 232,
+        "y": 183
+      },
+      "toMap": "龙城"
+    },
+    "exit": {
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "toMap": "八仙"
+    },
+    "waypoints": [
+      {
+        "x": 225,
+        "y": 222,
+        "npc": {
+          "name": "道具商人",
+          "recipeName": "飞空艇-华山脚"
+        }
+      }
+    ]
+  },
+  "createdAt": 1791983030632,
+  "updatedAt": 1791983030632
+}

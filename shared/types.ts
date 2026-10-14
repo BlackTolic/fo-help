@@ -106,11 +106,16 @@ export interface FarmSkillConfig {
 export type FarmMode = 'fixed' | 'fixed-detect' | 'move-detect';
 
 /**
- * 宠物骑乘配置(farm 专属):
- * 勾选后每次回城补给回到城里,先检查宠物是否激活(OCR「暂时没有宠物」),
+ * 宠物技能配置(farm 专属,界面上是「宠物技能」分组):
+ *
+ * 宠物骑乘(前三个字段)——勾选后每次回城补给回到城里,先检查宠物是否激活(OCR「暂时没有宠物」),
  * 激活则释放「上骑」技能并检测骑乘提示字样(最多 3 次,间隔 1s);
  * 到了挂机点再释放一次「下骑」技能后才开始打怪。
  * 上骑/下骑都从「宠物技能」(method='pet')的条目里选,可以是同一个按键。
+ *
+ * 打怪前开启宠物技能(后两个字段)——与宠物骑乘开关无关:在挂机点开始打怪之前释放一次这个宠物技能;
+ * 它是状态技能(开一次就一直有),所以每圈只在第一个到达的挂机点放一次;
+ * 若那一步刚好执行了下骑,则在下骑之后隔 1s 再释放(避开下骑动作)。
  */
 export interface FarmPetRideConfig {
   /** 是否开启宠物骑乘 */
@@ -119,6 +124,10 @@ export interface FarmPetRideConfig {
   mountSkillId?: string;
   /** 下骑技能 id(同上) */
   dismountSkillId?: string;
+  /** 是否开启「打怪前开启宠物技能」(与 enabled 相互独立) */
+  preFarmSkillEnabled?: boolean;
+  /** 打怪前释放的宠物技能 id(method 必须是 'pet') */
+  preFarmSkillId?: string;
 }
 
 /**

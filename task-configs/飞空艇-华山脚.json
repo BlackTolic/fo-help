@@ -1,0 +1,28 @@
+{
+  "id": "task-飞空艇-华山脚-1791982573789",
+  "name": "飞空艇-华山脚",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791982509538-zho9",
+        "kind": "click-text",
+        "text": "传送",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      },
+      {
+        "id": "step-1791982543387-zn12",
+        "kind": "click-text",
+        "text": "华山脚",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      }
+    ]
+  },
+  "createdAt": 1791982573789,
+  "updatedAt": 1791982573789
+}

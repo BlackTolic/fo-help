@@ -1,4 +1,4 @@
-// 宠物骑乘:回到城里「上骑」,到达挂机点后「下骑」
+// 宠物技能:回到城里「上骑」,到达挂机点后「下骑」、并按需「打怪前开启宠物技能」
 //
 // 需求:
 //   回到城里 → 检查宠物是否激活(OCR,见 core/perception/PetRideDetector);
@@ -7,8 +7,10 @@
 //     3 次都没出现 = 当前宠物不可骑乘或已睡眠(记日志,不阻断任务);
 //     已经出现(含按之前就已经骑上)就不再按。每次执行的实际间隔控制在 1s。
 //   角色到挂机点 → 释放一次「下骑」技能后才开始打怪(farm 主循环调用)。
+//   角色到挂机点 → 「打怪前开启宠物技能」也跟着放一次(与骑乘开关无关;状态技能开一次就一直有,
+//     所以每圈只在第一个到达的挂机点放;若那一步刚执行了下骑,则隔 1s 再放)。
 //
-// 上骑/下骑技能都从「宠物技能」(method='pet')的条目里选,可以是同一个按键;
+// 上骑/下骑/打怪前技能都从「宠物技能」(method='pet')的条目里选,可以是同一个按键;
 // 由 farm 的 resolveConfig 解析成 ResolvedPetRide 后注入(补给流程与主循环共用同一份)。
 
 import type { WindowSizeKey } from '../../../core/constant-ocr/popup';
@@ -28,8 +30,10 @@ const PET_RIDE = {
   maxMountAttempts: 3,
   /** 上骑每按一次后等待再检测的时间(ms);也就是两次执行的间隔 */
   retryIntervalMs: 1000,
-  /** 下骑后的稳定等待(ms):等技能动作结束再进入打怪循环 */
+  /** 下骑后的稳定等待(ms):等技能动作结束再进入打怪循环(后面紧跟「打怪前开启宠物技能」时改由那一步的等待接管) */
   dismountSettleMs: 500,
+  /** 「打怪前开启宠物技能」紧跟在下骑之后时的等待(ms):即「下骑之后隔 1S 执行」 */
+  preFarmAfterDismountMs: 1000,
   /** 点击(移动鼠标后 / 点完)的稳定等待(ms) */
   clickSettleMs: 300,
   /** 打开宠物面板后等面板渲染出来的时间(ms) */
@@ -48,6 +52,8 @@ export interface ResolvedPetRide {
   enabled: boolean;
   mount: PetRideSkill | null;
   dismount: PetRideSkill | null;
+  /** 打怪前开启的宠物技能(与 enabled 相互独立;状态技能,每圈在第一个挂机点释放一次) */
+  preFarm: { enabled: boolean; skill: PetRideSkill | null };
 }
 
 /** 骑乘动作的运行依赖(farm 侧注入,与补给流程共用 client/size/input) */
@@ -125,10 +131,39 @@ export async function mountPet(ctx: WorkerContext, deps: PetRideDeps, petRide: R
   return false;
 }
 
-/** 下骑:到挂机点后释放一次「下骑」技能 */
-export async function dismountPet(ctx: WorkerContext, deps: PetRideDeps, petRide: ResolvedPetRide, label: string): Promise<void> {
+/**
+ * 下骑:到挂机点后释放一次「下骑」技能。
+ * opts.skipSettle:后面还紧跟「打怪前开启宠物技能」时置 true —— 收尾等待交给那一步
+ * (它会在下骑后隔 1s 才按),这里就不再单独等一次,免得两段加起来超过 1s。
+ */
+export async function dismountPet(
+  ctx: WorkerContext,
+  deps: PetRideDeps,
+  petRide: ResolvedPetRide,
+  label: string,
+  opts?: { skipSettle?: boolean },
+): Promise<void> {
   if (!petRide.enabled || !petRide.dismount) return;
   await pressSkillKey(deps.input, petRide.dismount.key);
   ctx.sendLog('info', `[${label}] 下骑:释放 ${skillLabel(petRide.dismount)}`);
-  if (PET_RIDE.dismountSettleMs > 0) await sleep(PET_RIDE.dismountSettleMs);
+  if (!opts?.skipSettle && PET_RIDE.dismountSettleMs > 0) await sleep(PET_RIDE.dismountSettleMs);
+}
+
+/**
+ * 打怪前开启宠物技能:到达挂机点、开始打怪之前释放一次(与「宠物骑乘」开关无关)。
+ * 它是状态技能,开一次就一直有 —— 调用方保证每圈只调一次(见 walkWaypoints 的 preFarmSkillDone)。
+ * 若这一处刚执行过下骑(opts.afterDismount),先隔 1s 再按,避开下骑动作。
+ */
+export async function enablePreFarmPetSkill(
+  ctx: WorkerContext,
+  deps: PetRideDeps,
+  petRide: ResolvedPetRide,
+  label: string,
+  opts?: { afterDismount?: boolean },
+): Promise<void> {
+  const skill = petRide.preFarm.skill;
+  if (!petRide.preFarm.enabled || !skill) return;
+  if (opts?.afterDismount) await sleep(PET_RIDE.preFarmAfterDismountMs);
+  await pressSkillKey(deps.input, skill.key);
+  ctx.sendLog('info', `[${label}] 打怪前开启宠物技能:释放 ${skillLabel(skill)}`);
 }

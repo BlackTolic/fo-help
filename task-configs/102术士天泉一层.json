@@ -415,6 +415,16 @@
         "rangePx": 0,
         "method": "item",
         "enabled": true
+      },
+      {
+        "id": "skill-1791979894451-cp6y",
+        "key": "TF8",
+        "name": "收集",
+        "cooldownMs": 1000,
+        "castMs": 400,
+        "rangePx": 0,
+        "method": "pet",
+        "enabled": true
       }
     ],
     "movementSpeed": 500,
@@ -442,7 +452,9 @@
     "petRide": {
       "enabled": false,
       "mountSkillId": "skill-1791700490261-c2nq",
-      "dismountSkillId": "skill-1791700490261-c2nq"
+      "dismountSkillId": "skill-1791700490261-c2nq",
+      "preFarmSkillEnabled": true,
+      "preFarmSkillId": "skill-1791979894451-cp6y"
     },
     "returnScroll": {
       "enabled": true,
@@ -479,5 +491,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791814831939,
-  "updatedAt": 1791954295806
+  "updatedAt": 1791979943929
 }

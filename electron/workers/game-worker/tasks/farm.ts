@@ -89,7 +89,7 @@ import { REVIVE_ANCHOR, resolveResupplyConfig, runResupplyFlow } from '../resupp
 import type { ResolvedResupply } from '../resupply/resupply-runner';
 import { talkToNpc } from '../resupply/talk-npc';
 import { departTownTo, returnViaScroll, transitCityToTown } from '../resupply/town-departure';
-import { dismountPet, mountPet } from '../pet-ride';
+import { dismountPet, enablePreFarmPetSkill, mountPet } from '../pet-ride';
 import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import { resolveReloginConfig, returnViaRelogin } from '../relogin';
 import type { ResolvedRelogin } from '../relogin';
@@ -190,7 +190,7 @@ interface ResolvedConfig {
   mapProfiles: MapCrossingProfile[];
   /** 物品拾取 */
   pickup: ResolvedPickup;
-  /** 宠物骑乘(回城上骑 / 到挂机点下骑;缺省关闭,配置见 shared/types.ts 的 FarmPetRideConfig) */
+  /** 宠物技能(回城上骑 / 到挂机点下骑、打怪前开启宠物技能;缺省关闭,配置见 shared/types.ts 的 FarmPetRideConfig) */
   petRide: ResolvedPetRide;
   /** 回城卷轴(起点不认识时先回城;缺省关闭,配置见 shared/types.ts 的 FarmReturnScrollConfig) */
   returnScroll: ResolvedReturnScroll;
@@ -1028,7 +1028,7 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     ...resolveDetectAreas(cfg, view),
     stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
     pickup: resolvePickup(ctx, cfg, view),
-    // 宠物骑乘:上骑/下骑必须是 method='pet' 的技能(见 resolvePetRide),缺省关闭
+    // 宠物技能:骑乘上骑/下骑、打怪前技能都必须是 method='pet' 的技能(见 resolvePetRide),缺省关闭
     petRide: resolvePetRide(cfg, skills),
     // 回城卷轴:必须是 method='item' 的技能(见 resolveReturnScroll),缺省关闭
     returnScroll: resolveReturnScroll(cfg, skills),
@@ -1073,8 +1073,9 @@ function resolveSkills(cfg: FarmTaskConfig | null): MoveAttackSkill[] {
 }
 
 /**
- * 宠物骑乘:上骑/下骑只认 method='pet' 且键位合法的技能(在 resolveSkills 里已过滤未启用/非法键位)。
- * 引用的 id 找不到对应宠物技能 = 该项为空,骑乘动作按"没配"处理(见 pet-ride.ts)。
+ * 宠物技能:上骑/下骑/打怪前技能都只认 method='pet' 且键位合法的技能(在 resolveSkills 里已过滤未启用/非法键位)。
+ * 引用的 id 找不到对应宠物技能 = 该项为空,相应动作按"没配"处理(见 pet-ride.ts)。
+ * 「打怪前开启宠物技能」是独立开关(raw.preFarmSkillEnabled),与骑乘的 enabled 无关。
  */
 function resolvePetRide(cfg: FarmTaskConfig | null, skills: MoveAttackSkill[]): ResolvedPetRide {
   const raw = cfg?.petRide;
@@ -1082,7 +1083,12 @@ function resolvePetRide(cfg: FarmTaskConfig | null, skills: MoveAttackSkill[]): 
     const s = skills.find((x) => x.id === id && x.method === 'pet');
     return s ? { id: s.id, key: s.key, name: s.name } : null;
   };
-  return { enabled: raw?.enabled === true, mount: pick(raw?.mountSkillId), dismount: pick(raw?.dismountSkillId) };
+  return {
+    enabled: raw?.enabled === true,
+    mount: pick(raw?.mountSkillId),
+    dismount: pick(raw?.dismountSkillId),
+    preFarm: { enabled: raw?.preFarmSkillEnabled === true, skill: pick(raw?.preFarmSkillId) },
+  };
 }
 
 /** 回城卷轴(见 shared/types.ts 的 FarmReturnScrollConfig):只认 method='item' 且键位合法的技能 */
@@ -1351,7 +1357,7 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
     'info',
     `[${label}] 回城补给=${formatResupply(conf.resupply)} 屏蔽所有人=${conf.blockAllPlayersOnNewMap ? '进入新地图时(F11×4)' : '关闭'}` +
       ` 小地图缩放=${conf.zoomOutMinimap ? '启动时(Alt+-)' : '关闭'} 关聊天背景=${conf.closeChatBackground ? '启动时' : '关闭'}` +
-      ` 宠物骑乘=${formatPetRide(conf.petRide)}`,
+      ` 宠物技能=${formatPetRide(conf.petRide)}`,
   );
   if (ctx.init.taskConfig?.type !== 'farm') {
     ctx.sendLog('warn', `[${label}] taskConfig 不是 farm 配置(或未下发),本次全部用内置默认值`);
@@ -1368,11 +1374,12 @@ function formatResupply(r: ResolvedResupply): string {
   );
 }
 
-/** 宠物骑乘配置在日志里的写法 */
+/** 宠物技能配置在日志里的写法(骑乘 + 打怪前技能) */
 function formatPetRide(p: ResolvedPetRide): string {
-  if (!p.enabled) return '关闭';
   const label = (s: PetRideSkill | null): string => (s ? `${s.key}${s.name ? `·${s.name}` : ''}` : '未配');
-  return `开启(上骑=${label(p.mount)} 下骑=${label(p.dismount)})`;
+  const ride = p.enabled ? `开启(上骑=${label(p.mount)} 下骑=${label(p.dismount)})` : '关闭';
+  const preFarm = p.preFarm.enabled ? `开启(${label(p.preFarm.skill)})` : '关闭';
+  return `骑乘=${ride} 打怪前技能=${preFarm}`;
 }
 
 /** 条件回城配置在日志里的写法(排查"为什么打完没回城"先看这一行) */
@@ -2332,6 +2339,11 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
     loop++;
     /** 本圈在路径点扫到的「背包已负载」原因(圈末收口用;见 scanBagFullOnce) */
     let bagFullAtWaypoint: string | null = null;
+    /**
+     * 本圈是否已经开过「打怪前开启宠物技能」。
+     * 宠物技能是状态技能:开一次就一直存在,所以每圈只在第一个到达的挂机点放一次(见下面的 farm-spot 分支)。
+     */
+    let preFarmSkillDone = false;
     const loopDesc = `第 ${loop} 圈`;
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
@@ -2421,10 +2433,22 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         stuckCount = 0;
         if (!here) continue;
 
-        // 从城里一路上骑过来,到了挂机点先下骑再开始打怪(见 shared/types.ts 的 FarmPetRideConfig)
-        if (wp.type === 'farm-spot' && ctx.petMounted) {
-          await dismountPet(ctx, { client: dmApi, input: run.input, size: run.size }, conf.petRide, label);
-          ctx.petMounted = false;
+        // 到达挂机点:从城里一路上骑过来就先下骑;随后按需「打怪前开启宠物技能」,再开始打怪。
+        // (两者互不影响:没开骑乘时没有下骑那一步,宠物技能照样会开;见 shared/types.ts 的 FarmPetRideConfig)
+        if (wp.type === 'farm-spot') {
+          const deps = { client: dmApi, input: run.input, size: run.size };
+          const dismounted = ctx.petMounted;
+          // 状态技能开一次就一直有,所以每圈只在第一个到达的挂机点放一次(下骑那一步不受影响,该下还是下)
+          const runPreFarmNow = !preFarmSkillDone && conf.petRide.preFarm.enabled && !!conf.petRide.preFarm.skill;
+          if (dismounted) {
+            // 后面还要开宠物技能时,下骑自己的收尾等待交给那 1s(两段合计 = 下骑之后隔 1s)
+            await dismountPet(ctx, deps, conf.petRide, label, { skipSettle: runPreFarmNow });
+            ctx.petMounted = false;
+          }
+          if (runPreFarmNow) {
+            await enablePreFarmPetSkill(ctx, deps, conf.petRide, label, { afterDismount: dismounted });
+            preFarmSkillDone = true;
+          }
         }
 
         // 处理不同类型的路径点
@@ -2612,6 +2636,10 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
         }
         return left;
       }
+      // 重新上线也算"重新进过游戏":换图的基线要清掉 ——
+      // 小退后角色往往还在同一张图,地图名没变,不清基线的话「每圈一次的换图判断」会一直认为没换图,
+      // 「进入新地图时屏蔽所有人」就再也不会按(而游戏重新进图本来会把屏蔽状态重置掉)。
+      run.lastMapName = null;
       const prepared = await prepareFarmEntry(run, entryStart, { allowResupply, forceResupply: true });
       if (prepared.exit) return prepared.exit;
       entryStart = prepared.start;

@@ -3,6 +3,8 @@
 // 需求(用户原话):勾了「创建队伍」后,每次回城都要检查是不是组队状态,不是就创建队伍:
 //   按 Alt+Q(shared/game-hotkeys.ts 的 openFriendPanel)打开交友面板 → 等面板展开 →
 //   在 TEAM_PANEL_ROI 里检测(core/perception/TeamPanelDetector.ts):
+//   ⚠️ 网速慢时 Alt+Q 可能没立刻生效(面板还没出来):一个文案都没读到就隔 retryOpenMs 重按 Alt+Q 重扫一次,
+//      最多 detectAttempts 次(用户要求:2 秒后重试,一共 3 次);三次都读不到才按失败处理。
 //     「组队」= 未组队 → 点这两个字(用找字坐标;拿不到就点区域中心)→ 点 TEAM_CREATE_POS 完成组队 → 关面板;
 //     「解散」= 已在队伍 → 不用建队,直接关面板;
 //     两个都没命中 → 记一条 warn(带区域 / 期望文案 / OCR 原文),仍然按 Alt+Q 把面板关掉
@@ -66,14 +68,29 @@ export async function ensureTeamCreated(opts: TeamCheckOptions): Promise<void> {
       return;
     }
 
-    // 1) 打开交友面板:Alt+Q(键位走语义化快捷键表,不在这里散写键码)
-    await pressGameHotkey(client, 'openFriendPanel');
-    opened = true;
-    await sleep(TEAM_PANEL_TIMING.openMs);
-    if (isStopped()) return;
+    // 1) 打开交友面板并扫描一次(键位走语义化快捷键表,不在这里散写键码)。
+    //    网速慢时按了快捷键可能没能立刻生效(面板还没出来)→ 没读到任何文案就隔 retryOpenMs
+    //    重按一次 Alt+Q 再扫,最多 detectAttempts 次(用户要求:2 秒后重试,一共 3 次)。
+    const scanOnce = async (): Promise<ReturnType<typeof detectTeamPanelState>> => {
+      await pressGameHotkey(client, 'openFriendPanel');
+      opened = true;
+      await sleep(TEAM_PANEL_TIMING.openMs);
+      return detectTeamPanelState(client, size);
+    };
 
-    // 2) 检测面板状态
-    const detect = detectTeamPanelState(client, size);
+    let detect = await scanOnce();
+    for (let attempt = 2; attempt <= TEAM_PANEL_TIMING.detectAttempts && detect.state === 'unknown'; attempt++) {
+      if (isStopped()) return;
+      ctx.sendLog(
+        'info',
+        `[${label}] 交友面板没读到「${TEAM_JOIN_TEXT}」/「${TEAM_DISBAND_TEXT}」(第 ${attempt - 1} 次没读到),` +
+          `${Math.round(TEAM_PANEL_TIMING.retryOpenMs / 1000)}s 后重按 Alt+Q 再扫一次(第 ${attempt}/${TEAM_PANEL_TIMING.detectAttempts} 次)`,
+      );
+      await sleep(TEAM_PANEL_TIMING.retryOpenMs);
+      if (isStopped()) return;
+      detect = await scanOnce();
+    }
+    if (isStopped()) return;
 
     if (detect.state === 'join') {
       // 未组队:点「组队」那两个字(找字坐标;拿不到就退化成点区域中心)
@@ -101,14 +118,16 @@ export async function ensureTeamCreated(opts: TeamCheckOptions): Promise<void> {
         await sleep(TEAM_PANEL_TIMING.clickMs);
         ctx.sendLog('info', `[${label}] 创建队伍:完成`);
       }
+      // 已在队伍:无需创建队伍
     } else if (detect.state === 'disband') {
       ctx.sendLog('info', `[${label}] 交友面板显示「${TEAM_DISBAND_TEXT}」= 已在队伍,无需创建队伍`);
     } else {
-      // 两个文案都没看清:大概率是区域/颜色/字库不对,让日志留痕(下一次回城还会再试)
+      // 试满 detectAttempts 次都没读到:大概率是区域/颜色/字库不对(或面板一直没开出来),让日志留痕
       ctx.sendLog(
         'warn',
-        `[${label}] 交友面板区域 (${roi.x1},${roi.y1})-(${roi.x2},${roi.y2}) 既没找到「${TEAM_JOIN_TEXT}」也没找到` +
-          `「${TEAM_DISBAND_TEXT}」(颜色 ${roi.color},sim ${roi.findSim}),OCR 原文:「${detect.text ?? ''}」,跳过创建队伍检查`,
+        `[${label}] 交友面板区域 (${roi.x1},${roi.y1})-(${roi.x2},${roi.y2}) 试了 ${TEAM_PANEL_TIMING.detectAttempts} 次,` +
+          `既没找到「${TEAM_JOIN_TEXT}」也没找到「${TEAM_DISBAND_TEXT}」(颜色 ${roi.color},sim ${roi.findSim}),` +
+          `OCR 原文:「${detect.text ?? ''}」,跳过创建队伍检查`,
       );
     }
 
