@@ -1,7 +1,7 @@
-// 回城补给(resupply):确认位置 / 复活 → 检查耐久/药水 → (按需)按档案顺序访问 NPC 跑对话配方 → 前往挂机图
+// 回城补给(resupply):复活 → 检查队伍(勾了才跑) → 确认位置 → 检查耐久/药水 → (按需)按档案顺序访问 NPC 跑对话配方 → 前往挂机图
 //
 // 两个触发器(farm 侧注入 mode 区分,见 ResupplyOptions.mode):
-//   death(缺省) = 死亡回城补给:复活 → 确认回到城镇 → 状态检查 → 访问 NPC → 返程(触发点见 tasks/farm.ts 的 checkDeath)
+//   death(缺省) = 死亡回城补给:复活 → 检查队伍 → 确认回到城镇 → 状态检查 → 访问 NPC → 返程(触发点见 tasks/farm.ts 的 checkDeath)
 //   start        = 开工补给:任务启动时跑一遍同一条流程(不复活;已在挂机地图则整段跳过,见 confirmStartPosition)
 //   这里不判断"该不该补给",只负责把一次补给跑完并把结果(ok/detail)交回去。
 //   档案里没配商人 NPC(或检查项全没触发)时,就只是"复活/确认位置 → 直接去出城口返程",不报错。
@@ -38,6 +38,7 @@ import type { WorkerContext } from '../context';
 import { mountPet } from '../pet-ride';
 import type { ResolvedPetRide } from '../pet-ride';
 import { talkToNpc } from './talk-npc';
+import { ensureTeamCreated } from './team-check';
 import { departTownTo } from './town-departure';
 
 /** 复活点锚点 id(与 shared/types.ts 的 TownProfileRoute.from 约定一致) */
@@ -81,6 +82,8 @@ export interface ResolvedResupply {
   checkDurability: boolean;
   /** 红药低于该值触发购买;null = 不检查药水 */
   potionThreshold: number | null;
+  /** 回城时是否检查/创建队伍(城镇档案的回城检查项,见 shared/types.ts 的 TownProfileConfig.createTeam) */
+  createTeam: boolean;
   /** 任务启动时先跑一次补给(只有 farm 主循环开工时读它,见 tasks/farm.ts 的 runStartupResupply) */
   runOnStart: boolean;
 }
@@ -124,8 +127,8 @@ export interface ResupplyOptions {
   label?: string;
   /**
    * 触发模式(缺省 'death'):
-   * - 'death' 死亡回城补给:先复活 → 确认在城镇,再走 状态检查 → 访问 NPC → 返程
-   * - 'start' 开工补给:任务启动时跑。不复活;先确认位置(已在挂机地图 = 整段跳过;
+   * - 'death' 死亡回城补给:先复活 → 检查队伍 → 确认在城镇,再走 状态检查 → 访问 NPC → 返程
+   * - 'start' 开工补给:任务启动时跑。不复活;先检查队伍 → 确认位置(已在挂机地图 = 整段跳过;
    *           不在城镇也不在挂机地图 = 直接失败),之后的 状态检查 → 访问 NPC → 返程 完全复用
    */
   mode?: ResupplyMode;
@@ -153,6 +156,7 @@ function normalizeReviveMode(raw: unknown): FarmReviveMode {
  * farm 的 resolveConfig 与补给流程都调它,避免两处默认值各写一套。
  *
  * 耐久/药水检查项已迁到城镇档案(town):档案里没写时回退读旧 farm 配置的同名字段(迁移用)。
+ * 队伍检查(town.createTeam)是纯新增的检查项,没有对应的旧 farm 字段,缺省 false。
  */
 export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null, town?: TownProfileConfig | null): ResolvedResupply {
   const threshold = town?.potionThreshold ?? raw?.potionThreshold;
@@ -170,6 +174,8 @@ export function resolveResupplyConfig(raw: FarmResupplyConfig | undefined | null
     checkDurability: (town?.checkDurability ?? raw?.checkDurability) === true,
     // 红药低于该值触发访问商人;null = 不检查药水:以城镇档案为准,旧 farm 配置兜底
     potionThreshold: typeof threshold === 'number' && threshold > 0 ? Math.round(threshold) : null,
+    // 回城时是否检查/创建队伍(缺省 false):城镇档案的回城检查项,没有旧 farm 字段可回退
+    createTeam: town?.createTeam === true,
     // 任务启动时先跑一次(只有 farm 主循环开工时读它,见 tasks/farm.ts 的 runStartupResupply)
     runOnStart: raw?.runOnStart === true,
   };
@@ -217,13 +223,14 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
   }
 
   ctx.resupply.running = true;
-  // 开工模式不复活,状态文案直接说"确认位置"(第一步就是读地图名,见 confirmStartPosition)
+  // 开工模式不复活,状态文案直接说"确认位置"(第一步读地图名,见 confirmStartPosition;
+  // 勾了「创建队伍」时会先跑一次队伍检查,那一步自己会把状态改成"检查队伍")
   ctx.setStatus('resupply', `${label}:${mode === 'start' ? '确认位置' : REVIVE_MODE_LABEL[cfg.reviveMode]}`);
   ctx.sendLog(
     'info',
     `[${label}] 开始(城镇=${town.mapName}${cfg.townProfileName ? `/${cfg.townProfileName}` : ''} ` +
       (mode === 'start' ? '开工:不复活' : `复活=${cfg.reviveMode} 复活超时=${Math.round(cfg.reviveTimeoutMs / 1000)}s`) +
-      ` 检查:耐久=${cfg.checkDurability ? '是' : '否'} 药水=${cfg.potionThreshold ?? '不检查'})`,
+      ` 检查:耐久=${cfg.checkDurability ? '是' : '否'} 药水=${cfg.potionThreshold ?? '不检查'} 队伍=${cfg.createTeam ? '是' : '否'})`,
   );
 
   const flow: ResupplyFlow = {
@@ -239,7 +246,7 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
 
   let result: ResupplyResult = { ok: false, detail: '未执行' };
   try {
-    // 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程
+    // 主流程:复活(仅死亡模式) → 检查队伍(勾了才跑) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程
     result = await runResupplySteps(flow);
   } catch (e: any) {
     result = { ok: false, detail: `异常: ${e?.message ?? e}` };
@@ -258,12 +265,28 @@ export async function runResupplyFlow(ctx: WorkerContext, deps: ResupplyDeps, op
   return result;
 }
 
-/** 主流程:复活(仅死亡模式) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程 */
+/** 主流程:复活(仅死亡模式) → 检查队伍(勾了才跑) → 确认位置 → 状态检查 → (按需)访问 NPC → 返程 */
 async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
-  const { ctx, deps, label, town, stopped, mode } = flow;
-  // 开工模式不复活,状态文案直接说"确认位置"(第一步就是读地图名,见 confirmStartPosition)
+  const { ctx, deps, label, town, stopped, mode, cfg } = flow;
+
+  // 1) 复活(仅死亡模式):死亡弹框挡着屏幕,后面的每一步都做不了,所以必须最先做
+  if (mode !== 'start') {
+    const revived = await reviveCharacter(flow);
+    if (!revived.ok) return revived;
+    if (stopped()) return { ok: false, detail: '任务已停止,放弃回城补给' };
+  }
+
+  // 2) 回城检查项:检查/创建队伍(城镇档案勾了「创建队伍」才跑) ——
+  //    刻意放在「确认位置」之前:小退后角色还在挂机图时,位置确认会让整段城市逻辑提前跳过
+  //    (见下面 position.skipped 的提前 return),而队伍状态与人在哪张图无关,每次回城补给都要查一次。
+  //    队伍只影响"要不要建队",失败不阻断补给(见 team-check.ts)。
+  if (cfg.createTeam) {
+    await ensureTeamCreated({ ctx, client: deps.client, size: deps.size, label, isStopped: stopped });
+    if (stopped()) return { ok: false, detail: `任务已停止,放弃${label}` };
+  }
+
   if (mode === 'start') {
-    // 开工补给:人一定活着(没有死亡弹框可等、也不能点原地复活),所以跳过第 1 步;
+    // 开工补给:人一定活着(没有死亡弹框可等、也不能点原地复活),所以跳过复活;
     // 但城镇档案里的路线都以复活点为起点锚点,得先确认角色到底站在哪张图(见 confirmStartPosition)
     ctx.setStatus('resupply', `${label}:确认位置`);
     // 确认位置:先读地图名,再确认是否在挂机地图(见 confirmStartPosition)
@@ -277,12 +300,7 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     // 人在城镇:检查宠物是否激活并上骑,骑着回挂机图更快(到挂机点主循环再下骑)
     await mountPetOnCity(flow);
   } else {
-    // 1) 复活
-    const revived = await reviveCharacter(flow);
-    if (!revived.ok) return revived;
-    if (stopped()) return { ok: false, detail: '任务已停止,放弃回城补给' };
-
-    // 2) 确认位置:复活点必须在本城镇(不等 = 档案配错城镇,后面所有路线坐标都没意义)
+    // 3) 确认位置:复活点必须在本城镇(不等 = 档案配错城镇,后面所有路线坐标都没意义)
     ctx.setStatus('resupply', `${label}:确认位置`);
     const confirm = await confirmTownMap(flow);
     if (!confirm.matched) return { ok: false, detail: confirm.detail };
@@ -292,7 +310,7 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     await mountPetOnCity(flow);
   }
 
-  // 3) 状态检查:装备耐久 / 红药数量 —— 只有"装备红 或 药水低于阈值"才值得跑一趟商人
+  // 4) 状态检查:装备耐久 / 红药数量 —— 只有"装备红 或 药水低于阈值"才值得跑一趟商人
   ctx.setStatus('resupply', `${label}:检查状态`);
   // 检查装备耐久/药水是否需要补给
   const reasons = await inspectStatus(flow);
@@ -322,7 +340,7 @@ async function runResupplySteps(flow: ResupplyFlow): Promise<ResupplyResult> {
     }
   }
 
-  // 4) 返程:出城口 → 等切回挂机图
+  // 5) 返程:出城口 → 等切回挂机图
   return travelBackToFarm(flow, fromAnchor);
 }
 

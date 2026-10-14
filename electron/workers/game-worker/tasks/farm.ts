@@ -31,7 +31,9 @@
 //   同理,拾取的左键也只能在"没在移动"时点 —— 见 walkWaypoints 里的调用顺序。
 //
 // ── 结束条件 ────────────────────────────────────────────────────────────
-//   stop 命令 / 跑满最大圈数(END_CONDITIONS.maxLoops,当前不限)/ 角色死亡(detectCharacterDeath)
+//   stop 命令 / 角色死亡(detectCharacterDeath) / 条件回城(taskConfig.endReturn:
+//   完成 N 圈或背包已负载 → 结束本轮打怪 → 回城(回城卷轴 / 小退)→ 走城市/跨境逻辑回到挂机图 →
+//   重开一轮,不结束整个任务)
 //
 // ── 死亡回城补给 / 开工补给(taskConfig.resupply,见 resupply/resupply-runner.ts)──
 //   死亡检查 = core/perception/DeathDetector(主判据:找字「原地复活」;兜底:OCR「死亡」标题),两个检查点共用 checkDeath
@@ -65,6 +67,7 @@ import { DamooInputProvider } from '../../../../core/platform/input/damoo/DamooI
 import { dmApi } from '../../../../core/platform/damoo/dm-api';
 import { MapCoordReader } from '../../../../core/perception/MapCoordReader';
 import { MonsterNameDetector } from '../../../../core/perception/MonsterNameDetector';
+import { detectBagFull } from '../../../../core/perception/BagFullDetector';
 import { ItemNameDetector } from '../../../../core/perception/ItemNameDetector';
 import type { DetectedItem, ItemPickupRule } from '../../../../core/perception/ItemNameDetector';
 import { detectDeath } from '../../../../core/perception/DeathDetector';
@@ -88,10 +91,13 @@ import { talkToNpc } from '../resupply/talk-npc';
 import { departTownTo, returnViaScroll, transitCityToTown } from '../resupply/town-departure';
 import { dismountPet, mountPet } from '../pet-ride';
 import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
-import type { FarmTaskConfig, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
+import { resolveReloginConfig, returnViaRelogin } from '../relogin';
+import type { ResolvedRelogin } from '../relogin';
+import type { FarmTaskConfig, FarmEndReturnMethod, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
 import { pressGameHotkey } from '../../../../shared/game-hotkeys';
 import { isMainCity } from '../../../../shared/main-cities';
 import { DEFAULT_ROLE_POSITION, DEFAULT_LOCKED_MONSTER_NAME } from '../../../../core/constant-ocr/position';
+import { BAG_FULL_ROI, BAG_FULL_TEXTS } from '../../../../core/constant-ocr/bag';
 import { COLOR_WHITE, COLOR_YELLOW_WHITE, COLOR_GREEN, COLOR_BLUE, COLOR_YELLOW, COLOR_PURPLE } from '../../../../core/constant-ocr/color';
 import type { TaskController, TaskFactoryContext } from './types';
 import { DEFAULT_FUZZY_SIM, DEFAULT_SIM } from '../../../../core/constant-ocr/sim';
@@ -196,8 +202,22 @@ interface ResolvedConfig {
   zoomOutMinimap: boolean;
   /** 关闭聊天背景:任务启动时点一次聊天框关掉背景(缺省 true) */
   closeChatBackground: boolean;
-  /** 最多跑多少圈;null = 不限 */
-  maxLoops: number | null;
+  /** 条件回城(达到条件结束本轮打怪并回城,再走城市/跨境逻辑回到挂机图继续下一轮) */
+  endReturn: ResolvedEndReturn;
+}
+
+/** 解析后的条件回城配置(字段含义见 shared/types.ts 的 FarmEndReturnConfig) */
+interface ResolvedEndReturn {
+  enabled: boolean;
+  /** 完成多少圈后回城;null = 不用这个条件 */
+  loops: number | null;
+  /** 背包/装备已负载(装满)时回城:扫聊天框里的提示,见 scanBagFullOnce */
+  overloaded: boolean;
+  method: FarmEndReturnMethod;
+  /** 使用回城卷轴:最多按几次 / 每次按下后的观察窗口(ms) */
+  scroll: { maxAttempts: number; pressIntervalMs: number };
+  /** 小退回城:清怪开关 / 清怪总超时 / 最多尝试次数 / 清怪的独立识别参数覆盖(见 relogin.ts 的 ResolvedRelogin) */
+  relogin: ResolvedRelogin;
 }
 
 /** 拾取运行时状态 */
@@ -251,6 +271,12 @@ interface FarmRun {
   corpses: Map<string, number>;
   /** 上一次读到的地图名(「进入新地图时屏蔽所有人」用它判断是否换图);null = 还没读到过 */
   lastMapName: string | null;
+  /**
+   * 「背包已负载」的迟滞标志(见 scanBagFullOnce):
+   * true = 已武装,扫到提示可以触发一次回城;触发后置 false,要等提示从屏幕上消失过才重新武装。
+   * 用途:那条提示会一直留在聊天框里,没有迟滞就会"每圈都扫到 → 每圈都回城"来回跑。
+   */
+  bagFullArmed: boolean;
 }
 
 /**
@@ -271,6 +297,8 @@ interface LockedMonster {
 export interface FarmLoopResult {
   ok: boolean;
   detail: string;
+  /** 本次不是"结束任务",而是条件回城触发:调用方要回城 → 回到挂机图 → 重开一轮 */
+  reset?: boolean;
 }
 
 /** runFarmLoop 的调用方标识 */
@@ -390,10 +418,12 @@ const BLOCK_RECTS_1280: ScreenRect[] = [
   { x: 890, y: 720, w: 387, h: 90 }, // 右下:技能栏/功能按钮
 ];
 
-/** 结束条件(全局旋钮) */
-const END_CONDITIONS: { maxLoops: number | null } = {
-  /** 跑满多少圈结束;null = 不限,只由 stop 命令 / 角色死亡结束 */
-  maxLoops: null,
+/** 条件回城的默认值 */
+const END_RETURN = {
+  /** 回城卷轴最多按几次 */
+  maxAttempts: 5,
+  /** 每次按下后的观察窗口(ms):窗口内地图名变了 = 回城成功,否则再按一次(被攻击时卷轴可能不生效) */
+  pressIntervalMs: 4000,
 };
 
 /** 技能键位白名单(F1-F10 第一页 / TF1-TF10 第二页,见 platform/input/skill-key.ts) */
@@ -562,7 +592,7 @@ async function waitWhilePaused(ctx: WorkerContext, label: string): Promise<void>
 /**
  * 角色死亡判定:找字「原地复活」(主判据)+ OCR「死亡」标题(兜底),命中其一即算死亡
  * (见 core/perception/DeathDetector)。返回值里带"哪个信号命中",日志靠它排错。
- * 打怪循环的退出条件之一(与 maxLoops 并列);同步语义 —— 调用处(checkDeath)不做 await 判别。
+ * 打怪循环的退出条件之一(与条件回城并列);同步语义 —— 调用处(checkDeath)不做 await 判别。
  */
 function detectCharacterDeath(run: FarmRun): DeathDetection {
   return detectDeath(dmApi, run.size);
@@ -705,21 +735,25 @@ async function runStartupEnvSetup(run: FarmRun): Promise<void> {
  *   - 成功 = 角色已经在挂机地图里 → 返回 null,调用处继续进主循环
  *   - 失败 = 返回 ok:false 的结果(起点没确认好,硬跑只会沿着错的坐标乱走)
  *
+ * 第二个调用点 = 条件回城:opts.force=true 时无视 runOnStart 强制跑一次
+ * (每轮回城落到城镇后,用同一条流程重新检查状态/找商人/出城,再回挂机图;见 prepareFarmEntry)。
+ *
  * 依赖与 checkDeath 完全一致(同一份 client/size/移动实例/读图名函数):
  *   movement 必须用 travelMovement —— 它带地图名,RouteTraveler 的"切图即停"才生效。
  */
-async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> {
+async function runStartupResupply(run: FarmRun, opts?: { force?: boolean }): Promise<FarmLoopResult | null> {
   const { ctx, label, conf } = run;
-  if (!conf.resupply.enabled || !conf.resupply.runOnStart) return null;
-  // 没配开工补给 = 直接跳过
+  if (!conf.resupply.enabled || (!opts?.force && !conf.resupply.runOnStart)) return null;
+  // 没配开工补给(且不是条件回城的强制调用)= 直接跳过
+  const stage = opts?.force ? '回城后补给' : '开工补给';
   const townProfile = ctx.init.auxConfigs?.townProfile;
   if (!townProfile) {
     // 理论上 renderer(aux-configs.ts)在启动前就拦住了;真发生也只能继续跑,记一条日志说清楚
-    ctx.sendLog('warn', `[${label}] 开了开工补给但没下发城镇档案(auxConfigs.townProfile),本次跳过开工补给`);
+    ctx.sendLog('warn', `[${label}] 开了${stage}但没下发城镇档案(auxConfigs.townProfile),本次跳过${stage}`);
     return null;
   }
 
-  ctx.sendLog('info', `[${label}] 开始开工补给(档案=${conf.resupply.townProfileName || townProfile.mapName}),完成后进入打怪循环`);
+  ctx.sendLog('info', `[${label}] 开始${stage}(档案=${conf.resupply.townProfileName || townProfile.mapName}),完成后进入打怪循环`);
   const result = await runResupplyFlow(
     ctx,
     {
@@ -738,16 +772,113 @@ async function runStartupResupply(run: FarmRun): Promise<FarmLoopResult | null> 
       // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
       onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
     },
-    { label: '开工补给', mode: 'start' },
+    { label: stage, mode: 'start' },
   );
   if (result.ok) {
-    ctx.sendLog('info', `[${label}] 开工补给完成(${result.detail ?? '可以开始挂机'}),进入打怪循环`);
+    ctx.sendLog('info', `[${label}] ${stage}完成(${result.detail ?? '可以开始挂机'}),进入打怪循环`);
     return null;
   }
 
-  const detail = `开工补给失败: ${result.detail ?? '未知原因'},退出打怪循环`;
+  const detail = `${stage}失败: ${result.detail ?? '未知原因'},退出打怪循环`;
   ctx.sendLog('warn', `[${label}] ${detail}`);
   return { ok: false, detail };
+}
+
+/** prepareFarmEntry 的开关 */
+interface PrepareEntryOptions {
+  /** 是否跑起点恢复/补给/跨图(移动攻击测试传 false:测试只想看走位打怪,不该顺带跑城镇) */
+  allowResupply: boolean;
+  /** 忽略 resupply.runOnStart 强制跑一次城市逻辑(条件回城回到城镇后用) */
+  forceResupply?: boolean;
+}
+
+/**
+ * 入图准备:把角色弄到挂机图,并给出进主循环用的起点。
+ * 起点恢复(必要时按回城卷轴回主城/主城中转) → 城市逻辑(城镇档案:检查耐久药水 → 按需访问商人 → 出城) →
+ * 跨境逐跳(过图链路,支持从链路中间某张图开始) → 走挂机图的入图点 → 重读起点。
+ * 任务启动与「条件回城」每轮回来共用这一段(见 shared/types.ts 的 FarmEndReturnConfig)。
+ */
+async function prepareFarmEntry(
+  run: FarmRun,
+  start: MapPosition,
+  opts: PrepareEntryOptions,
+): Promise<{ exit: FarmLoopResult | null; start: MapPosition }> {
+  const { ctx, conf, label } = run;
+  let loopStart = start;
+  /** 本次准备是否真的动过角色(起点恢复 / 城市逻辑 / 跨境任一跑过):动过才重读坐标 */
+  let moved = false;
+
+  // 起点恢复(进主循环之前):把角色弄到出发城镇 ——
+  //   已在出发城镇 → 不动;已在某个主城(见 shared/main-cities.ts)→ 不用回城卷轴,直接坐飞空艇去出发城镇;
+  //   在野外/任意图 → 先用回城卷轴回主城,再坐飞空艇过去(细节见 recoverToDepartureTown)。
+  // 必须在开工补给之前:补给的状态检查(装备/药水)与「城镇出发」都以出发城镇为立足点。
+  // 已在挂机图/链路/出发城镇 = 什么都不做(不消耗卷轴)。
+  if (opts.allowResupply) {
+    const town = ctx.init.auxConfigs?.townProfile;
+    const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
+    const at = String((await run.readMapName()) ?? '').trim();
+    const known =
+      !!town && (at === town.mapName || (!!farmMapName && at === farmMapName) || conf.mapProfiles.some((p) => p.mapName === at));
+    if (town && at && !known) {
+      const recovered = await recoverToDepartureTown(run, at);
+      if (recovered.exit) return { exit: recovered.exit, start: loopStart };
+      // 恢复跑过(哪怕它没找到可走的路):角色可能已经被带回主城/出发城镇,start 已经过期
+      moved = true;
+    }
+  }
+
+  // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
+  // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),
+  // 且只跑这一次 —— 循环里不会重复触发。补给途中角色是活的,死亡检查不会被误触发。
+  // 移动攻击测试路径由 opts 关掉(见 FarmLoopOptions.allowStartupResupply);
+  // 条件回城每轮回来时 forceResupply=true:无视 runOnStart 再跑一次。
+  const useResupply = opts.allowResupply && conf.resupply.enabled && (opts.forceResupply === true || conf.resupply.runOnStart);
+  if (useResupply) {
+    const startup = await runStartupResupply(run, { force: opts.forceResupply === true });
+    if (startup) return { exit: startup, start: loopStart };
+    moved = true;
+  }
+
+  // 地图跨越(进主循环之前):角色不在挂机图时按 conf.mapProfiles 逐跳穿越过去。
+  // 开工补给返程若已把角色带回挂机图,这里会直接判"已在挂机图"跳过(不会重复跨)。
+  // 同一开关(allowResupply)关掉:移动攻击测试不该顺带跨图。
+  let crossedMaps = false;
+  if (opts.allowResupply) {
+    const cross = await crossMapsOnStartup(run);
+    if (cross.exit) return { exit: cross.exit, start: loopStart };
+    crossedMaps = cross.crossed;
+  }
+
+  // 跨图/城镇出发把角色带进了挂机图、但没走开工补给(角色从别处用回城卷轴过来的情况):
+  // 这里补走「入图点」—— 从地图入口直冲第一个挂机点容易被地形挡住。
+  // 开工补给那条路已在 travelBackToFarm 里走过入图点,此时 crossMapsOnStartup 会判"已在挂机图"跳过,
+  // crossedMaps=false,不会重复走。
+  if (crossedMaps && conf.entryPath.length > 0) {
+    ctx.setStatus('moving', `${label} 入图`);
+    ctx.sendLog('info', `[${label}] 已进入挂机地图,按入图路径走 ${conf.entryPath.length} 个点回到挂机点`);
+    await travelWithinMap(run.travelMovement, conf.entryPath, {
+      timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
+      moveOptions: CROSS_MOVE_OPTIONS,
+      isStopped: () => !ctx.moveAttack.running,
+      onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
+    });
+  }
+
+  // 起点重读:起点恢复 / 开工补给 / 地图跨越会把角色带到别处(走位 + 切图),上面读到的 start 已经过期 ——
+  // 拿旧坐标进主循环会让定点打怪的"移动反方向"算歪、moveTo 的目标图也可能判成跨图。
+  // 三段都没跑(或被测试路径关掉)时不重读,保持原行为(少一次 OCR)
+  if (moved || crossedMaps) {
+    const after = await run.movement.readPosition();
+    if (!after) {
+      const detail = '补给/跨图后读不到当前位置(检查设置里的分辨率,以及坐标区域/颜色是否匹配)';
+      ctx.sendLog('warn', `[${label}] ${detail}`);
+      return { exit: { ok: false, detail }, start: loopStart };
+    }
+    loopStart = after;
+    ctx.sendLog('info', `[${label}] 补给/跨图后的起点: (${after.x}, ${after.y}) 地图=${after.map ?? '未知'}`);
+  }
+
+  return { exit: null, start: loopStart };
 }
 
 /** 地图跨越 / 城镇出口过图段的移动参数(与补给返程一致:卡住 15s 放弃本点,别拖死) */
@@ -910,7 +1041,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     // 启动时的一次性环境处理(缺省开启,旧配置不受影响)
     zoomOutMinimap: cfg?.zoomOutMinimap !== false,
     closeChatBackground: cfg?.closeChatBackground !== false,
-    maxLoops: END_CONDITIONS.maxLoops,
+    // 条件回城(缺省关闭,旧配置不受影响)
+    endReturn: resolveEndReturn(cfg),
   };
 }
 
@@ -969,6 +1101,35 @@ function resolveReturnScroll(cfg: FarmTaskConfig | null, skills: MoveAttackSkill
   const skill = skills.find((s) => s.id === raw?.skillId && s.method === 'item');
   const timeoutMs = typeof raw?.timeoutMs === 'number' && raw.timeoutMs >= 1000 ? Math.round(raw.timeoutMs) : 60_000;
   return { enabled: raw?.enabled === true && !!skill, key: skill ? skill.key : null, timeoutMs };
+}
+
+/**
+ * 条件回城(见 shared/types.ts 的 FarmEndReturnConfig):缺字段走默认,非法值夹到合理范围。
+ *   loops:取整且 >= 1,否则(null / 0 / 负数)= 不用这个条件
+ *   maxAttempts 夹 1~20;pressIntervalMs 夹 1000~60000(读条没完就按第二次会白耗一张卷轴)
+ *   method 只认 'scroll' / 'relogin',其它(含缺省)= 'scroll'
+ * 回城用的技能键不在这一份里 —— 与「回城卷轴」(conf.returnScroll)共用同一份配置。
+ * 小退参数交给 relogin.ts 的 resolveReloginConfig 清洗(默认值与清怪/小退流程同一份)。
+ */
+function resolveEndReturn(cfg: FarmTaskConfig | null): ResolvedEndReturn {
+  const raw = cfg?.endReturn;
+  const loops = typeof raw?.loops === 'number' ? Math.trunc(raw.loops) : NaN;
+  const clamp = (v: number | undefined, min: number, max: number, fallback: number): number => {
+    const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : fallback;
+    return Math.min(max, Math.max(min, n));
+  };
+  return {
+    enabled: raw?.enabled === true,
+    loops: loops >= 1 ? loops : null,
+    overloaded: raw?.overloaded === true,
+    method: raw?.method === 'relogin' ? 'relogin' : 'scroll',
+    scroll: {
+      maxAttempts: clamp(raw?.scroll?.maxAttempts, 1, 20, END_RETURN.maxAttempts),
+      pressIntervalMs: clamp(raw?.scroll?.pressIntervalMs, 1000, 60_000, END_RETURN.pressIntervalMs),
+    },
+    // 小退参数:清洗在 relogin.ts(与清怪/小退流程共用同一份默认值)
+    relogin: resolveReloginConfig(raw?.relogin),
+  };
 }
 
 /**
@@ -1183,7 +1344,7 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
   ctx.sendLog(
     'info',
     `[${label}] 技能=[${skills}] 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}` +
-      ` 移动间隔=${conf.stepIntervalMs}ms 最大圈数=${conf.maxLoops ?? '不限'}`,
+      ` 移动间隔=${conf.stepIntervalMs}ms 条件回城=${formatEndReturn(conf.endReturn)}`,
   );
   ctx.sendLog('info', `[${label}] 找怪=[${conf.monsterKeywords.join(',') || '不限(纯OCR)'}] 颜色=${conf.monsterColor} 拾取=${pickup}`);
   ctx.sendLog(
@@ -1203,7 +1364,7 @@ function formatResupply(r: ResolvedResupply): string {
   return (
     `开启(档案=${r.townProfileName || '未指定'} 复活=${r.reviveMode}` +
     ` 复活超时=${Math.round(r.reviveTimeoutMs / 1000)}s 耐久检查=${r.checkDurability ? '是' : '否'}` +
-    ` 药水阈值=${r.potionThreshold ?? '不检查'} 开工补给=${r.runOnStart ? '是' : '否'})`
+    ` 队伍检查=${r.createTeam ? '是' : '否'} 药水阈值=${r.potionThreshold ?? '不检查'} 开工补给=${r.runOnStart ? '是' : '否'})`
   );
 }
 
@@ -1212,6 +1373,17 @@ function formatPetRide(p: ResolvedPetRide): string {
   if (!p.enabled) return '关闭';
   const label = (s: PetRideSkill | null): string => (s ? `${s.key}${s.name ? `·${s.name}` : ''}` : '未配');
   return `开启(上骑=${label(p.mount)} 下骑=${label(p.dismount)})`;
+}
+
+/** 条件回城配置在日志里的写法(排查"为什么打完没回城"先看这一行) */
+function formatEndReturn(e: ResolvedEndReturn): string {
+  if (!e.enabled) return '关闭';
+  const conds = [e.loops ? `每 ${e.loops} 圈` : null, e.overloaded ? '背包已满' : null].filter((s): s is string => !!s);
+  const way =
+    e.method === 'scroll'
+      ? `回城卷轴(最多 ${e.scroll.maxAttempts} 次/每次等 ${Math.round(e.scroll.pressIntervalMs / 1000)}s)`
+      : `小退(清怪=${e.relogin.clearMobs ? `超时 ${Math.round(e.relogin.clearTimeoutMs / 1000)}s` : '关闭'} 最多 ${e.relogin.maxAttempts} 次)`;
+  return `开启(${conds.join(' / ') || '未设条件'};方式=${way})`;
 }
 
 // ===== 移动与瞄准 =====
@@ -1788,6 +1960,332 @@ function pickSkillsToCast(run: FarmRun, wp: ResolvedWaypoint, now: number): Move
   return [...best, ...selfBuffs]; // 先放输出技能,再放状态 buff
 }
 
+// ===== 条件回城(达到条件 → 结束本轮打怪 → 回城 → 城市/跨境逻辑回挂机图 → 重开一轮)=====
+
+/** 连读几次地图名(OCR 偶发读空);全读空返回 null */
+async function readMapNameRetry(run: FarmRun, attempts = 3, retryMs = 600): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    const name = String((await run.readMapName()) ?? '').trim();
+    if (name) return name;
+    if (i < attempts - 1) await sleep(retryMs);
+  }
+  return null;
+}
+
+/** 小退前清怪的收工判据:与定点识别同一套语义(连续 DETECT.idleMs 没锁上怪 = 打光了) */
+const CLEAR_MOBS = {
+  /** 在每只怪身上最多打多久(ms):单只怪卡住(打不动/打不到)时的兜底,超过就换个目标重扫 */
+  perMonsterTimeoutMs: 20_000,
+};
+
+/**
+ * 小退前清怪:把周围的怪打光(被攻击时小退不会成功)。
+ *
+ * 与 conf.mode 无关:定点打怪不做识别,这里也一律走「识别 → 开打 → 打到死」这一条,
+ * 复用定点识别那一套现成实现:
+ *   识别 = run.monster(MonsterNameDetector,参数来自 conf.monsterKeywords / monsterColor / ocrRange / lockedNameRoi)
+ *   开打 = 配了技能就直接放技能(缺省施法/target 技能自带的那次左键落在识别到的怪名位置,首次释放顺便把怪选上);
+ *          没配技能才用 clickMonsterName 左键点怪名开打(普通攻击)
+ *   判活 = isLockAlive / readLockedName(HUD);配了技能的路径不等 HUD 先出现
+ *   输出 = castSkill,技能取 conf.skills(过滤掉宠物技能;智能施法下的物品技能不空放,与 runDetectSpot 同规则)
+ *   尸体跳过 = isCorpseIgnored / ignoreCorpse(与定点识别共用同一张忽略表)
+ *
+ * 收工 = 连续 DETECT.idleMs 没识别到怪(与 leaveSpotIfIdle 同语义);
+ * 兜底 = 总超时 timeoutMs(怪会刷新,不能无限打)——超时按失败返回,让调用方决定是否还要小退。
+ * 途中角色死亡也按失败返回(小退要点菜单,人得活着;死亡不该在这里被悄悄吞掉)。
+ */
+async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: boolean; detail: string }> {
+  const { ctx, conf, label, lastCast } = run;
+  const ctrl = ctx.moveAttack;
+  // 识别参数:勾了「小退前清怪」后界面可以单独配一份(范围/颜色/关键字),没填的项沿用本任务「定点识别」的对应值
+  // (见 shared/types.ts 的 FarmEndReturnReloginConfig.mobFilter)
+  const over = conf.endReturn.relogin.mobFilter;
+  const roi = over?.ocrRange ?? conf.ocrRange;
+  const color = over?.nameColors ? over.nameColors.join('|') : conf.monsterColor;
+  const keywords = over?.nameKeywords ?? conf.monsterKeywords;
+  // 一项都没覆盖 → 复用主循环那份识别器(省一次构造);覆盖过 → 另建一份,绝不动主循环的定点识别参数
+  const monster =
+    roi === conf.ocrRange && color === conf.monsterColor && keywords === conf.monsterKeywords
+      ? run.monster
+      : new MonsterNameDetector({ roi, color, similarity: DETECT.similarity, keywords, lockedRoi: conf.lockedNameRoi });
+  // 参与输出的技能:宠物技能(骑乘)不参与;智能施法再排除「物品使用」(药品交给看门狗的「生命回复」)
+  const castable = conf.skills.filter((s) => s.method !== 'pet' && !(conf.castMode === 'smart' && s.method === 'item'));
+  const deadline = Date.now() + timeoutMs;
+  let locked: LockedMonster | null = null;
+  /**
+   * 怪名位置(「开打那次点击」的落点):配了技能时目标的左键就落在这里 —— 见下面的技能循环。
+   * null = 还没锁定 / 已放弃该目标;没配技能时不用它(普通攻击靠 HUD 判活)。
+   */
+  let lockedAim: Point | null = null;
+  /** 最后一次「锁上怪」的时间:连续 DETECT.idleMs 没锁上就认为清完了 */
+  let lastSeenAt = Date.now();
+
+  ctx.sendLog(
+    'info',
+    `[${label}] 小退前清怪:范围(${fmtRange(roi)}) 颜色=${color} 关键字=[${keywords.join(',') || '不限(纯OCR)'}]` +
+      ` 识别参数=${over ? '「小退回城」里单独配的' : '沿用本任务「定点识别」'}` +
+      ` 技能=${castable.length > 0 ? `${castable.length}个` : '无(锁定后靠普通攻击)'} 总超时=${Math.round(timeoutMs / 1000)}s`,
+  );
+
+  while (ctrl.running) {
+    if (Date.now() >= deadline) {
+      return {
+        ok: false,
+        detail: `小退前清怪超时(${Math.round(timeoutMs / 1000)}s 内一直有怪没清掉,被攻击时小退不会成功;可在「小退回城」里调大清怪超时)`,
+      };
+    }
+
+    // 清怪途中角色死亡:小退要点系统菜单,得先活着 —— 直接报失败,死亡不该由这里悄悄吞掉
+    if (detectCharacterDeath(run).dead) {
+      return { ok: false, detail: '小退前清怪时角色死亡(复活后重试,或先确认能打过这片怪)' };
+    }
+
+    // 读 HUD:它是"锁定的怪还在不在"的唯一判据(见 isLockAlive);没锁定目标就不用读
+    const hudName = locked ? monster.readLockedName() : '';
+    if (!locked || !isLockAlive(locked, hudName)) {
+      if (locked) {
+        const corpsePos = ignoreCorpse(run, locked.name);
+        ctx.sendLog(
+          'info',
+          `[${label}] 清怪:HUD 锁定名称消失,判定「${locked.name}」已击杀` +
+            (corpsePos ? `(尸体名 ${DETECT.corpseTtlMs}ms 内不再当目标)` : ''),
+        );
+      }
+      locked = null;
+      lockedAim = null;
+      const m = monster.detect((pos) => isCorpseIgnored(run, pos));
+      if (!m) {
+        if (Date.now() - lastSeenAt >= DETECT.idleMs) {
+          ctx.sendLog('info', `[${label}] 清怪:连续 ${DETECT.idleMs}ms 未识别到怪,认为周围已清完`);
+          return { ok: true, detail: `连续 ${DETECT.idleMs}ms 未识别到怪` };
+        }
+        await sleep(DETECT.pollMs);
+        continue;
+      }
+      // 怪名位置:没配技能时开打点的就是这里;配了技能时缺省施法(target)技能的左键也落在这里
+      const aimPos = monster.locate(m.name) ?? m.screenPos;
+      if (castable.length > 0) {
+        // 配了技能:识别到怪就直接用技能打,不先左键点一下开打(用户要求)。
+        // 缺省施法(target)技能带的那次左键落在 aimPos,首次释放顺便把怪选上,HUD 随后就会出现它的名字。
+        ctx.sendLog('info', `[${label}] 清怪:识别到「${m.name}」@(${aimPos.x},${aimPos.y}),用技能打(不左键开打)`);
+        locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
+        lockedAim = aimPos;
+        lastSeenAt = Date.now();
+        await sleep(DETECT.pollMs);
+        continue;
+      }
+      // 没配技能:左键点击怪名开打(普通攻击),靠 HUD 判活
+      await clickMonsterName(run, aimPos, 'left');
+      ctx.sendLog('info', `[${label}] 清怪:识别到「${m.name}」@(${aimPos.x},${aimPos.y}),左键点击开打`);
+      await sleep(DETECT.lockMs);
+      // 读一次 HUD 确认点中了(与 runDetectSpot 同一套:怪死后重新定位尸体位置也靠名字)
+      const hudAfterClick = monster.readLockedName();
+      if (hudAfterClick.includes(m.name)) {
+        locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
+        lastSeenAt = Date.now();
+        ctx.sendLog('info', `[${label}] 清怪:已锁定「${m.name}」(HUD:「${hudAfterClick}」)`);
+      }
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+
+    // HUD 读空:没技能的路径靠 HUD 判活(读空就等下一轮);配了技能的路径不等 HUD ——
+    // 缺省施法技能自带左键,首次释放后 HUD 自然会出现怪名
+    if (!hudName && !lockedAim) {
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+    lastSeenAt = Date.now();
+
+    // 单只怪最多耗 CLEAR_MOBS.perMonsterTimeoutMs:打不动(太远/打不到)就丢锁重扫,别一直卡在它身上
+    if (Date.now() - locked.clickedAt > CLEAR_MOBS.perMonsterTimeoutMs) {
+      ctx.sendLog(
+        'warn',
+        `[${label}] 清怪:「${locked.name}」打了 ${Math.round(CLEAR_MOBS.perMonsterTimeoutMs / 1000)}s 还没死,换个目标重新扫描`,
+      );
+      locked = null;
+      await sleep(DETECT.pollMs);
+      continue;
+    }
+
+    // 释放 CD 已好的技能
+    const now = Date.now();
+    for (const skill of castable) {
+      if (!ctrl.running || Date.now() >= deadline) break;
+      if (now - (lastCast.get(skill.id) || 0) < skill.cooldownMs) continue;
+      if (!isLockAlive(locked, monster.readLockedName())) {
+        ctx.sendLog('info', `[${label}] 清怪:「${locked.name}」锁定名称消失,停止技能,重新扫描`);
+        locked = null;
+        lockedAim = null;
+        break;
+      }
+      let clickPos: Point | null = null;
+      if (skill.method === 'target') {
+        // 缺省施法:左键落在"刚才开打那次点击的位置"(识别到怪名的地方);拿不到才重新定位一次
+        clickPos = lockedAim ?? monster.locate(locked.name);
+        if (!clickPos) {
+          locked = null;
+          lockedAim = null;
+          break;
+        }
+      }
+      if (await castSkill(run, skill, clickPos)) lastCast.set(skill.id, Date.now());
+    }
+    await sleep(DETECT.pollMs);
+  }
+
+  return { ok: false, detail: '任务已停止(清怪途中)' };
+}
+
+/**
+ * 小退回城的收口:清怪(可选,被攻击时小退不会成功)→ 小退流程(见 relogin.ts)。
+ * 成功返回 null = 已离开游戏并重新上线,后续由 runFarmLoop 的 prepareFarmEntry 负责回挂机图(与小退前一致);
+ * 失败返回结果 = 任务就此结束(别在野外瞎跑)。
+ */
+async function runReloginEndReturn(run: FarmRun, reason: string): Promise<FarmLoopResult | null> {
+  const { ctx, conf, label } = run;
+  const rel = conf.endReturn.relogin;
+  ctx.setStatus('resupply', `${label} 小退回城(${reason})`);
+
+  if (rel.clearMobs) {
+    ctx.sendLog('info', `[${label}] 小退回城:先清掉周围的怪(清怪开关开启)`);
+    const cleared = await clearMobsAround(run, rel.clearTimeoutMs);
+    if (!cleared.ok) {
+      const detail = `条件回城(小退):${cleared.detail}`;
+      ctx.sendLog('warn', `[${label}] ${detail}`);
+      return { ok: false, detail };
+    }
+  } else {
+    ctx.sendLog('warn', `[${label}] 小退回城:清怪已关闭,被攻击时小退可能不成功(建议保持勾选)`);
+  }
+
+  const res = await returnViaRelogin({
+    ctx,
+    client: dmApi,
+    input: run.input,
+    size: run.size,
+    label,
+    readMapName: run.readMapName,
+    // 坐标用小退前那份 reader(不带地图名):选择角色界面上坐标/地图名都读不出来,两个信号一起判
+    readPosition: () => run.movement.readPosition(),
+    maxAttempts: rel.maxAttempts,
+    isStopped: () => !ctx.moveAttack.running,
+  });
+  if (res.ok) {
+    ctx.sendLog('info', `[${label}] 条件回城(小退)完成:${res.detail}`);
+    return null;
+  }
+
+  const detail = `条件回城(小退):${res.detail}`;
+  ctx.sendLog('warn', `[${label}] ${detail}`);
+  return { ok: false, detail };
+}
+
+/**
+ * 条件回城的"回城"这一步:
+ *   method='scroll'  → 按回城卷轴 → 观察窗口内等地图名变化 → 没变就再按,最多 maxAttempts 次
+ *                      (技能共用「回城卷轴」conf.returnScroll,见 shared/types.ts)
+ *   method='relogin' → 清怪 → 小退(见 runReloginEndReturn / relogin.ts)
+ * 返回 null = 已离开原图(回城卷轴落在主城 / 小退后重新上线);返回结果 = 回城失败,任务就此结束。
+ */
+async function runEndReturn(run: FarmRun, reason: string): Promise<FarmLoopResult | null> {
+  const { ctx, conf, label } = run;
+  const end = conf.endReturn;
+
+  if (end.method === 'relogin') return runReloginEndReturn(run, reason);
+
+  // 只要求它引用到了物品技能:「回城卷轴」的 enabled 管的是"任务启动时自动回城",条件回城不看它
+  const key = conf.returnScroll.key;
+  if (!key) {
+    const detail = '条件回城:没配「回城卷轴」的物品技能,无法回城(在「回城卷轴」里选一个物品栏快捷栏技能)';
+    ctx.sendLog('warn', `[${label}] ${detail}`);
+    return { ok: false, detail };
+  }
+
+  // 按之前先确认地图名读得到:returnViaScroll 用"地图名变了"判成功,
+  // 起点读空会被当成"已回城"误判(见 core/navigation/RouteTraveler.ts 的 waitForMapChange)
+  if (!(await readMapNameRetry(run))) {
+    const detail = '条件回城:回城前读不到地图名(OCR 失败:核对地图名区域/颜色与设置里的分辨率)';
+    ctx.sendLog('warn', `[${label}] ${detail}`);
+    return { ok: false, detail };
+  }
+
+  ctx.setStatus('resupply', `${label} 回城中(${reason})`);
+  const stopped = (): boolean => !ctx.moveAttack.running;
+  for (let attempt = 1; attempt <= end.scroll.maxAttempts; attempt++) {
+    const back = await returnViaScroll({
+      ctx,
+      input: run.input,
+      readMapName: run.readMapName,
+      label,
+      key,
+      timeoutMs: end.scroll.pressIntervalMs,
+      isStopped: stopped,
+    });
+    if (back.ok) {
+      ctx.sendLog('info', `[${label}] 条件回城:第 ${attempt}/${end.scroll.maxAttempts} 次按回城卷轴成功,${back.detail}`);
+      return null;
+    }
+    ctx.sendLog('warn', `[${label}] 第 ${attempt}/${end.scroll.maxAttempts} 次按回城卷轴没回城: ${back.detail}`);
+    // 停止命令中途到达:不回城了,循环也别再往下跑
+    if (stopped()) return { ok: false, detail: '任务已停止(回城途中)' };
+  }
+
+  const detail = `条件回城失败:按了 ${end.scroll.maxAttempts} 次回城卷轴都没回城` + '(核对卷轴键位/数量,或被攻击时卷轴不生效),退出打怪循环';
+  ctx.sendLog('warn', `[${label}] ${detail}`);
+  return { ok: false, detail };
+}
+
+/**
+ * 「背包已负载」(背包/装备装满)扫描 —— 带迟滞(迟滞标志见 FarmRun.bagFullArmed)。
+ *
+ * 为什么需要迟滞:这条提示会一直留在聊天框里(不会自己消失),不做迟滞的话每圈扫到都会回城,
+ * 变成"回城 → 回挂机图 → 下一圈扫到同一条旧提示 → 又回城"的无限来回。
+ * 迟滞模型 = 扫到提示且「已武装」→ 触发一次并置为未武装;扫不到提示 → 重新武装。
+ * 也就是同一条提示必须先消失过一次,才可能触发第二次。
+ *
+ * ⚠️ 找字/OCR 是低频重操作:只在开了条件回城且勾了「背包已满时回城」时才做(第一行就返回)。
+ * 触发原因由调用方存进本圈的局部变量,圈末收口时复用 —— 触发后标志已置为未武装,再扫一次读不到。
+ *
+ * @returns 触发时返回原因(给日志与 reset detail 用),没触发返回 null
+ */
+function scanBagFullOnce(run: FarmRun): string | null {
+  const { ctx, conf, label } = run;
+  if (!conf.endReturn.enabled || !conf.endReturn.overloaded) return null;
+
+  const hit = detectBagFull(dmApi, run.size);
+  // 该分辨率档位没有实测区域:启动时已经提示过一条,这里静默(不会命中)
+  if (hit.unsupported) return null;
+
+  if (!hit.full) {
+    // 提示不在屏幕上 → 重新武装,下次再出现才可能触发
+    run.bagFullArmed = true;
+    return null;
+  }
+  if (!run.bagFullArmed) return null; // 同一条提示已经触发过,且还没从聊天框消失
+
+  run.bagFullArmed = false;
+  const reason = `背包已负载(聊天框提示「${hit.text}」)`;
+  ctx.sendLog('info', `[${label}] ${reason}`);
+  return reason;
+}
+
+/**
+ * 条件回城判定(每圈结束时调一次):满足返回触发原因,否则 null。
+ * 圈数用调用方给的"已完成圈数"(只有每个路径点都走到的整圈才计,见 walkWaypoints)。
+ * 背包分支要扫聊天框(找字/OCR),所以这里是 async;扫描只在勾了「背包已满时回城」时才发生。
+ */
+async function checkEndReturn(run: FarmRun, completedLoops: number): Promise<string | null> {
+  const end = run.conf.endReturn;
+  if (!end.enabled) return null;
+  if (end.loops !== null && completedLoops >= end.loops) {
+    return `完成 ${completedLoops} 圈(达到设定 ${end.loops} 圈)`;
+  }
+  // 背包/装备已满(见 scanBagFullOnce:带迟滞,同一条提示不会连着触发两次)
+  if (end.overloaded) return scanBagFullOnce(run);
+  return null;
+}
+
 // ===== 主循环 =====
 
 /**
@@ -1795,6 +2293,10 @@ function pickSkillsToCast(run: FarmRun, wp: ResolvedWaypoint, now: number): Move
  * - 每次移动前先扫一眼拾取(见 runPickup):拾取点击会走位,只能在没移动的时候做
  * - 卡住的点(超过 noMoveTimeoutMs 没动)记一条日志就跳过,不强求
  * - 死亡回城补给成功后结束本圈,从第一个路径点重新跑(不再从死亡时的中断点续跑)
+ * - 条件回城(taskConfig.endReturn):走到本圈最后一个路径点(不管有没有真的到达)= 完成一圈,
+ *   满足条件就返回 reset 结果,由 runFarmLoop 回城 → 回挂机图 → 重开一轮(不是结束任务)
+ * - 背包已满(勾了「背包已满时回城」)时不等到圈末:每个路径点拾取后扫一次(见 scanBagFullOnce),
+ *   命中就结束本圈去回城(本圈没走到最后一个点,不计入圈数)
  * - 目标地图名以最近一次读到的坐标为准:过图/传送后 start.map 就过期了,
  *   继续拿它当目标会让 moveTo 每次都判成「跨图」直接失败
  * - 入图点(type='entry')不参与循环:它们只在回城/开工补给重新进图后走(见 resupply-runner)
@@ -1814,13 +2316,23 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
    */
   let prev: MapPosition | null = null;
   let mapName = start.map;
+  /**
+   * 已完成圈数(条件回城按它判"完成 N 圈")。
+   * 口径:走到本圈**最后一个路径点并到达**就算完成一圈(见下面的 lastWp 判定),不看中间有没有点被跳过 ——
+   * 路径点偶尔卡住跳过的圈子若一律不计,容易出现"永远攒不到 N 圈、条件回城永不触发"的死角。
+   */
+  let completedLoops = 0;
+  /** 本圈最后一个路径点:走到(到达)它就判一次条件回城 */
+  const lastWp = patrol[patrol.length - 1];
 
-  while (ctrl.running && (conf.maxLoops === null || loop < conf.maxLoops)) {
+  while (ctrl.running) {
     await waitWhilePaused(ctx, label);
     if (!ctrl.running) break;
 
     loop++;
-    const loopDesc = conf.maxLoops === null ? `第 ${loop} 圈` : `第 ${loop}/${conf.maxLoops} 圈`;
+    /** 本圈在路径点扫到的「背包已负载」原因(圈末收口用;见 scanBagFullOnce) */
+    let bagFullAtWaypoint: string | null = null;
+    const loopDesc = `第 ${loop} 圈`;
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
     // 每圈开始读一次地图名:变了就重新屏蔽所有人(路径点不跨图,这里够用)
@@ -1859,6 +2371,15 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
           prev = (await run.movement.readPosition()) ?? prev;
         }
 
+        // 捡完顺手扫一次「背包已负载」(只在勾了「背包已满时回城」时真扫,见 scanBagFullOnce):
+        // 满了就捡不起来也打不动,尽快结束本圈去回城(本圈没走到最后一个点,由圈末那次收口处理)
+        const bagHit = scanBagFullOnce(run);
+        if (bagHit) {
+          ctx.sendLog('info', `[${label}] 检测到${bagHit},结束本圈准备回城`);
+          bagFullAtWaypoint = bagHit;
+          break;
+        }
+
         // 移动到下一个路径点:精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即到位;
         // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住(3s 没动视为卡住)
         const arrived = await run.movement.moveTo(
@@ -1875,6 +2396,20 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         if (current?.map) mapName = current.map;
         // 落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects
         const here: MapPosition | null = current ?? prev;
+
+        // 本圈最后一个路径点 = 一圈走完(口径:走到最后一个点就算完成一圈,**不管有没有真的到达** ——
+        // 某个点常年卡住时,按"必须到达"会让圈数条件永远不触发)。
+        // 就在这里判一次条件回城:命中就直接结束本圈去回城,不再在最后一点上打一轮。
+        if (wp === lastWp) {
+          if (!arrived) ctx.sendLog('warn', `[${label}] 最后一个路径点 (${wp.x},${wp.y}) 没走到,仍按完成本圈处理`);
+          completedLoops++;
+          ctx.sendLog('info', `[${label}] 已走到本圈最后一个路径点 (${wp.x},${wp.y}),完成第 ${completedLoops} 圈`);
+          const lastHit = bagFullAtWaypoint ?? (await checkEndReturn(run, completedLoops));
+          if (lastHit) {
+            ctx.sendLog('info', `[${label}] 触发条件回城:${lastHit};结束本轮打怪,准备回城`);
+            return { ok: true, detail: `条件回城:${lastHit}`, reset: true };
+          }
+        }
 
         if (!arrived) {
           stuckCount++;
@@ -1909,6 +2444,16 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
       } finally {
         ctx.farmSpotActive = false;
       }
+    }
+
+    // 停止命令在本圈末尾到达:直接结束
+    if (!ctrl.running) break;
+
+    // 走到本圈最后一个路径点时的条件判定在上面(见 lastWp 处)。能走到这里 = 本圈没走完
+    // (死亡/背包满提前 break,或最后一个点没到达):这里只收口「背包已负载」这种即时原因
+    if (bagFullAtWaypoint) {
+      ctx.sendLog('info', `[${label}] 触发条件回城:${bagFullAtWaypoint};结束本圈,准备回城`);
+      return { ok: true, detail: `条件回城:${bagFullAtWaypoint}`, reset: true };
     }
   }
 
@@ -2007,6 +2552,8 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       corpses: new Map(),
       // 换图判断的记录:还没有基线,启动后第一次读到地图名就会当作"新地图"按一次
       lastMapName: null,
+      // 背包已负载的迟滞标志:一开始视为"已武装",这样启动时聊天框里就挂着的旧提示只会触发一次(见 scanBagFullOnce)
+      bagFullArmed: true,
     };
 
     // 任务启动、角色开始移动前:先读一次地图名,当作换图判断的基线(同时按一次屏蔽)
@@ -2018,74 +2565,59 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       await runStartupEnvSetup(run);
     }
 
-    // 起点恢复(进主循环之前):把角色弄到出发城镇 ——
-    //   已在出发城镇 → 不动;已在某个主城(见 shared/main-cities.ts)→ 不用回城卷轴,直接坐飞空艇去出发城镇;
-    //   在野外/任意图 → 先用回城卷轴回主城,再坐飞空艇过去(细节见 recoverToDepartureTown)。
-    // 必须在开工补给之前:补给的状态检查(装备/药水)与「城镇出发」都以出发城镇为立足点。
-    // 已在挂机图/链路/出发城镇 = 什么都不做(不消耗卷轴)。
-    if (opts?.allowStartupResupply !== false) {
-      const town = ctx.init.auxConfigs?.townProfile;
-      const farmMapName = String(ctx.init.auxConfigs?.farmMapName ?? '').trim();
-      const at = String((await run.readMapName()) ?? '').trim();
-      const known =
-        !!town && (at === town.mapName || (!!farmMapName && at === farmMapName) || conf.mapProfiles.some((p) => p.mapName === at));
-      if (town && at && !known) {
-        const recovered = await recoverToDepartureTown(run, at);
-        if (recovered.exit) return recovered.exit;
-      }
-    }
+    // 入图准备(进主循环之前):起点恢复 → 开工补给 → 跨境 → 走挂机图的入图点 → 重读起点。
+    // 与「条件回城」每轮回来共用同一段(见 prepareFarmEntry)。移动攻击测试由 opts 关掉。
+    const allowResupply = opts?.allowStartupResupply !== false;
+    const entry = await prepareFarmEntry(run, start, { allowResupply });
+    if (entry.exit) return entry.exit;
 
-    // 开工补给(配置要求时):进主循环之前先把 检查状态 → 商人 → 挂机地图 这一段跑完。
-    // 放在 walkWaypoints 之前(walkWaypoints 开头那次 checkDeath('开始时') 因此晚于它),
-    // 且只跑这一次 —— 循环里不会重复触发。补给途中角色是活的,死亡检查不会被误触发。
-    // 移动攻击测试路径由 opts 关掉(见 FarmLoopOptions.allowStartupResupply)
-    const useStartupResupply = opts?.allowStartupResupply !== false && conf.resupply.enabled && conf.resupply.runOnStart;
-    if (useStartupResupply) {
-      const startup = await runStartupResupply(run);
-      if (startup) return startup;
-    }
-
-    // 地图跨越(进主循环之前):角色不在挂机图时按 conf.mapProfiles 逐跳穿越过去。
-    // 开工补给返程若已把角色带回挂机图,这里会直接判"已在挂机图"跳过(不会重复跨)。
-    // 同一开关(allowStartupResupply)关掉:移动攻击测试不该顺带跨图。
-    let crossedMaps = false;
-    if (opts?.allowStartupResupply !== false) {
-      const cross = await crossMapsOnStartup(run);
-      if (cross.exit) return cross.exit;
-      crossedMaps = cross.crossed;
-    }
-
-    // 跨图/城镇出发把角色带进了挂机图、但没走开工补给(角色从别处用回城卷轴过来的情况):
-    // 这里补走「入图点」—— 从地图入口直冲第一个挂机点容易被地形挡住。
-    // 开工补给那条路已在 travelBackToFarm 里走过入图点,此时 crossMapsOnStartup 会判"已在挂机图"跳过,
-    // crossedMaps=false,不会重复走。
-    if (crossedMaps && conf.entryPath.length > 0) {
-      ctx.setStatus('moving', `${label} 入图`);
-      ctx.sendLog('info', `[${label}] 已进入挂机地图,按入图路径走 ${conf.entryPath.length} 个点回到挂机点`);
-      await travelWithinMap(run.travelMovement, conf.entryPath, {
-        timeoutMs: CROSS_TRAVEL_TIMEOUT_MS,
-        moveOptions: CROSS_MOVE_OPTIONS,
-        isStopped: () => !ctx.moveAttack.running,
-        onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
-      });
-    }
-
-    // 起点重读:开工补给 / 地图跨越会把角色带到挂机地图(走位 + 切图),上面读到的 start 已经过期 ——
-    // 拿旧坐标进主循环会让定点打怪的"移动反方向"算歪、moveTo 的目标图也可能判成跨图。
-    // 两段都没跑(或被测试路径关掉)时不重读,保持原行为(少一次 OCR)
-    let loopStart = start;
-    if (useStartupResupply || crossedMaps) {
-      const after = await movement.readPosition();
-      if (!after) {
-        const detail = '开工补给/跨图后读不到当前位置(检查设置里的分辨率,以及坐标区域/颜色是否匹配)';
+    // 条件回城:达到条件就结束本轮打怪 → 回城 → 走城市/跨境逻辑回到挂机图 → 重开一轮(不结束任务)。
+    // 移动攻击测试(allowStartupResupply=false)只跑一段走位打怪,不触发条件回城。
+    if (allowResupply && conf.endReturn.enabled) {
+      // 回城卷轴只会把人送进主城,回挂机图要靠城镇档案(出城口/传送 NPC);没下发就别开跑,免得回城后卡在城里
+      if (!ctx.init.auxConfigs?.townProfile) {
+        const detail = '条件回城:没下发城镇档案(auxConfigs.townProfile),回城后回不到挂机图';
         ctx.sendLog('warn', `[${label}] ${detail}`);
         return { ok: false, detail };
       }
-      loopStart = after;
-      ctx.sendLog('info', `[${label}] 补给/跨图后的起点: (${after.x}, ${after.y}) 地图=${after.map ?? '未知'}`);
+      if (conf.endReturn.overloaded) {
+        // 检测区域按分辨率档位取;只有实测过的那几档有值,缺档位时这个条件不可能生效 —— 启动时先说清楚
+        const roi = BAG_FULL_ROI[size];
+        if (!roi) {
+          ctx.sendLog(
+            'warn',
+            `[${label}] 勾了「背包已满时回城」,但分辨率 ${size} 还没有实测的提示检测区域,该条件不会生效` +
+              `(需要在 core/constant-ocr/bag.ts 里补这一档的坐标)`,
+          );
+        } else {
+          ctx.sendLog(
+            'info',
+            `[${label}] 背包已负载检测:区域(${roi.x1},${roi.y1})-(${roi.x2},${roi.y2}) 颜色=${roi.color}` +
+              ` 提示=[${BAG_FULL_TEXTS.join(' / ')}] 带迟滞(提示消失过才能再次触发)`,
+          );
+        }
+      }
     }
-
-    return await walkWaypoints(run, loopStart);
+    let round = 1;
+    let entryStart = entry.start;
+    while (true) {
+      const r = await walkWaypoints(run, entryStart);
+      if (!r.reset || !ctrl.running || !allowResupply) return r;
+      ctx.sendLog('info', `[${label}] 第 ${round} 轮打怪结束(${r.detail}),开始回城`);
+      const left = await runEndReturn(run, r.detail);
+      if (left) {
+        // 长时间挂机多半没人看着:回城失败要主动提醒(应用内浮层 + 系统通知);用户点停止导致的不提醒
+        if (ctrl.running) {
+          ctx.postMessage({ type: 'notify', key: 'farm-end-return-failed', title: '回城失败', body: left.detail });
+        }
+        return left;
+      }
+      const prepared = await prepareFarmEntry(run, entryStart, { allowResupply, forceResupply: true });
+      if (prepared.exit) return prepared.exit;
+      entryStart = prepared.start;
+      round++;
+      ctx.sendLog('info', `[${label}] 已回到挂机图,开始第 ${round} 轮打怪`);
+    }
   } catch (e: any) {
     const detail = `异常: ${e.message}`;
     ctx.sendLog('warn', `[${label}] ${detail}`);
@@ -2104,7 +2636,7 @@ export function createFarmTask(fc: TaskFactoryContext): TaskController {
         // 自然跑完才走到这里(stop 命令直接杀进程);回到 idle 让卡片状态复位
         fc.ctx.setStatus('idle', r.detail);
       } finally {
-        // 打怪结束(跑满圈数 / 角色停级)后不再需要看门狗
+        // 打怪结束(角色死亡/停级、回城失败)后不再需要看门狗
         stopInterruptWatcher(fc.ctx);
       }
     },

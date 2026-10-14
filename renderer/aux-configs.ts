@@ -145,7 +145,15 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
   const farm = config?.type === 'farm' ? config : null;
   const crossings = (farm?.mapCrossings ?? []).map((s) => String(s ?? '').trim()).filter(Boolean);
   const resupplyOn = farm?.resupply?.enabled === true;
+  // 条件回城:回城卷轴只会把人送进主城,回挂机图要靠城镇档案出城 —— 没档案直接拦在启动前
+  const endReturnOn = farm?.endReturn?.enabled === true;
   if (!farm || (!resupplyOn && crossings.length === 0)) {
+    if (endReturnOn) {
+      return {
+        ok: false,
+        error: '开启「结束自动打怪并回城」需要先在「回城补给」里开启补给并选好城镇档案(回城后要按它走回挂机图)',
+      };
+    }
     return { ok: true, auxConfigs: null };
   }
 
@@ -175,13 +183,19 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
   const npcErr = validateCrossingNpcRecipes(mapProfiles, recipes);
   if (npcErr) return { ok: false, error: npcErr };
 
-  // 城镇档案:开回城补给时必须下发;没开补给但配了地图跨越、又指定了城镇档案时也下发
+  // 城镇档案:开回城补给 / 开了条件回城时必须下发;没开补给但配了地图跨越、又指定了城镇档案时也下发
   // (这样「不开补给、只想从出发城镇启动」也能走 NPC 传送 / 出城口)
   const townProfileName = String(farm.resupply?.townProfileName ?? '').trim();
   let townProfile: TownProfileConfig | undefined;
-  if (resupplyOn || (crossings.length > 0 && townProfileName)) {
+  if (resupplyOn || endReturnOn || (crossings.length > 0 && townProfileName)) {
     if (!townProfileName) {
-      return { ok: false, error: '回城补给已开启,但没有选择城镇档案' };
+      return {
+        ok: false,
+        error:
+          endReturnOn && !resupplyOn
+            ? '开启「结束自动打怪并回城」但没有选择城镇档案(回城后回不到挂机图)'
+            : '回城补给已开启,但没有选择城镇档案',
+      };
     }
     const stored = history.find((h) => h.taskType === 'town-profile' && h.name === townProfileName);
     if (!stored || stored.config.type !== 'town-profile') {

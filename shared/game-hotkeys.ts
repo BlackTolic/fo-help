@@ -8,6 +8,8 @@
 //   Alt+P 宠物面板 / Alt+C 状态(人物)面板 / Alt+I 物品面板 / Alt+V 聊天区
 //   F11   屏幕人名显示模式循环(连按 4 下 = 屏蔽所有玩家)
 //   Alt+- 地图缩小 / Alt++ 地图放大
+//   Alt+O 系统菜单(官方表里没有,用户实测;「小退回城」用它)
+//   Alt+Q 交友面板(官方表里没有,用户实测;城镇档案「回城检查项 → 创建队伍」用它)
 //
 // 参考:QQ幻想官网-操作说明 https://fo.qq.com/web200604/information/operation.htm
 
@@ -19,6 +21,8 @@ export type GameHotkeyId =
   | 'openCharacterPanel'
   | 'openItemPanel'
   | 'openChatPanel'
+  | 'openSystemPanel'
+  | 'openFriendPanel'
   | 'blockAllPlayers'
   | 'zoomOutMap'
   | 'zoomInMap';
@@ -84,6 +88,20 @@ export const GAME_HOTKEYS: Record<GameHotkeyId, GameHotkey> = {
     label: '打开/关闭聊天面板',
     combo: altLetter('V'),
     repeat: 1,
+  },
+  openSystemPanel: {
+    id: 'openSystemPanel',
+    label: '打开/关闭系统菜单',
+    combo: altLetter('O'),
+    repeat: 1,
+    note: '用户实测:Alt+O 打开系统菜单,「小退回城」在菜单里点「选择角色」',
+  },
+  openFriendPanel: {
+    id: 'openFriendPanel',
+    label: '打开/关闭交友面板',
+    combo: altLetter('Q'),
+    repeat: 1,
+    note: '用户实测:Alt+Q 打开/关闭交友面板(面板里「组队」= 未组队、「解散」= 已在队伍,见 core/constant-ocr/team.ts)',
   },
   blockAllPlayers: {
     id: 'blockAllPlayers',

@@ -15,6 +15,7 @@ import type {
   FarmResupplyConfig,
   FarmPetRideConfig,
   FarmReturnScrollConfig,
+  FarmEndReturnConfig,
   SkillCastMethod,
   TeamInviteAction,
   Waypoint,
@@ -33,6 +34,8 @@ import { NPC, normalizeNpcName } from '../../shared/npc';
 import { FarmResupplySection, DEFAULT_RESUPPLY, normalizeResupply } from './FarmResupplySection';
 import { FarmPetRideSection, DEFAULT_PET_RIDE, normalizePetRide } from './FarmPetRideSection';
 import { FarmReturnScrollSection, DEFAULT_RETURN_SCROLL, normalizeReturnScroll } from './FarmReturnScrollSection';
+import { FarmEndReturnSection, DEFAULT_END_RETURN, normalizeEndReturn } from './FarmEndReturnSection';
+import { ColorTagPicker } from './ColorTagPicker';
 import { TownProfileForm } from './TownProfileForm';
 import { DialogRecipeForm } from './DialogRecipeForm';
 import { MapProfileForm } from './MapProfileForm';
@@ -146,8 +149,9 @@ const DEFAULT_TOWN_PROFILE: TownProfileConfig = {
   type: 'town-profile',
   mapName: '',
   revivePoint: { x: 0, y: 0 },
-  // 回城检查项:缺省不检查(没触发就不去访问商人 NPC,直接去出城口)
+  // 回城检查项:缺省不检查(没触发就不去访问商人 NPC,直接去出城口;也不检查/创建队伍)
   checkDurability: false,
+  createTeam: false,
   npcs: [],
   routes: [],
   exits: [],
@@ -349,6 +353,8 @@ export function TaskConfigDialog({
   const [petRide, setPetRide] = useState<FarmPetRideConfig>({ ...DEFAULT_PET_RIDE });
   // 回城卷轴:起点在野外/任意地图时先按它回主城(见 worker 的 returnViaScroll)
   const [returnScroll, setReturnScroll] = useState<FarmReturnScrollConfig>({ ...DEFAULT_RETURN_SCROLL });
+  // 条件回城:完成 N 圈后结束本轮打怪 → 回城处理 → 回挂机图继续下一轮(整个任务不结束)
+  const [endReturn, setEndReturn] = useState<FarmEndReturnConfig>({ ...DEFAULT_END_RETURN });
   // 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4,见 shared/game-hotkeys.ts)
   const [blockAllPlayersOnNewMap, setBlockAllPlayersOnNewMap] = useState(false);
   // 启动时的一次性环境处理(默认开启;见 shared/types.ts 的 zoomOutMinimap / closeChatBackground)
@@ -369,6 +375,13 @@ export function TaskConfigDialog({
     ),
   ];
   const recipeIssue = missingRecipes.length > 0 ? `NPC 引用的对话配方不存在:${missingRecipes.join('、')}` : null;
+  // 条件回城的「使用回城卷轴」方式复用「回城卷轴」里配的物品技能:没配好时先在界面上提示(保存时另有一条硬校验)
+  const returnScrollIssue =
+    endReturn.enabled === true &&
+    (endReturn.method ?? 'scroll') !== 'relogin' &&
+    !skills.some((s) => s.id === returnScroll.skillId && s.method === 'item')
+      ? '「回城卷轴」里没有选好回城物品技能'
+      : null;
   const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
   // 过图路线(配置型"任务":只存储/编辑,保存后不启动 worker)
   const [mapProfile, setMapProfile] = useState<MapProfileConfig>(DEFAULT_MAP_PROFILE);
@@ -403,6 +416,8 @@ export function TaskConfigDialog({
       // 回城检查项:旧档案没有这两个字段 → undefined(启动时 worker 回退旧 farm 配置)
       checkDurability: town.checkDurability,
       potionThreshold: town.potionThreshold,
+      // 创建队伍也是回城检查项:旧档案没有该字段 → undefined(worker 按"不检查"处理)
+      createTeam: town.createTeam,
       npcs: town.npcs ?? [],
       routes: town.routes ?? [],
       exits: town.exits ?? [],
@@ -563,6 +578,8 @@ export function TaskConfigDialog({
       setPetRide(normalizePetRide(farm.petRide));
       // 旧配置没有 returnScroll 字段:回显成"不开启"
       setReturnScroll(normalizeReturnScroll(farm.returnScroll));
+      // 旧配置没有 endReturn 字段:回显成"不开启"
+      setEndReturn(normalizeEndReturn(farm.endReturn));
       // 旧配置没有这个字段:回显成"不开启"
       setBlockAllPlayersOnNewMap(farm.blockAllPlayersOnNewMap === true);
       // 旧配置没有这两个字段:缺省 = 开启
@@ -584,6 +601,8 @@ export function TaskConfigDialog({
         // 回城检查项:旧档案没有这两个字段 → undefined(启动时 worker 回退旧 farm 配置)
         checkDurability: town.checkDurability,
         potionThreshold: town.potionThreshold,
+        // 创建队伍也是回城检查项:旧档案没有该字段 → undefined(worker 按"不检查"处理)
+        createTeam: town.createTeam,
         npcs: town.npcs ?? [],
         routes: town.routes ?? [],
         exits: town.exits ?? [],
@@ -741,6 +760,8 @@ export function TaskConfigDialog({
         },
         // 回城卷轴:整份保存(没开启也留着参数)
         returnScroll: normalizeReturnScroll(returnScroll),
+        // 条件回城:整份保存(没开启也留着参数)
+        endReturn: normalizeEndReturn(endReturn),
         // 进入新地图时屏蔽所有人:只在勾选时写入(缺省不写,等价于关闭)
         blockAllPlayersOnNewMap: blockAllPlayersOnNewMap || undefined,
         // 小地图缩放 / 关闭聊天背景:缺省开启,只在取消勾选时写入 false
@@ -780,6 +801,8 @@ export function TaskConfigDialog({
           typeof townProfile.potionThreshold === 'number' && townProfile.potionThreshold > 0
             ? Math.round(townProfile.potionThreshold)
             : undefined,
+        // 创建队伍:同样显式写布尔(勾了 true / 没勾 false)
+        createTeam: townProfile.createTeam === true,
         // id / 名字全空的记录丢掉(留着只会让 worker 白走一趟);recipeName 空 = 只当路线锚点,不会被访问
         npcs: townProfile.npcs
           .filter((n) => (n.id ?? '').trim() || (n.name ?? '').trim())
@@ -873,6 +896,18 @@ export function TaskConfigDialog({
       }
       if (resupply.enabled !== true) {
         return '回城卷轴需要配合「回城补给」使用:请开启回城补给并选择出发城镇档案(出发城镇由它决定)';
+      }
+    }
+    // 条件回城的「使用回城卷轴」方式复用「回城卷轴」里配的物品技能,没配就按不动
+    if (taskType === 'farm' && endReturn.enabled === true && (endReturn.method ?? 'scroll') !== 'relogin') {
+      if (!skills.some((s) => s.id === returnScroll.skillId && s.method === 'item')) {
+        return '请先在「回城卷轴」里选好回城物品技能';
+      }
+    }
+    // 条件回城:回城卷轴只会把人送进主城,回挂机图要靠城镇档案出城 —— 没配就拦在保存这一步
+    if (taskType === 'farm' && endReturn.enabled === true) {
+      if (resupply.enabled !== true || !(resupply.townProfileName ?? '').trim()) {
+        return '开启「结束自动打怪并回城」需要先在「回城补给」里开启补给并选好城镇档案(回城后要按它走回挂机图)';
       }
     }
     if (taskType === 'town-profile') {
@@ -1181,6 +1216,9 @@ export function TaskConfigDialog({
               setPetRide={setPetRide}
               returnScroll={returnScroll}
               setReturnScroll={setReturnScroll}
+              endReturn={endReturn}
+              setEndReturn={setEndReturn}
+              returnScrollIssue={returnScrollIssue}
               townProfileNames={townProfileNames}
               recipeIssue={recipeIssue}
               mapCrossings={mapCrossings}
@@ -1567,96 +1605,6 @@ const CAST_METHOD_OPTIONS: { value: SkillCastMethod; label: string; desc: string
 /** 新建任务时的看门狗默认值:只开验证码(与升级前行为一致,其余项按需勾选) */
 const DEFAULT_WATCHDOG: FarmWatchdogConfig = { verifyCode: true };
 
-interface ColorTagPickerProps {
-  /** 预设颜色标签 */
-  options: { value: string; label: string }[];
-  /** 已选颜色(大漠颜色描述符) */
-  value: string[];
-  onChange: (v: string[]) => void;
-  readOnly?: boolean;
-}
-
-/**
- * 颜色多选(tag 标签 + 自定义色值)
- * 值是「主色-偏色」格式的大漠颜色描述符(见 core/constant-ocr/color.ts);
- * 不在预设里的值(旧配置 / 自定义)也渲染成标签,可以单独删掉。
- * 怪名颜色与物品拾取颜色共用这一个控件,只是传入的预设列表不同。
- */
-function ColorTagPicker({ options, value, onChange, readOnly = false }: ColorTagPickerProps) {
-  const [custom, setCustom] = useState('');
-
-  const toggle = (v: string) => onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
-  const addCustom = () => {
-    const v = custom.trim();
-    if (!v || value.includes(v)) return;
-    onChange([...value, v]);
-    setCustom('');
-  };
-  const extras = value.filter((v) => !options.some((o) => o.value === v));
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
-        {options.map((o) => {
-          const checked = value.includes(o.value);
-          return (
-            <label
-              key={o.value}
-              title={o.value}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] transition-colors ${
-                checked
-                  ? 'border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan'
-                  : 'border-border-base text-text-secondary hover:border-border-active cursor-pointer'
-              } ${readOnly ? 'cursor-default' : ''}`}
-            >
-              <input
-                type="checkbox"
-                className="accent-accent-cyan"
-                disabled={readOnly}
-                checked={checked}
-                onChange={() => toggle(o.value)}
-              />
-              <span>{o.label}</span>
-            </label>
-          );
-        })}
-        {extras.map((v) => (
-          <span
-            key={v}
-            title={v}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-accent-cyan/50 bg-accent-cyan/10 text-accent-cyan text-[11px] font-mono"
-          >
-            {v}
-            {!readOnly && (
-              <button onClick={() => onChange(value.filter((x) => x !== v))} title="移除" className="hover:text-accent-red">
-                <X size={10} />
-              </button>
-            )}
-          </span>
-        ))}
-      </div>
-      {!readOnly && (
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') addCustom();
-            }}
-            placeholder="自定义色值(主色-偏色,如 e85048-111111)"
-            className="w-64 bg-bg-input border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan font-mono"
-          />
-          <button onClick={addCustom} className="text-xs btn btn-secondary flex items-center gap-1">
-            <Plus size={12} />
-            添加
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 interface FarmConfigProps {
   readOnly?: boolean;
   mapId: string;
@@ -1704,6 +1652,11 @@ interface FarmConfigProps {
   /** 回城卷轴(起点不认识时先回主城;引用「物品」技能) */
   returnScroll: FarmReturnScrollConfig;
   setReturnScroll: (v: FarmReturnScrollConfig | ((prev: FarmReturnScrollConfig) => FarmReturnScrollConfig)) => void;
+  /** 条件回城(完成 N 圈后回城处理,再回挂机图继续下一轮;卷轴方式复用上面的「回城卷轴」技能) */
+  endReturn: FarmEndReturnConfig;
+  setEndReturn: (v: FarmEndReturnConfig | ((prev: FarmEndReturnConfig) => FarmEndReturnConfig)) => void;
+  /** 条件回城用卷轴方式但「回城卷轴」没配好物品技能的问题(提示用,不阻断保存) */
+  returnScrollIssue: string | null;
   /** 可选城镇档案名(历史任务里所有 town-profile 的 name) */
   townProfileNames: string[];
   /** 当前编辑的城镇档案里 NPC 引用配方的问题(提示用,不阻断保存) */
@@ -1765,6 +1718,9 @@ function FarmConfig(props: FarmConfigProps) {
     setPetRide,
     returnScroll,
     setReturnScroll,
+    endReturn,
+    setEndReturn,
+    returnScrollIssue,
     townProfileNames,
     recipeIssue,
     mapCrossings,
@@ -2849,6 +2805,16 @@ function FarmConfig(props: FarmConfigProps) {
 
       {/* 回城卷轴:起点在野外/任意地图时,先按卷轴回主城,再前往挂机图 */}
       <FarmReturnScrollSection readOnly={readOnly} value={returnScroll} onChange={setReturnScroll} itemSkills={itemSkills} />
+
+      {/* 条件回城:完成 N 圈后结束本轮打怪 → 回城处理 → 回挂机图继续下一轮 */}
+      <FarmEndReturnSection
+        readOnly={readOnly}
+        value={endReturn}
+        onChange={setEndReturn}
+        returnScrollIssue={returnScrollIssue}
+        colorOptions={MONSTER_COLOR_OPTIONS}
+        farmMobFilter={{ ocrRange, nameColors: mobNameColors, nameKeywords }}
+      />
 
       {/* 备注 */}
       <div>

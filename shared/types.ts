@@ -205,6 +205,60 @@ export interface FarmReturnScrollConfig {
   timeoutMs?: number;
 }
 
+/** 条件回城的回城方式(二选一) */
+export type FarmEndReturnMethod =
+  /** 使用回城卷轴(技能取 FarmReturnScrollConfig.skillId) */
+  | 'scroll'
+  /** 小退回城:清怪 → Alt+O → 选择角色 → 停留 3 秒 → Enter 重新上线(实现见 electron/workers/game-worker/relogin.ts) */
+  | 'relogin';
+
+/** 使用回城卷轴回城的参数;技能配置共用「回城卷轴」(FarmReturnScrollConfig.skillId) */
+export interface FarmEndReturnScrollConfig {
+  /** 最多按几次;不配 = 5 */
+  maxAttempts?: number;
+  /**
+   * 每次按下后的观察窗口(毫秒):窗口内地图名变了 = 回城成功,否则再按一次。
+   * 被攻击时卷轴可能不生效,所以要重按;但也不能按太密(读条没完就按第二次会白耗一张卷轴)
+   */
+  pressIntervalMs?: number;
+}
+
+/** 小退回城(Alt+O → 选择角色 → 重新上线)的参数 */
+export interface FarmEndReturnReloginConfig {
+  /** 小退前先清掉周围的怪 —— 被攻击时小退不会成功;缺省开启(只有显式 false 才关闭) */
+  clearMobs?: boolean;
+  /**
+   * 清怪的识别参数(界面可单独配一份,不与「定点识别」共享):只用到 ocrRange / nameColors / nameKeywords。
+   * 逐项判"填了没":填了的项覆盖本任务的识别参数,没填的项沿用本任务的(见 relogin.ts 的 resolveClearMobsFilter)。
+   * 不配 / 三项都没填 = 清怪完全沿用本任务的找怪设置。
+   */
+  mobFilter?: Partial<FarmTaskConfig['mobFilter']>;
+  /** 清怪总超时(毫秒):怪会刷新,不能无限打;不配 = 120000 */
+  clearTimeoutMs?: number;
+  /** 小退最多尝试几次;不配 = 3 */
+  maxAttempts?: number;
+}
+
+/**
+ * 条件回城(界面叫「结束自动打怪并回城」):满足条件后结束本轮挂机打怪 → 回城 →
+ * 按落点走城市逻辑(城镇档案:检查/按需访问商人/出城)或跨境逻辑(过图链路逐跳) →
+ * 回到挂机图继续下一轮打怪(不结束整个任务);圈数计数在每轮回城后归零重新计。
+ */
+export interface FarmEndReturnConfig {
+  /** 是否开启 */
+  enabled: boolean;
+  /** 完成 N 圈后回城(1 = 每打完一圈就回城一次,可设多圈);不配 / <= 0 = 不用这个条件 */
+  loops?: number;
+  /** 背包/装备已负载(装满)时回城(检测区域见 core/constant-ocr/bag.ts);不配 = 不用这个条件 */
+  overloaded?: boolean;
+  /** 回城方式;不配 = 'scroll' */
+  method?: FarmEndReturnMethod;
+  /** 使用回城卷轴(仅 method='scroll' 时有意义) */
+  scroll?: FarmEndReturnScrollConfig;
+  /** 小退回城(仅 method='relogin' 时有意义) */
+  relogin?: FarmEndReturnReloginConfig;
+}
+
 /** 挂机打怪任务配置 */
 export interface FarmTaskConfig {
   type: 'farm';
@@ -259,6 +313,8 @@ export interface FarmTaskConfig {
   returnScroll?: FarmReturnScrollConfig;
   /** 回城补给(死亡后复活 → 检查耐久/药水 → 找商人对话补给 → 返回野外);不配 = 不开启 */
   resupply?: FarmResupplyConfig;
+  /** 条件回城(达到条件就结束本轮打怪并回城,回城后走城市/跨境逻辑回到挂机图继续打);不配 = 不开启 */
+  endReturn?: FarmEndReturnConfig;
   /**
    * 地图跨越:出发图 → 挂机图之间要依次穿越的中间地图(引用 map-profile 任务名,按顺序)。
    * 不含出发城镇、不含挂机图本身(城镇→首图由城镇档案 exits 负责,可以是走过去出城口,也可以是
@@ -399,6 +455,13 @@ export interface TownProfileConfig {
   checkDurability?: boolean;
   /** 红药 OCR 数量少于该值则触发访问配了配方的商人 NPC;不配 = 不检查药水 */
   potionThreshold?: number;
+  /**
+   * 回城时是否检查/创建队伍:勾了就在每次回城补给时按 Alt+Q 看交友面板,
+   * 面板显示「组队」= 未组队 → 自动点它 + 点建队确认,完成建队;显示「解散」= 已在队伍 → 直接关掉面板。
+   * 与"要不要找商人"无关(不参与 reasons 判定),队伍检查失败只记日志、不阻断补给。
+   * 面板区域等常量见 core/constant-ocr/team.ts,流程见 resupply/team-check.ts。
+   */
+  createTeam?: boolean;
   npcs: TownProfileNpc[];
   routes: TownProfileRoute[];
   exits: TownProfileExit[];

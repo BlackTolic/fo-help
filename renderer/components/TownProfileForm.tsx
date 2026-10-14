@@ -308,10 +308,13 @@ export function TownProfileForm(props: TownProfileFormProps) {
         </div>
       </div>
 
-      {/* 回城检查项:触发条件 —— 满足才去访问配了配方的商人 NPC;都不触发就直接去出城口 */}
+      {/* 回城检查项:耐久/药水是"要不要去访问商人 NPC"的触发条件;创建队伍与商人不相干,每次回城都查 */}
       <div>
         <label className="text-sm text-text-secondary mb-1.5 block">
-          回城检查项 <span className="text-text-muted text-[11px]">(触发条件:满足才去访问配了配方的商人 NPC;都不触发就直接去出城口)</span>
+          回城检查项{' '}
+          <span className="text-text-muted text-[11px]">
+            (耐久/药水满足才去访问配了配方的商人 NPC;创建队伍与商人不相干,勾了每次回城都查)
+          </span>
         </label>
         <div className="space-y-1.5 bg-bg-input/40 border border-border-base rounded p-2.5">
           <label className="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -324,6 +327,19 @@ export function TownProfileForm(props: TownProfileFormProps) {
             />
             <span>检查装备耐久</span>
             <span className="text-text-muted text-[10px]">开角色面板看装备耐久,见底才去访问商人 NPC 修理</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-accent-cyan"
+              disabled={readOnly}
+              checked={value.createTeam === true}
+              onChange={(e) => patch({ createTeam: e.target.checked })}
+            />
+            <span>创建队伍</span>
+            <span className="text-text-muted text-[10px]">
+              回城后按 Alt+Q 看交友面板:显示「组队」= 未组队,自动点它建队;显示「解散」= 已在队伍,直接关掉面板
+            </span>
           </label>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary shrink-0">红药购买阈值</span>

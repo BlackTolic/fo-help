@@ -10,6 +10,7 @@
       "y": 126
     },
     "checkDurability": false,
+    "createTeam": true,
     "npcs": [],
     "routes": [
       {
@@ -35,5 +36,5 @@
     "transitFrom": []
   },
   "createdAt": 1791816597101,
-  "updatedAt": 1791819354191
+  "updatedAt": 1791907726315
 }

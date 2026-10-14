@@ -10,18 +10,6 @@
     "castMode": "smart",
     "waypoints": [
       {
-        "id": "wp-1791820000001-001",
-        "x": 161,
-        "y": 76,
-        "type": "farm-spot"
-      },
-      {
-        "id": "wp-1791820000001-002",
-        "x": 173,
-        "y": 75,
-        "type": "farm-spot"
-      },
-      {
         "id": "wp-1791820000001-003",
         "x": 180,
         "y": 83,
@@ -460,8 +448,36 @@
       "enabled": true,
       "skillId": "skill-1791731822606-qagp"
     },
+    "endReturn": {
+      "enabled": true,
+      "loops": 1,
+      "method": "relogin",
+      "scroll": {
+        "maxAttempts": 5,
+        "pressIntervalMs": 4000
+      },
+      "relogin": {
+        "clearMobs": true,
+        "clearTimeoutMs": 120000,
+        "maxAttempts": 3,
+        "mobFilter": {
+          "nameColors": [
+            "a8a8a0-111111"
+          ],
+          "nameKeywords": [
+            "天泉|精英|头目"
+          ],
+          "ocrRange": {
+            "x": 465,
+            "y": 207,
+            "w": 353,
+            "h": 327
+          }
+        }
+      }
+    },
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791814831939,
-  "updatedAt": 1791820820632
+  "updatedAt": 1791954295806
 }
