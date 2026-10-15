@@ -158,7 +158,7 @@ export const dmApi = {
   getFullScreenData: (filePath: string): number => {
     const width = getRaw().GetScreenWidth();
     const height = getRaw().GetScreenHeight();
-    console.log(`全屏截图,宽度 ${width},高度 ${height}`);
+    // console.log(`全屏截图,宽度 ${width},高度 ${height}`);
     return getRaw().capturePng(0, 0, width, height, filePath);
   },
   /** 区域截图存 PNG 文件(返回结果码,1 成功) — 比 Capture(BMP)更适合喂给图鉴等外部识别接口 */

@@ -90,7 +90,9 @@ import type { ResolvedResupply } from '../resupply/resupply-runner';
 import { talkToNpc } from '../resupply/talk-npc';
 import { departTownTo, returnViaScroll, transitCityToTown } from '../resupply/town-departure';
 import { dismountPet, enablePreFarmPetSkill, mountPet } from '../pet-ride';
-import type { PetRideSkill, ResolvedPetRide } from '../pet-ride';
+import type { PetRideDeps, PetRideSkill, ResolvedPetRide } from '../pet-ride';
+import { runFarmAux, pickFarmAux } from '../farm-aux';
+import { parkMouseOutsideRoi } from '../park-mouse';
 import { resolveReloginConfig, returnViaRelogin } from '../relogin';
 import type { ResolvedRelogin } from '../relogin';
 import type { FarmTaskConfig, FarmEndReturnMethod, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
@@ -200,7 +202,7 @@ interface ResolvedConfig {
   returnScroll: ResolvedReturnScroll;
   /** 回城补给(死亡触发,runOnStart 时任务启动也跑一次;默认关闭,配置见 shared/types.ts 的 FarmResupplyConfig) */
   resupply: ResolvedResupply;
-  /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 blockAllPlayersIfMapChanged);缺省 false */
+  /** 进入新地图时屏蔽所有人(换图就按 F11×4,见 handleMapChange);缺省 false */
   blockAllPlayersOnNewMap: boolean;
   /** 小地图缩放:任务启动时按一次 Alt+- 缩小右上角小地图(缺省 true) */
   zoomOutMinimap: boolean;
@@ -660,7 +662,7 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<De
         // 地图跨越链路:返程先到链首图,再逐跳穿越回挂机图(没配 = 空数组,行为不变)
         mapProfiles: conf.mapProfiles,
         // 补给途中每到达一张新图(死亡重生回城镇 / 返程切回挂机图)都走同一次换图判断
-        onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
+        onMapMaybeChanged: () => handleMapChange(run),
       },
       { label: '回城补给' },
     );
@@ -682,21 +684,30 @@ async function checkDeath(run: FarmRun, loop: number, where: string): Promise<De
 }
 
 /**
- * 进入新地图时屏蔽所有人(配置开关 blockAllPlayersOnNewMap,执行 F11×4):
- * 读一次当前地图名,和上次记录不同(或还没记录过)就按一次 shared/game-hotkeys 的 blockAllPlayers。
+ * 换图处理(同一个入口管两件事,共用同一份 run.lastMapName 去重):
+ *   1. 辅助配置的「进入挂机地图时」触发点:换到挂机图就跑一次;
+ *   2. 进入新地图时屏蔽所有人(配置开关 blockAllPlayersOnNewMap,执行 F11×4)。
  *
- * 不区分场景:任务启动前、主循环每圈、回城补给到达新图都只是"到点读一次地图",
- * 靠同一份 run.lastMapName 去重 —— 谁先发现换图谁按,不会重复按。
+ * 不区分场景:任务启动前、主循环每圈、回城补给/跨境到达新图都只是"到点读一次地图",
+ * 谁先发现换图谁处理,不会重复执行。
  * 读不到地图名(OCR 偶发读空)时跳过,也不更新记录 —— 免得把一次读空当成"换图"。
+ *
+ * 只有"确实需要"时才读地图名(否则这里会白白多一次 OCR):开关关着、又没有任何辅助配置
+ * 用「进入挂机地图时」时直接返回(与旧行为一致)。
  */
-async function blockAllPlayersIfMapChanged(run: FarmRun): Promise<void> {
+async function handleMapChange(run: FarmRun): Promise<void> {
   const { ctx, conf, label } = run;
-  if (!conf.blockAllPlayersOnNewMap) return;
+  const auxWantsEnterFarmMap = pickFarmAux(ctx, 'enterFarmMap').length > 0;
+  if (!conf.blockAllPlayersOnNewMap && !auxWantsEnterFarmMap) return;
 
   const map = String(await run.readMapName()).trim();
   if (!map || run.lastMapName === map) return;
   run.lastMapName = map;
 
+  // 辅助配置:换到的正是挂机图(挂机图名由 renderer 下发,见 auxConfigs.farmMapName)
+  if (auxWantsEnterFarmMap) await runAuxOnFarmMapEntry(run, map, label);
+
+  if (!conf.blockAllPlayersOnNewMap) return;
   try {
     await pressGameHotkey(dmApi, 'blockAllPlayers');
   } catch (e: any) {
@@ -780,7 +791,7 @@ async function runStartupResupply(run: FarmRun, opts?: { force?: boolean }): Pro
       // 地图跨越链路:开工返程同样先到链首图再逐跳穿越回挂机图
       mapProfiles: conf.mapProfiles,
       // 返程切回挂机图同样走一次换图判断(开工时人若在城镇,回来也是一次真换图)
-      onMapMaybeChanged: () => blockAllPlayersIfMapChanged(run),
+      onMapMaybeChanged: () => handleMapChange(run),
     },
     { label: stage, mode: 'start' },
   );
@@ -959,7 +970,7 @@ async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult 
         return { exit: { ok: false, detail }, crossed: false };
       }
       ctx.sendLog('info', `[${label}] ${depart.detail}`);
-      await blockAllPlayersIfMapChanged(run);
+      await handleMapChange(run);
       // 城镇直达挂机图(没配中间图):出发即到位;否则继续沿下面的过图链走
       if (firstTarget === farmMapName) return { exit: null, crossed: true };
     } else if (profiles.length > 0) {
@@ -993,7 +1004,7 @@ async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult 
     isStopped: stopped,
     onProgress: (msg) => ctx.sendLog('info', `[${label}] ${msg}`),
     onArriveMap: async () => {
-      await blockAllPlayersIfMapChanged(run);
+      await handleMapChange(run);
     },
     runNpc: (npc) => talkToNpc({ ctx, client: dmApi, size: run.size, label, npcName: npc.name, recipeName: npc.recipeName }),
   });
@@ -1003,7 +1014,7 @@ async function crossMapsOnStartup(run: FarmRun): Promise<{ exit: FarmLoopResult 
     return { exit: { ok: false, detail }, crossed: false };
   }
   ctx.sendLog('info', `[${label}] 地图跨越完成:${cross.detail}`);
-  await blockAllPlayersIfMapChanged(run);
+  await handleMapChange(run);
   return { exit: null, crossed: true };
 }
 
@@ -1194,7 +1205,7 @@ async function recoverToDepartureTown(run: FarmRun, cur: string): Promise<{ exit
       isStopped: stopped,
     });
     if (!back.ok || !back.map) return { exit: { ok: false, detail: `回城卷轴:${back.detail}` }, map: null };
-    await blockAllPlayersIfMapChanged(run);
+    await handleMapChange(run);
     landed = back.map;
     // 正好落在出发城镇:不用再中转
     if (landed === town.mapName) return { exit: null, map: landed };
@@ -1231,7 +1242,7 @@ async function recoverToDepartureTown(run: FarmRun, cur: string): Promise<{ exit
     isStopped: stopped,
   });
   if (!hop.ok) return { exit: { ok: false, detail: `主城中转:${hop.detail}` }, map: null };
-  await blockAllPlayersIfMapChanged(run);
+  await handleMapChange(run);
   return { exit: null, map: town.mapName };
 }
 
@@ -1577,6 +1588,9 @@ function abandonItem(rt: PickupRuntime, pos: Point): void {
 
 /** 等 waitMs 后看物品还在不在:不在了打一条日志并返回 true(捡起来了) */
 async function pickupGone(run: FarmRun, item: DetectedItem, waitMs: number): Promise<boolean> {
+  // 先挪开鼠标再等:这次点击刚落在物品名上,鼠标不移开的话悬停效果一直挂着 ——
+  // 挪在前头,waitMs 这段时间正好够它收干净,等完立刻就能读(见 park-mouse.ts)
+  await parkMouseFor(run, run.conf.pickup.roi);
   await sleep(waitMs);
   if (run.pickup.detector.isStillThereNear(item)) return false;
   run.ctx.sendLog('info', `[${run.label}] 物品${item.name ? `「${item.name}」` : ''}已消失,拾取完成`);
@@ -1649,6 +1663,9 @@ async function runPickup(run: FarmRun): Promise<PickupOutcome> {
   let pickedAny = false;
   for (let round = 0; round < PICKUP.maxPerBatch; round++) {
     if (!run.ctx.moveAttack.running) break;
+
+    // 扫描前把鼠标挪出拾取范围:上一件刚点完,鼠标正停在里面,不挪开下一件的名字会被指针挡住
+    await parkMouseFor(run, conf.pickup.roi);
 
     // 放弃过的那件直接跳过(交给 detector 判断,它能接着看后面的规则)
     const item = pickup.detector.detect((pos) => isItemAbandoned(pickup, pos));
@@ -1803,6 +1820,9 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
     // 等待暂停
     await waitWhilePaused(ctx, label);
     if (!ctrl.running) return;
+
+    // 识别前把鼠标挪出怪名识别范围:上一轮点过怪名/放过目标技能,鼠标正停在里面,不挪开局部的名字就会被指针挡住
+    await parkMouseFor(run, conf.ocrRange);
 
     // 0) 拾取优先:不管有没有正在打的怪,先把范围内的物品捡掉再继续。
     //    runPickup 会把能找到的都捡完才返回;捡到要刷新「有怪」计时
@@ -2071,6 +2091,9 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       return { ok: false, detail: '小退前清怪时角色死亡(复活后重试,或先确认能打过这片怪)' };
     }
 
+    // 识别前把鼠标挪出识别范围:上一轮点过怪名/放过目标技能,鼠标正停在里面(见 park-mouse.ts)
+    await parkMouseFor(run, roi);
+
     // 读 HUD:它是"锁定的怪还在不在"的唯一判据(见 isLockAlive);没锁定目标就不用读
     const hudName = locked ? monster.readLockedName() : '';
     if (!locked || !isLockAlive(locked, hudName)) {
@@ -2319,6 +2342,29 @@ async function checkEndReturn(run: FarmRun, completedLoops: number): Promise<str
 
 // ===== 主循环 =====
 
+/** 辅助配置(宠物带练等)的运行依赖:大漠 client + 输入 + 窗口分辨率 */
+const farmAuxDeps = (run: FarmRun): PetRideDeps => ({ client: dmApi, input: run.input, size: run.size });
+
+/**
+ * 识别前把鼠标挪出这块区域(公共实现见 ../park-mouse.ts):
+ * 鼠标箭头本身就画在画面上,停在识别区域里会把字挡住,OCR/找字会读错或读不到。
+ * 挂机流程里四处识别都要用:定点识别的怪名扫描 / 小退前清怪 / 物品拾取 —— 这些步骤刚点过字(怪名、物品名),
+ * 鼠标就停在识别区域里;不挪开下一轮扫描读到的就是被指针挡了一半的名字。
+ */
+async function parkMouseFor(run: FarmRun, roi: Rect): Promise<void> {
+  await parkMouseOutsideRoi(run.input, run.size, roi);
+}
+
+/**
+ * 辅助配置的「进入挂机地图时」触发点:换图后当前图正是挂机图时才跑(图名由调用方 handleMapChange 读好)。
+ * 挂机图名来自 renderer 下发的 auxConfigs.farmMapName(按地图配置解析出的游戏内中文图名)。
+ */
+async function runAuxOnFarmMapEntry(run: FarmRun, map: string, label: string): Promise<void> {
+  const farmMapName = String(run.ctx.init.auxConfigs?.farmMapName ?? '').trim();
+  if (!farmMapName || map !== farmMapName) return;
+  await runFarmAux(run.ctx, farmAuxDeps(run), 'enterFarmMap', label);
+}
+
 /**
  * 「路径点卡住不跳过」用的兜底:在该点周围 ±STUCK_JITTER_PX 屏幕像素内随机点一下地面,
  * 让角色尽量落到点附近(点地移动的游戏里,走不到某个点多半是这一步的落点没走成)。
@@ -2388,11 +2434,15 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
      * 宠物技能是状态技能:开一次就一直存在,所以每圈只在第一个到达的挂机点放一次(见下面的 farm-spot 分支)。
      */
     let preFarmSkillDone = false;
+    /** 本圈是否已经跑过「进入第一个挂机点时」这个辅助配置触发点(每圈只跑一次;见下面的 farm-spot 分支) */
+    let firstFarmSpotAuxDone = false;
+    /** 本圈是否提前结束(死亡补给 / 背包已负载):提前结束的圈不算"走完一轮",不触发「每轮结束」 */
+    let endedEarly = false;
     const loopDesc = `第 ${loop} 圈`;
     ctx.setStatus('moving', `${label} ${loopDesc}`);
     ctx.sendLog('info', `[${label}] ${loopDesc}开始`);
     // 每圈开始读一次地图名:变了就重新屏蔽所有人(路径点不跨图,这里够用)
-    await blockAllPlayersIfMapChanged(run);
+    await handleMapChange(run);
     // 死亡检查(可能内含"回城补给";补给成功 = 'resupplied')
     const deadAtStart = await checkDeath(run, loop, '开始时');
     if (deadAtStart) {
@@ -2412,6 +2462,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         // 角色已被带回入图点:重读当前位置当"上一位置",免得定点打怪方向沿用死亡前的坐标
         prev = await run.movement.readPosition();
         stuckCount = 0;
+        endedEarly = true;
         break;
       }
 
@@ -2433,6 +2484,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         if (bagHit) {
           ctx.sendLog('info', `[${label}] 检测到${bagHit},结束本圈准备回城`);
           bagFullAtWaypoint = bagHit;
+          endedEarly = true;
           break;
         }
 
@@ -2499,6 +2551,13 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         // (两者互不影响:没开骑乘时没有下骑那一步,宠物技能照样会开;见 shared/types.ts 的 FarmPetRideConfig)
         if (wp.type === 'farm-spot') {
           const deps = { client: dmApi, input: run.input, size: run.size };
+          // 辅助配置的「进入第一个挂机点时」触发点:放最前面 —— 宠物带练可能要换一只宠物,
+          // 换完再下骑/开宠物技能,那两步才是对着新宠物做的(每圈只跑一次)
+          if (!firstFarmSpotAuxDone) {
+            firstFarmSpotAuxDone = true;
+            await runFarmAux(ctx, deps, 'firstFarmSpot', label);
+            if (!ctrl.running) break;
+          }
           const dismounted = ctx.petMounted;
           // 状态技能开一次就一直有,所以每圈只在第一个到达的挂机点放一次(下骑那一步不受影响,该下还是下)
           const runPreFarmNow = !preFarmSkillDone && conf.petRide.preFarm.enabled && !!conf.petRide.preFarm.skill;
@@ -2530,6 +2589,12 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
       } finally {
         ctx.farmSpotActive = false;
       }
+    }
+
+    // 能执行到这里 = 本圈所有路径点都过了一遍(死亡补给/背包已负载会提前 break,那些圈不算"走完一轮"):
+    // 辅助配置的「每一轮自动打怪结束时」触发点
+    if (!endedEarly && ctrl.running) {
+      await runFarmAux(ctx, farmAuxDeps(run), 'roundEnd', label);
     }
 
     // 停止命令在本圈末尾到达:直接结束
@@ -2643,7 +2708,7 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
     };
 
     // 任务启动、角色开始移动前:先读一次地图名,当作换图判断的基线(同时按一次屏蔽)
-    await blockAllPlayersIfMapChanged(run);
+    await handleMapChange(run);
     // 暂停1s,确保地图加载完成
     await new Promise((resolve) => setTimeout(resolve, 500));
     // 启动时的一次性环境处理(小地图缩放 / 关闭聊天背景);移动攻击测试路径由 opts 关掉
@@ -2705,6 +2770,9 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       const prepared = await prepareFarmEntry(run, entryStart, { allowResupply, forceResupply: true });
       if (prepared.exit) return prepared.exit;
       entryStart = prepared.start;
+      // 辅助配置:回城(小退)后重新进入挂机图 → 「回城/小退后重新进入时」
+      // (「进入挂机地图时」由 prepareFarmEntry 里的 handleMapChange 换图判断负责,免得这里重复读图名)
+      await runFarmAux(ctx, farmAuxDeps(run), 'afterReturn', label);
       round++;
       ctx.sendLog('info', `[${label}] 已回到挂机图,开始第 ${round} 轮打怪`);
     }

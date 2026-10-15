@@ -21,7 +21,8 @@ export interface CharacterInfo {
 
 /**
  * 任务类型
- * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)是配置型"任务":与任务同样存储/编辑,但不可作为任务运行
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)/ pet-training(宠物带练)是配置型"任务":
+ * 与任务同样存储/编辑,但不可作为任务运行 —— 它们是挂机流程读用的档案 / 辅助执行配置
  */
 export type TaskType =
   | 'farm'
@@ -32,7 +33,8 @@ export type TaskType =
   | 'default-skill'
   | 'town-profile'
   | 'dialog-recipe'
-  | 'map-profile';
+  | 'map-profile'
+  | 'pet-training';
 
 /** 脚本状态(主面板卡片显示) */
 export type ScriptStatus =
@@ -349,6 +351,12 @@ export interface FarmTaskConfig {
    */
   mapCrossings?: string[];
   /**
+   * 挂机辅助配置:勾选哪些「辅助配置」(引用 pet-training 这类辅助配置的任务名,顺序 = 执行顺序)。
+   * 每份辅助配置自己挑触发点(见 FarmAuxTrigger),worker 在对应时机按这里的顺序依次执行;
+   * 空/不配 = 没有辅助配置(行为与旧配置一致)。
+   */
+  auxConfigNames?: string[];
+  /**
    * 进入新地图时屏蔽所有人:检测到换图就按一次 F11×4(见 shared/game-hotkeys.ts 的 blockAllPlayers)。
    * 游戏换图会把"屏蔽玩家"重置,所以每次进新图要重新屏蔽;不配 = 不处理
    */
@@ -363,6 +371,45 @@ export interface FarmTaskConfig {
    * 缺省/旧配置 = 开启(只有显式 false 才关闭)
    */
   closeChatBackground?: boolean;
+  /** 自定义备注 */
+  note?: string;
+}
+
+// ===== 挂机辅助配置(farm 用的"执行配置")=====
+// 与城镇档案 / 对话配方 / 过图路线一样按"任务名"存储、可跨任务复用,但它们不只是被读的数据:
+// 挂机跑起来后会在配置的触发点上真正执行(farm.auxConfigNames 多选引用,顺序 = 执行顺序)。
+
+/** 辅助配置的执行时机(对应挂机主循环里真实存在的几个节点;可多选) */
+export type FarmAuxTrigger =
+  /** 回城(含小退)后重新进入挂机图时 —— 已走完入图点、站在挂机图里(任务启动那次不算,那次走 enterFarmMap) */
+  | 'afterReturn'
+  /** 每一轮自动打怪走到第一个挂机点时(本圈第一个到位的挂机点,每圈只触发一次) */
+  | 'firstFarmSpot'
+  /** 进入挂机地图时(检测到换图、且当前图就是挂机图;每次进图触发一次) */
+  | 'enterFarmMap'
+  /** 每一轮自动打怪结束时(本圈路径点全部走完) */
+  | 'roundEnd';
+
+/**
+ * 宠物带练:到触发点时打开宠物栏,看当前出战宠物的等级;达标(等级够 或 学会了目标技能)就换下一只继续,
+ * 直到带练够 petCount 只。
+ *
+ * 出战规则(实测):同一时刻最多只有 1 只宠物是「醒」的 —— 双击睡眠的那只会让它出战(原来出战的那只
+ * 自动变睡眠),双击出战的那只会让它睡眠。所以「第 k 只是醒的」= 前 k-1 只都已经练好了(出战序号本身
+ * 就是带练进度,不用另外存);全是睡眠就先唤醒第 1 只。
+ * 宠物栏用游戏快捷键 Alt+P 开关(见 shared/game-hotkeys.ts 的 openPetPanel);
+ * 宠物面板里的识别区域/颜色/找字见 core/constant-ocr/pet.ts。
+ */
+export interface PetTrainingConfig {
+  type: 'pet-training';
+  /** 在哪些时机执行(可多选;空 = 不执行) */
+  triggers: FarmAuxTrigger[];
+  /** 要带练的宠物数量:依次带练宠物栏里的前 N 只,全部达标后收工 */
+  petCount: number;
+  /** 目标等级:当前宠物达到该等级(含)就换下一只;不配 / <= 0 = 不用等级判据 */
+  targetLevel?: number;
+  /** 目标技能:宠物学会了这个技能(在宠物面板里能识别到这个名字)就换下一只;不配 = 不用技能判据 */
+  targetSkill?: string;
   /** 自定义备注 */
   note?: string;
 }
@@ -621,7 +668,7 @@ export interface PlaceholderTaskConfig {
 
 /**
  * 任务配置联合类型
- * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)只参与存储/编辑,不可作为任务运行
+ * town-profile(城镇档案)/ dialog-recipe(对话配方)/ map-profile(过图路线)/ pet-training(宠物带练)只参与存储/编辑,不可作为任务运行
  */
 export type TaskConfig =
   | FarmTaskConfig
@@ -629,7 +676,8 @@ export type TaskConfig =
   | DefaultSkillTaskConfig
   | TownProfileConfig
   | DialogRecipeConfig
-  | MapProfileConfig;
+  | MapProfileConfig
+  | PetTrainingConfig;
 
 /**
  * start-task 命令的附属配置(farm 回城补给用):
@@ -648,6 +696,12 @@ export type ResupplyRecipe = DialogRecipeConfig & { name: string };
  */
 export type ResupplyMapProfile = MapProfileConfig & { name: string };
 
+/**
+ * 下发给 worker 的辅助配置:配置本体 + 它的任务名。
+ * farm 的 auxConfigNames 多选引用它(顺序 = 执行顺序);worker 按每份配置自己的 triggers 挑时机执行。
+ */
+export type ResupplyAuxConfig = PetTrainingConfig & { name: string };
+
 export interface StartTaskAuxConfigs {
   /** 城镇档案(farm.resupply.townProfileName 指向的那份) */
   townProfile?: TownProfileConfig;
@@ -657,6 +711,8 @@ export interface StartTaskAuxConfigs {
   farmMapName?: string;
   /** farm.mapCrossings 引用到的全部过图路线档案(按穿越顺序),renderer 启动时解析传入 */
   mapProfiles?: ResupplyMapProfile[];
+  /** farm.auxConfigNames 勾选到的全部辅助配置(按勾选顺序),renderer 启动时解析传入 */
+  auxList?: ResupplyAuxConfig[];
 }
 
 /** worker:read-position 的响应:成功 = { map, x, y }(map=null 表示地图名未识别);失败/超时 = error 有值 */

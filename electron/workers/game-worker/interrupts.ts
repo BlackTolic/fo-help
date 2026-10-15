@@ -162,8 +162,6 @@ function buildWatchdogPlan(ctx: WorkerContext, sizeKey: WindowSizeKey): Watchdog
       cooldownMs: 3000,
     });
   }
-  console.log('回血物品Items', healItems);
-  console.log('上一次吃药lastCast', ctx.lastCast);
 
   if (healItems.length > 0) {
     rules.push({

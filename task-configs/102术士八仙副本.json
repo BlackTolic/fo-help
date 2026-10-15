@@ -451,6 +451,9 @@
     "mapCrossings": [
       "龙城-华山"
     ],
+    "auxConfigNames": [
+      "宠物带练"
+    ],
     "petRide": {
       "enabled": false,
       "mountSkillId": "skill-1791700490261-c2nq",
@@ -493,5 +496,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791981816445,
-  "updatedAt": 1792068564431
+  "updatedAt": 1792074039786
 }

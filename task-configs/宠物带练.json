@@ -1,0 +1,15 @@
+{
+  "id": "task-宠物带练-1792074019446",
+  "name": "宠物带练",
+  "taskType": "pet-training",
+  "config": {
+    "type": "pet-training",
+    "triggers": [
+      "firstFarmSpot"
+    ],
+    "petCount": 6,
+    "targetLevel": 29
+  },
+  "createdAt": 1792074019446,
+  "updatedAt": 1792080411149
+}

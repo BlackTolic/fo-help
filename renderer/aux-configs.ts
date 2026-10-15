@@ -12,6 +12,8 @@ import type {
   DialogRecipeConfig,
   FarmTaskConfig,
   MapProfileConfig,
+  PetTrainingConfig,
+  ResupplyAuxConfig,
   ResupplyMapProfile,
   ResupplyRecipe,
   StartTaskAuxConfigs,
@@ -21,14 +23,15 @@ import type {
   TownProfileNpc,
 } from '../shared/types';
 import { normalizeNpcName } from '../shared/npc';
+import { FARM_AUX_TRIGGERS } from '../shared/farm-aux';
 import { resolveFarmMapName } from './farm-maps';
 
 /** 解析结果:ok=false 时 error 是要展示给用户的原因(调用方不要启动) */
 export type AuxResolveResult = { ok: true; auxConfigs: StartTaskAuxConfigs | null } | { ok: false; error: string };
 
-/** 配置型"任务"(城镇档案 / 对话配方 / 过图路线):可存储/编辑,但不可作为任务运行 */
+/** 配置型"任务"(城镇档案 / 对话配方 / 过图路线 / 宠物带练):可存储/编辑,但不可作为任务运行 */
 export function isConfigOnlyTaskType(type: TaskConfig['type'] | undefined | null): boolean {
-  return type === 'town-profile' || type === 'dialog-recipe' || type === 'map-profile';
+  return type === 'town-profile' || type === 'dialog-recipe' || type === 'map-profile' || type === 'pet-training';
 }
 
 /**
@@ -36,6 +39,7 @@ export function isConfigOnlyTaskType(type: TaskConfig['type'] | undefined | null
  *   - town-profile:看 farm.resupply.townProfileName 是否等于它的任务名
  *   - dialog-recipe:先看哪些城镇档案的 NPC / 过图路线途经点的 NPC 用 recipeName 引用了它,再看哪些 farm 用了那些档案
  *   - map-profile:看哪些 farm 的 mapCrossings 里引用了它
+ *   - pet-training:看哪些 farm 的 auxConfigNames 里勾选了它
  */
 export function referencedByFarmTasks(stored: StoredTaskConfig, history: StoredTaskConfig[]): string[] {
   const farmTasks = history.filter((h) => h.config.type === 'farm');
@@ -69,6 +73,9 @@ export function referencedByFarmTasks(stored: StoredTaskConfig, history: StoredT
   if (stored.config.type === 'map-profile') {
     return farmTasks.filter((h) => ((h.config as FarmTaskConfig).mapCrossings ?? []).includes(stored.name)).map((h) => h.name);
   }
+  if (stored.config.type === 'pet-training') {
+    return farmTasks.filter((h) => ((h.config as FarmTaskConfig).auxConfigNames ?? []).includes(stored.name)).map((h) => h.name);
+  }
   return [];
 }
 
@@ -94,6 +101,22 @@ function normalizeMapProfile(name: string, raw: MapProfileConfig): ResupplyMapPr
         npc: npcName ? { name: npcName, recipeName: String(w.npc?.recipeName ?? '').trim() } : undefined,
       };
     }),
+  };
+}
+
+/**
+ * 把一份辅助配置(宠物带练)规整成可下发的形态:补齐缺省字段、只留认识的触发点、trim 字符串
+ * (下发形状 = ResupplyAuxConfig = 配置本体 + 它的任务名)
+ */
+function normalizePetTraining(name: string, raw: PetTrainingConfig): ResupplyAuxConfig {
+  return {
+    name,
+    type: 'pet-training',
+    triggers: (raw.triggers ?? []).filter((t) => FARM_AUX_TRIGGERS.some((o) => o.id === t)),
+    petCount: Math.max(0, Math.trunc(Number(raw.petCount) || 0)),
+    targetLevel: Number(raw.targetLevel) > 0 ? Math.trunc(Number(raw.targetLevel)) : undefined,
+    targetSkill: String(raw.targetSkill ?? '').trim() || undefined,
+    note: raw.note,
   };
 }
 
@@ -137,17 +160,19 @@ function validateCrossingNpcRecipes(profiles: ResupplyMapProfile[], recipes: Res
 
 /**
  * 解析 startTask 的附属配置:
- *   - 非 farm / 既没开回城补给也没配地图跨越 → auxConfigs = null(保持原有启动行为,不影响老流程)
+ *   - 非 farm / 既没开回城补给、也没配地图跨越、也没勾辅助配置 → auxConfigs = null(保持原有启动行为,不影响老流程)
  *   - 开了回城补给 → 必须能解析出城镇档案(引用配方也要存在),解析不出就返回 error 阻止启动
  *   - 配了地图跨越 → 必须能按顺序解析出全部过图路线,链表要连通、途经点的 NPC 配方要存在
+ *   - 勾了辅助配置 → 必须能按顺序解析出全部辅助配置(带触发点)
  */
 export function resolveAuxConfigs(config: TaskConfig | null | undefined, history: StoredTaskConfig[]): AuxResolveResult {
   const farm = config?.type === 'farm' ? config : null;
   const crossings = (farm?.mapCrossings ?? []).map((s) => String(s ?? '').trim()).filter(Boolean);
+  const auxNames = (farm?.auxConfigNames ?? []).map((s) => String(s ?? '').trim()).filter(Boolean);
   const resupplyOn = farm?.resupply?.enabled === true;
   // 条件回城:回城卷轴只会把人送进主城,回挂机图要靠城镇档案出城 —— 没档案直接拦在启动前
   const endReturnOn = farm?.endReturn?.enabled === true;
-  if (!farm || (!resupplyOn && crossings.length === 0)) {
+  if (!farm || (!resupplyOn && crossings.length === 0 && auxNames.length === 0)) {
     if (endReturnOn) {
       return {
         ok: false,
@@ -249,9 +274,23 @@ export function resolveAuxConfigs(config: TaskConfig | null | undefined, history
     }
   }
 
+  // 辅助配置:按 farm.auxConfigNames 顺序取本体(每份自带触发点;worker 按 triggers 挑时机执行)
+  const auxConfigs: ResupplyAuxConfig[] = [];
+  for (const name of auxNames) {
+    const stored = history.find((h) => h.taskType === 'pet-training' && h.name === name);
+    if (!stored || stored.config.type !== 'pet-training') {
+      return { ok: false, error: `引用的辅助配置「${name}」不存在(可能已被删除,请重新勾选)` };
+    }
+    const aux = normalizePetTraining(stored.name, stored.config);
+    if (aux.petCount <= 0) {
+      return { ok: false, error: `辅助配置「${name}」没填要带练的宠物数量(至少 1 只)` };
+    }
+    auxConfigs.push(aux);
+  }
+
   return {
     ok: true,
-    auxConfigs: { townProfile, recipes, farmMapName, mapProfiles },
+    auxConfigs: { townProfile, recipes, farmMapName, mapProfiles, auxList: auxConfigs.length > 0 ? auxConfigs : undefined },
   };
 }
 

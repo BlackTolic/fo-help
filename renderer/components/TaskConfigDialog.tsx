@@ -26,8 +26,10 @@ import type {
   TownProfileConfig,
   DialogRecipeConfig,
   MapProfileConfig,
+  PetTrainingConfig,
 } from '../../shared/types';
 import { ALL_KEY_COMBOS, isValidKeyCombo } from '../../shared/key-combo';
+import { FARM_AUX_TRIGGERS } from '../../shared/farm-aux';
 import { FARM_MAPS } from '../farm-maps';
 import { isConfigOnlyTaskType, referencedByFarmTasks } from '../aux-configs';
 import { NPC, normalizeNpcName } from '../../shared/npc';
@@ -40,6 +42,9 @@ import { TownProfileForm } from './TownProfileForm';
 import { DialogRecipeForm } from './DialogRecipeForm';
 import { MapProfileForm } from './MapProfileForm';
 import { MapCrossingsSection } from './MapCrossingsSection';
+import { FarmAuxSection } from './FarmAuxSection';
+import type { FarmAuxOption } from './FarmAuxSection';
+import { PetTrainingForm } from './PetTrainingForm';
 import {
   COLOR_WHITE,
   COLOR_RED,
@@ -82,10 +87,19 @@ const TASK_OPTIONS: { type: TaskType; name: string; icon: string; desc: string; 
     desc: '中间地图的入口/出口 + 途经点(供挂机打怪的「地图跨越」逐跳穿越)',
     ready: true,
   },
+  // 辅助配置(执行配置):被挂机打怪的「辅助配置」勾选后,在挂机的触发点上真正执行
+  {
+    type: 'pet-training',
+    name: '宠物带练',
+    icon: '🐾',
+    desc: '到触发点时开宠物栏、看当前宠物等级,达标就换下一只(供挂机打怪的「辅助配置」勾选)',
+    ready: true,
+  },
 ];
 
-/** 配置型"任务"提示(城镇档案/对话配方/过图路线:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
-const CONFIG_ONLY_HINT = '这是一份"配置",保存在「选择任务」的对应卡片里,供挂机打怪的「城市事件 / 地图跨越」引用,不会启动 worker';
+/** 配置型"任务"提示(城镇档案/对话配方/过图路线/宠物带练:保存在「选择任务」的对应卡片里,不进入历史任务,不会启动 worker) */
+const CONFIG_ONLY_HINT =
+  '这是一份"配置",保存在「选择任务」的对应卡片里 —— 供挂机打怪的「城市事件 / 地图跨越 / 辅助配置」引用,不会启动 worker';
 
 /** footer 主操作按钮(实心 cyan,与历史任务列表里的「启动」一致) */
 const PRIMARY_BTN_CLS =
@@ -171,6 +185,18 @@ const DEFAULT_MAP_PROFILE: MapProfileConfig = {
   entrance: { position: { x: 0, y: 0 }, toMap: '' },
   exit: { position: { x: 0, y: 0 }, toMap: '' },
   waypoints: [],
+};
+
+/**
+ * 新建宠物带练的默认值:触发点先选中「进入第一个挂机点时」(最常用),带 1 只、目标 30 级
+ * (等级/技能至少填一个才能保存,见 validateConfig)
+ */
+const DEFAULT_PET_TRAINING: PetTrainingConfig = {
+  type: 'pet-training',
+  triggers: ['firstFarmSpot'],
+  petCount: 1,
+  targetLevel: 30,
+  targetSkill: '',
 };
 
 /**
@@ -323,6 +349,20 @@ export function TaskConfigDialog({
   /** 地图跨越可选的过图路线名(历史任务里所有 map-profile,按 name 存/取) */
   const mapProfileNames = taskHistory.filter((h) => h.config.type === 'map-profile').map((h) => h.name);
   const savedMapProfiles = taskHistory.filter((h) => h.config.type === 'map-profile');
+  /** 挂机打怪可勾选的辅助配置(历史任务里所有辅助配置型任务;显示名 + 它自己的触发点摘要) */
+  const savedFarmAux = taskHistory.filter((h) => h.config.type === 'pet-training');
+  const farmAuxOptions = savedFarmAux.map((h) => {
+    const c = h.config as PetTrainingConfig;
+    const triggers = (c.triggers ?? []).map((t) => FARM_AUX_TRIGGERS.find((o) => o.id === t)?.label ?? t);
+    return {
+      name: h.name,
+      desc: `宠物带练(带 ${c.petCount ?? 0} 只${c.targetLevel ? `;目标 ${c.targetLevel} 级` : ''})${
+        triggers.length > 0 ? ` · ${triggers.join(' / ')}` : ' · ⚠ 没选触发点'
+      }`,
+    };
+  });
+  /** 已保存的宠物带练(辅助配置在自己的卡片里管理,不进历史任务) */
+  const savedPetTrainings = savedFarmAux;
   /** 历史任务里可运行的任务条数(配置型任务不进历史任务) */
   const runnableHistoryCount = taskHistory.filter((h) => !isConfigOnlyTaskType(h.config.type)).length;
 
@@ -352,6 +392,8 @@ export function TaskConfigDialog({
   const [resupply, setResupply] = useState<FarmResupplyConfig>({ ...DEFAULT_RESUPPLY });
   // 地图跨越(farm 专属):出发图 → 挂机图之间依次穿越的中间地图名(引用 map-profile 任务)
   const [mapCrossings, setMapCrossings] = useState<string[]>([]);
+  // 辅助配置(farm 专属):勾选要启用的辅助配置(引用 pet-training 这类任务名,顺序 = 执行顺序)
+  const [auxConfigNames, setAuxConfigNames] = useState<string[]>([]);
   // 宠物技能:回到城里上骑、到挂机点下骑;到达挂机点打怪前再按需开启宠物技能(都从「宠物技能」里选)
   const [petRide, setPetRide] = useState<FarmPetRideConfig>({ ...DEFAULT_PET_RIDE });
   // 回城卷轴:起点在野外/任意地图时先按它回主城(见 worker 的 returnViaScroll)
@@ -388,6 +430,8 @@ export function TaskConfigDialog({
   const [dialogRecipe, setDialogRecipe] = useState<DialogRecipeConfig>(DEFAULT_DIALOG_RECIPE);
   // 过图路线(配置型"任务":只存储/编辑,保存后不启动 worker)
   const [mapProfile, setMapProfile] = useState<MapProfileConfig>(DEFAULT_MAP_PROFILE);
+  // 辅助配置(配置型"任务":只存储/编辑,由挂机打怪勾选后在挂机流程里执行)
+  const [petTraining, setPetTraining] = useState<PetTrainingConfig>(DEFAULT_PET_TRAINING);
 
   // 缺省技能配置
   const [skillSteps, setSkillSteps] = useState<DefaultSkillStep[]>([]);
@@ -512,11 +556,49 @@ export function TaskConfigDialog({
     if (res.ok) newMapProfile();
     else alert(`删除失败: ${res.error || '未知错误'}`);
   };
+  /** 重置为「新建辅助配置(宠物带练)」 */
+  const newPetTraining = () => {
+    setPetTraining(DEFAULT_PET_TRAINING);
+    setEditingName(null);
+    setSaveError(null);
+  };
+  /** 把一条已保存的辅助配置载入表单(编辑态,保存时覆盖它) */
+  const loadPetTraining = (stored: StoredTaskConfig) => {
+    const pet = stored.config as PetTrainingConfig;
+    setPetTraining({
+      type: 'pet-training',
+      triggers: pet.triggers ?? [],
+      petCount: pet.petCount ?? 1,
+      targetLevel: pet.targetLevel ?? 0,
+      targetSkill: pet.targetSkill ?? '',
+      note: pet.note,
+    });
+    setEditingName(stored.name);
+    setSaveError(null);
+  };
+  /** 删除当前正在编辑的辅助配置(带 farm 引用提示) */
+  const deleteSelectedPetTraining = async () => {
+    const stored = savedPetTrainings.find((p) => p.name === editingName);
+    if (!stored || deleting) return;
+    const refs = referencedByFarmTasks(stored, taskHistory);
+    if (refs.length > 0) {
+      const ok = confirm(
+        `任务 ${refs.map((n) => `「${n}」`).join('、')} 的「辅助配置」勾选了「${stored.name}」,\n删除后这些任务会启动失败。\n\n确定删除?`,
+      );
+      if (!ok) return;
+    }
+    setDeleting(true);
+    const res = await deleteTaskByName(stored.name);
+    setDeleting(false);
+    if (res.ok) newPetTraining();
+    else alert(`删除失败: ${res.error || '未知错误'}`);
+  };
   /** 选择任务类型卡片:配置型任务先重置表单(卡片内新建),其余直接进 config 步骤 */
   const selectTaskType = (type: TaskType) => {
     if (type === 'town-profile') newTownProfile();
     else if (type === 'dialog-recipe') newDialogRecipe();
     else if (type === 'map-profile') newMapProfile();
+    else if (type === 'pet-training') newPetTraining();
     setTaskType(type);
     setSaveError(null);
     setStep('config');
@@ -581,6 +663,8 @@ export function TaskConfigDialog({
       setResupply(normalizeResupply(farm.resupply));
       // 旧配置没有 mapCrossings 字段:回显成"不跨图"
       setMapCrossings(farm.mapCrossings ?? []);
+      // 旧配置没有 auxConfigNames 字段:回显成"没勾任何辅助配置"
+      setAuxConfigNames(farm.auxConfigNames ?? []);
       // 旧配置没有 petRide 字段:回显成"不开启"
       setPetRide(normalizePetRide(farm.petRide));
       // 旧配置没有 returnScroll 字段:回显成"不开启"
@@ -626,6 +710,16 @@ export function TaskConfigDialog({
         entrance: map.entrance ?? { position: { x: 0, y: 0 }, toMap: '' },
         exit: map.exit ?? { position: { x: 0, y: 0 }, toMap: '' },
         waypoints: map.waypoints ?? [],
+      });
+    } else if (cfg.type === 'pet-training') {
+      const pet = cfg as PetTrainingConfig;
+      setPetTraining({
+        type: 'pet-training',
+        triggers: pet.triggers ?? [],
+        petCount: pet.petCount ?? 1,
+        targetLevel: pet.targetLevel ?? 0,
+        targetSkill: pet.targetSkill ?? '',
+        note: pet.note,
       });
     }
   };
@@ -764,6 +858,8 @@ export function TaskConfigDialog({
         resupply: normalizeResupply(resupply),
         // 地图跨越:只留非空的名字(空数组 = 不写,等价于不跨图)
         mapCrossings: mapCrossings.filter(Boolean).length > 0 ? mapCrossings.filter(Boolean) : undefined,
+        // 辅助配置:只留非空的名字(空数组 = 不写,等价于没勾任何辅助配置)
+        auxConfigNames: auxConfigNames.filter(Boolean).length > 0 ? auxConfigNames.filter(Boolean) : undefined,
         // 宠物技能:整份保存,上骑/下骑/打怪前技能只保留仍然存在且仍是「宠物技能」的 id,避免失效引用
         petRide: {
           enabled: petRide.enabled === true,
@@ -885,6 +981,17 @@ export function TaskConfigDialog({
         })),
       };
     }
+    if (taskType === 'pet-training') {
+      // 只留认识的触发点 + 至少 1 只;目标等级/技能空 = 不写(worker 按"不用这个判据"处理)
+      return {
+        type: 'pet-training',
+        triggers: (petTraining.triggers ?? []).filter((t) => FARM_AUX_TRIGGERS.some((o) => o.id === t)),
+        petCount: Math.max(1, petTraining.petCount | 0),
+        targetLevel: petTraining.targetLevel && petTraining.targetLevel > 0 ? Math.round(petTraining.targetLevel) : undefined,
+        targetSkill: (petTraining.targetSkill ?? '').trim() || undefined,
+        note: petTraining.note || undefined,
+      };
+    }
     return { type: taskType } as any;
   };
 
@@ -957,6 +1064,19 @@ export function TaskConfigDialog({
         if (!(wp.npc.name ?? '').trim()) return `途经点 (${wp.x},${wp.y}) 的 NPC 没选名字(或点「移除 NPC」当作普通途经点)`;
         if (!(wp.npc.recipeName ?? '').trim()) return `途经点 (${wp.x},${wp.y}) 配了 NPC「${wp.npc.name}」,请给它选一份对话配方`;
       }
+    }
+    if (taskType === 'pet-training') {
+      const cfg = buildConfig();
+      if (cfg.type === 'pet-training') {
+        if (cfg.triggers.length === 0) return '宠物带练至少要选一个触发点(否则不会执行)';
+        if (cfg.petCount <= 0) return '宠物带练要填「要带练的宠物数量」(至少 1 只)';
+        if (!cfg.targetLevel && !cfg.targetSkill) return '宠物带练要填「目标等级」或「目标技能」其中之一(否则不知道什么时候换下一只)';
+      }
+    }
+    // 挂机打怪:勾了辅助配置就判一下引用是否还在(启动时 resolveAuxConfigs 还会再拦一次)
+    if (taskType === 'farm') {
+      const unknownAux = auxConfigNames.filter(Boolean).filter((n) => !savedFarmAux.some((h) => h.name === n));
+      if (unknownAux.length > 0) return `勾选的辅助配置不存在:${unknownAux.join('、')}(可能已删除,请重新勾选)`;
     }
     return null;
   };
@@ -1244,6 +1364,9 @@ export function TaskConfigDialog({
               recipeIssue={recipeIssue}
               mapCrossings={mapCrossings}
               setMapCrossings={setMapCrossings}
+              auxConfigNames={auxConfigNames}
+              setAuxConfigNames={setAuxConfigNames}
+              farmAuxOptions={farmAuxOptions}
               mapProfileNames={mapProfileNames}
               blockAllPlayersOnNewMap={blockAllPlayersOnNewMap}
               setBlockAllPlayersOnNewMap={setBlockAllPlayersOnNewMap}
@@ -1408,13 +1531,60 @@ export function TaskConfigDialog({
             </>
           )}
 
+          {step === 'config' && taskType === 'pet-training' && (
+            <>
+              <div className="mb-3 text-[12px] text-accent-cyan bg-accent-cyan/10 border border-accent-cyan/30 rounded px-3 py-2">
+                {CONFIG_ONLY_HINT}
+              </div>
+              {/* 卡片内管理:选择已保存的宠物带练查看/修改,或新建、删除 */}
+              <div className="mb-3 p-2.5 rounded border border-border-base bg-bg-input/40 flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-text-secondary shrink-0">已保存的宠物带练</span>
+                <select
+                  value={editingName ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    if (!name) newPetTraining();
+                    else {
+                      const stored = savedPetTrainings.find((p) => p.name === name);
+                      if (stored) loadPetTraining(stored);
+                    }
+                  }}
+                  className="bg-bg-card border border-border-base rounded px-2 py-1 text-xs outline-none focus:border-accent-cyan disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <option value="">＋ 新建宠物带练</option>
+                  {savedPetTrainings.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {editingName && !readOnly && (
+                  <button
+                    onClick={() => void deleteSelectedPetTraining()}
+                    disabled={deleting}
+                    className="text-xs px-2 py-1 rounded bg-accent-red/10 hover:bg-accent-red/20 text-accent-red flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title={`删除「${editingName}」(不可撤销)`}
+                  >
+                    {deleting ? '删除中...' : '删除'}
+                  </button>
+                )}
+                <span className="ml-auto text-[10px] text-text-muted">
+                  {editingName ? `正在编辑「${editingName}」` : '新建(保存时命名)'}
+                </span>
+              </div>
+              <PetTrainingForm readOnly={readOnly} value={petTraining} onChange={setPetTraining} />
+            </>
+          )}
+
           {step === 'config' &&
             taskType &&
             taskType !== 'farm' &&
             taskType !== 'default-skill' &&
             taskType !== 'town-profile' &&
             taskType !== 'dialog-recipe' &&
-            taskType !== 'map-profile' && (
+            taskType !== 'map-profile' &&
+            taskType !== 'pet-training' && (
               <div className="text-center py-12 text-text-secondary">
                 <div className="text-4xl mb-3 opacity-30">{TASK_OPTIONS.find((o) => o.type === taskType)?.icon}</div>
                 <div className="text-base mb-1">{TASK_OPTIONS.find((o) => o.type === taskType)?.name}</div>
@@ -1456,7 +1626,7 @@ export function TaskConfigDialog({
                 {nameError && <div className="text-[11px] text-accent-red bg-accent-red/10 px-2 py-1 rounded">{nameError}</div>}
                 <div className="text-[11px] text-text-muted">
                   {isConfigOnlyTaskType(taskType)
-                    ? '💡 保存后这份配置会出现在「选择任务」里对应的卡片中,供挂机打怪的「城市事件」引用'
+                    ? '💡 保存后这份配置会出现在「选择任务」里对应的卡片中,供挂机打怪的「城市事件 / 地图跨越 / 辅助配置」引用'
                     : '💡 保存后该任务会出现在"历史任务"列表,可以复用到其他窗口'}
                 </div>
                 {/* name 步骤的操作按钮(footer 在这一步只显示"取消",主要操作放这里) */}
@@ -1692,6 +1862,11 @@ interface FarmConfigProps {
   /** 地图跨越:中间地图的过图路线名,按穿越顺序(不含城镇、不含挂机图) */
   mapCrossings: string[];
   setMapCrossings: (v: string[] | ((prev: string[]) => string[])) => void;
+  /** 辅助配置:勾选的辅助配置任务名(顺序 = 执行顺序) */
+  auxConfigNames: string[];
+  setAuxConfigNames: (v: string[] | ((prev: string[]) => string[])) => void;
+  /** 可勾选的辅助配置(名字 + 一行摘要,来自 store.taskHistory) */
+  farmAuxOptions: FarmAuxOption[];
   /** 可选的过图路线名(历史任务里所有 map-profile 的 name) */
   mapProfileNames: string[];
   /** 进入新地图时屏蔽所有人(worker 检测到换图就按 F11×4) */
@@ -1757,6 +1932,9 @@ function FarmConfig(props: FarmConfigProps) {
     recipeIssue,
     mapCrossings,
     setMapCrossings,
+    auxConfigNames,
+    setAuxConfigNames,
+    farmAuxOptions,
     mapProfileNames,
     blockAllPlayersOnNewMap,
     setBlockAllPlayersOnNewMap,
@@ -2865,6 +3043,9 @@ function FarmConfig(props: FarmConfigProps) {
 
       {/* 地图跨越:出发图 → 挂机图之间依次穿越的中间地图(引用「过图路线」) */}
       <MapCrossingsSection readOnly={readOnly} value={mapCrossings} onChange={setMapCrossings} mapProfileNames={mapProfileNames} />
+
+      {/* 辅助配置:勾选要启用的辅助配置(引用「宠物带练」这类辅助配置型任务) */}
+      <FarmAuxSection readOnly={readOnly} value={auxConfigNames} onChange={setAuxConfigNames} options={farmAuxOptions} />
 
       {/* 城市事件:死亡后复活回城 / 开工前先处理一遍 → 按城镇档案(检查项 + 商人 NPC)→ 走到出城口返回野外 */}
       <FarmResupplySection
