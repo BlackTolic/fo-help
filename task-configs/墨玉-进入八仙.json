@@ -1,0 +1,20 @@
+{
+  "id": "task-墨玉-进入八仙-1791986357009",
+  "name": "墨玉-进入八仙",
+  "taskType": "dialog-recipe",
+  "config": {
+    "type": "dialog-recipe",
+    "steps": [
+      {
+        "id": "step-1791986179278-cqs4",
+        "kind": "click-text",
+        "text": "八仙的结界",
+        "offsetX": 0,
+        "offsetY": 0,
+        "onMissing": "skip"
+      }
+    ]
+  },
+  "createdAt": 1791986357009,
+  "updatedAt": 1791986357009
+}

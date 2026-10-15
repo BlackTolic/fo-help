@@ -18,8 +18,8 @@
         "id": "exit-1791982433581-ii0k",
         "toMap": "华山脚",
         "position": {
-          "x": 235,
-          "y": 184
+          "x": 233,
+          "y": 185
         },
         "via": "npc",
         "npcName": "飞空艇仙子",
@@ -29,5 +29,5 @@
     "transitFrom": []
   },
   "createdAt": 1791982498984,
-  "updatedAt": 1791983306600
+  "updatedAt": 1791985705018
 }

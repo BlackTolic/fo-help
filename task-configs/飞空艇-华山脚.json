@@ -20,9 +20,16 @@
         "offsetX": 0,
         "offsetY": 0,
         "onMissing": "skip"
+      },
+      {
+        "id": "step-1791985774701-zrbw",
+        "kind": "click-at",
+        "x": 482,
+        "y": 463,
+        "note": "确认传送"
       }
     ]
   },
   "createdAt": 1791982573789,
-  "updatedAt": 1791982573789
+  "updatedAt": 1791985785885
 }

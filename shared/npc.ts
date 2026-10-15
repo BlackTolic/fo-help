@@ -21,6 +21,8 @@ export const NPC = {
   ER_LANG_SHEN: '二郎神',
   /** 荣光使者(游戏内 NPC 名) */
   GLORY_ENVOY: '荣光使者',
+  /** 墨玉(八仙副本入口 NPC) */
+  MO_YU: '墨玉',
 } as const;
 
 /** 全部 NPC 名称 */
