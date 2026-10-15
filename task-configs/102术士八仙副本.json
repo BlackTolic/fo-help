@@ -424,7 +424,9 @@
         "enabled": true
       }
     ],
-    "movementSpeed": 1000,
+    "moveStepIntervalMs": 400,
+    "spotIdleMs": 1000,
+    "skipStuckWaypoint": false,
     "watchdog": {
       "verifyCode": true,
       "autoHeal": {
@@ -491,5 +493,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791981816445,
-  "updatedAt": 1792041584467
+  "updatedAt": 1792068564431
 }

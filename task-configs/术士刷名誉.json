@@ -225,7 +225,7 @@
         "enabled": true
       }
     ],
-    "movementSpeed": 500,
+    "moveStepIntervalMs": 500,
     "watchdog": {
       "verifyCode": true,
       "autoHeal": {

@@ -246,6 +246,9 @@ export function FarmEndReturnSection(props: Props) {
                       />
                       <span className="text-xs text-text-secondary shrink-0">秒(超时按失败处理)</span>
                     </div>
+                    <div className="text-[10px] text-text-muted">
+                      一直按下方参数识别周围的怪:只要识别到怪就重新计时,连续 3 秒识别不到怪才算清完(不要求锁定到怪),随后走小退流程
+                    </div>
 
                     {/* 清怪识别参数:三项都可以留空,留空 = 沿用本任务「定点识别」的该项(worker 侧同语义) */}
                     <div className="space-y-2 bg-bg-input/40 border border-border-base rounded p-2">

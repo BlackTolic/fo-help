@@ -182,8 +182,12 @@ interface ResolvedConfig {
   lockedNameRoi: Rect;
   /** 定点识别:点击怪名时的偏移 */
   clickOffset: Point;
-  /** 移动步进间隔(ms) */
+  /** 走位点击间隔(ms):沿路径点走位时,每点一次地面(走一步)后隔多久再读坐标纠偏(见 FarmTaskConfig.moveStepIntervalMs) */
   stepIntervalMs: number;
+  /** 挂机点停留时间(ms):定点识别在挂机点连续这么久没锁定到怪(打光了/没刷出来)就前往下一个路径点;缺省 2000 */
+  spotIdleMs: number;
+  /** 路径点卡住时跳过该点(缺省 true);false = 卡住时在该点附近随机落脚,并照常执行该点的技能操作 */
+  skipStuckWaypoint: boolean;
   /** 入图路径点(type='entry' 的那些,按列表顺序);回城/开工补给重新进图后走它 */
   entryPath: EntryPoint[];
   /** 地图跨越链路(中间地图档案,按穿越顺序;来自 mapCrossings + auxConfigs.mapProfiles);空 = 不跨图 */
@@ -320,8 +324,11 @@ export interface FarmLoopOptions {
 
 // ===== 可调常量(真机调试基本就改这一段)=====
 
-/** 移动间隔缺省值(ms):taskConfig.movementSpeed 没配或小于 100 时用它 */
+/** 走位点击间隔缺省值(ms):taskConfig.moveStepIntervalMs 没配或小于 100 时用它 */
 const DEFAULT_STEP_INTERVAL_MS = 800;
+
+/** 卡住的路径点不跳过时,在该点周围这个范围内随机点一下(屏幕像素) */
+const STUCK_JITTER_PX = 10;
 
 /** 默认找怪关键字(只在「移动攻击测试」这种没配关键字的定点打怪下兜底) */
 const DEFAULT_MONSTER_KEYWORDS = ['野狼', '野猪'];
@@ -335,7 +342,10 @@ const DETECT = {
   pollMs: 500,
   /** 普通攻击:锁定后用左键点击目标;超过这么久没再点则补点一次,维持攻击 */
   reclickMs: 1000,
-  /** 连续这么久没锁上怪(识别不到 / 识别到但已阵亡)才前往下一个挂机点(等刷新) */
+  /**
+   * 挂机点停留时间的缺省值(ms):连续这么久没锁上怪(识别不到 / 识别到但已阵亡)才前往下一个挂机点(等刷新)。
+   * 界面可配(见 FarmTaskConfig.spotIdleMs)。
+   */
   idleMs: 2000,
   /** 左键点击怪名后,等游戏把「已锁定怪物名称」写进 HUD 的时间(ms);实测 200 够,慢的机器往上调 */
   lockMs: 200,
@@ -1014,6 +1024,8 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
   const castMode: ResolvedConfig['castMode'] = cfg?.castMode === 'custom' ? 'custom' : 'smart';
   const skills = resolveSkills(cfg);
   const waypoints = resolveWaypoints(cfg, castMode, skills);
+  // 走位点击间隔:新字段优先,旧字段名(movementSpeed)兜底
+  const rawStepIntervalMs = cfg?.moveStepIntervalMs ?? cfg?.movementSpeed;
 
   return {
     mode,
@@ -1026,7 +1038,12 @@ function resolveConfig(ctx: WorkerContext): ResolvedConfig {
     mapProfiles: ctx.init.auxConfigs?.mapProfiles ?? [],
     ...resolveMonsterFilter(cfg, mode),
     ...resolveDetectAreas(cfg, view),
-    stepIntervalMs: cfg && cfg.movementSpeed && cfg.movementSpeed >= 100 ? cfg.movementSpeed : DEFAULT_STEP_INTERVAL_MS,
+    // 走位点击间隔:没配 / 小于 100 = 用内置默认
+    stepIntervalMs: rawStepIntervalMs && rawStepIntervalMs >= 100 ? rawStepIntervalMs : DEFAULT_STEP_INTERVAL_MS,
+    // 挂机点停留时间:不配 / <= 0 用 DETECT.idleMs(旧的固定 2s 行为)
+    spotIdleMs: cfg?.spotIdleMs && cfg.spotIdleMs > 0 ? cfg.spotIdleMs : DETECT.idleMs,
+    // 路径点卡住:缺省跳过(只有显式 false 才不跳过)
+    skipStuckWaypoint: cfg?.skipStuckWaypoint !== false,
     pickup: resolvePickup(ctx, cfg, view),
     // 宠物技能:骑乘上骑/下骑、打怪前技能都必须是 method='pet' 的技能(见 resolvePetRide),缺省关闭
     petRide: resolvePetRide(cfg, skills),
@@ -1350,7 +1367,8 @@ function logResolvedConfig(ctx: WorkerContext, label: string, conf: ResolvedConf
   ctx.sendLog(
     'info',
     `[${label}] 技能=[${skills}] 施法=${conf.castMode === 'smart' ? '智能施法' : '自定义施法'}` +
-      ` 移动间隔=${conf.stepIntervalMs}ms 条件回城=${formatEndReturn(conf.endReturn)}`,
+      ` 走位点击间隔=${conf.stepIntervalMs}ms 挂机点停留=${conf.spotIdleMs}ms` +
+      ` 卡住${conf.skipStuckWaypoint ? '跳过' : '不跳过'} 条件回城=${formatEndReturn(conf.endReturn)}`,
   );
   ctx.sendLog('info', `[${label}] 找怪=[${conf.monsterKeywords.join(',') || '不限(纯OCR)'}] 颜色=${conf.monsterColor} 拾取=${pickup}`);
   ctx.sendLog(
@@ -1731,13 +1749,14 @@ function ignoreCorpse(run: FarmRun, name: string): Point | null {
 }
 
 /**
- * 本挂机点是不是没得打、该走了:连续 DETECT.idleMs 没锁上过一只怪。
+ * 本挂机点是不是没得打、该走了:连续「挂机点停留时间」没锁上过一只怪(见 FarmTaskConfig.spotIdleMs)。
  * 「识别不到怪」和「扫到的都是刚击杀的尸体(被 isCorpseIgnored 跳过)」都算没得打 ——
  * 后者名字虽然还挂在画面上,但已经打不到了,不能当成"有怪"把它一直留在本点。
  */
 function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
-  if (Date.now() - lastSeenAt < DETECT.idleMs) return false;
-  run.ctx.sendLog('info', `[${run.label}] 连续 ${DETECT.idleMs}ms 未锁定到怪物,结束本挂机点`);
+  const idleMs = run.conf.spotIdleMs;
+  if (Date.now() - lastSeenAt < idleMs) return false;
+  run.ctx.sendLog('info', `[${run.label}] 连续 ${idleMs}ms 未锁定到怪物,结束本挂机点`);
   return true;
 }
 
@@ -1746,7 +1765,7 @@ function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
  * - 锁定 = 左键点一下识别到的怪名;游戏锁定成功才会把名字写进 HUD,读不到名字就当没锁上
  *   (HUD 里的名字与识别到的对不上时不锁定,只打一条警告,继续扫描)
  * - 扫到了、点了、HUD 里却没出现名字 → 这个目标已经阵亡(尸体名字还留在识别范围里),
- *   不攻击,回去接着扫下一只(连续这么扫 DETECT.idleMs 打不出东西就由 leaveSpotIfIdle 收工)
+ *   不攻击,回去接着扫下一只(连续这么扫满「挂机点停留时间」打不出东西就由 leaveSpotIfIdle 收工)
  * - 怪死 / 丢失锁定判定 = HUD(已锁定怪物名称)读空(见 isLockAlive):
  *   识别范围里的名字不能判死活 —— 尸体名还要留 DETECT.corpseTtlMs 才消失
  * - 击杀后把尸体名字的坐标记进忽略表(DETECT.corpseTtlMs 内不再当目标,见 isCorpseIgnored):
@@ -1754,7 +1773,7 @@ function leaveSpotIfIdle(run: FarmRun, lastSeenAt: number): boolean {
  * - 没配技能        → 普通攻击:锁定后游戏自动攻击(点那一下就是攻击命令)
  * - 配了 + 智能施法 → 循环释放全部已配置技能(各自按 CD,排除「物品使用」)
  * - 配了 + 自定义施法→ 循环释放该点绑定的技能(含显式绑定的「物品使用」)
- * 识别不到怪不再立刻离开:原地继续识别 DETECT.idleMs,连续这么久没锁上怪才前往下一个路径点
+ * 识别不到怪不再立刻离开:原地继续识别 conf.spotIdleMs(界面「挂机点停留时间」),连续这么久没锁上怪才前往下一个路径点
  * 开了物品拾取时拾取优先:每轮循环先捡一次(见 runPickup),正在打的怪也先放下 ——
  *   捡东西会把人走开、丢掉锁定,下一轮重新识别(怪还在就重新锁上,不在就找下一只)
  */
@@ -1979,8 +1998,13 @@ async function readMapNameRetry(run: FarmRun, attempts = 3, retryMs = 600): Prom
   return null;
 }
 
-/** 小退前清怪的收工判据:与定点识别同一套语义(连续 DETECT.idleMs 没锁上怪 = 打光了) */
+/** 小退前清怪的收工判据:连续 idleMs 没识别到怪 = 打光了(与挂机点的「停留时间」无关,单独一套) */
 const CLEAR_MOBS = {
+  /**
+   * 收工窗口(ms):只要 OCR 识别到怪(不论有没有锁上)就重新计时,
+   * 直到完整的这么久都识别不到怪,才认为周围已清完。
+   */
+  idleMs: 3000,
   /** 在每只怪身上最多打多久(ms):单只怪卡住(打不动/打不到)时的兜底,超过就换个目标重扫 */
   perMonsterTimeoutMs: 20_000,
 };
@@ -1997,7 +2021,7 @@ const CLEAR_MOBS = {
  *   输出 = castSkill,技能取 conf.skills(过滤掉宠物技能;智能施法下的物品技能不空放,与 runDetectSpot 同规则)
  *   尸体跳过 = isCorpseIgnored / ignoreCorpse(与定点识别共用同一张忽略表)
  *
- * 收工 = 连续 DETECT.idleMs 没识别到怪(与 leaveSpotIfIdle 同语义);
+ * 收工 = 连续 CLEAR_MOBS.idleMs 没识别到怪(OCR 识别到就重新计时);
  * 兜底 = 总超时 timeoutMs(怪会刷新,不能无限打)——超时按失败返回,让调用方决定是否还要小退。
  * 途中角色死亡也按失败返回(小退要点菜单,人得活着;死亡不该在这里被悄悄吞掉)。
  */
@@ -2024,7 +2048,7 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
    * null = 还没锁定 / 已放弃该目标;没配技能时不用它(普通攻击靠 HUD 判活)。
    */
   let lockedAim: Point | null = null;
-  /** 最后一次「锁上怪」的时间:连续 DETECT.idleMs 没锁上就认为清完了 */
+  /** 最后一次「识别到怪 / 还锁着怪」的时间:连续 CLEAR_MOBS.idleMs 都没有就认为清完了 */
   let lastSeenAt = Date.now();
 
   ctx.sendLog(
@@ -2062,13 +2086,15 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       lockedAim = null;
       const m = monster.detect((pos) => isCorpseIgnored(run, pos));
       if (!m) {
-        if (Date.now() - lastSeenAt >= DETECT.idleMs) {
-          ctx.sendLog('info', `[${label}] 清怪:连续 ${DETECT.idleMs}ms 未识别到怪,认为周围已清完`);
-          return { ok: true, detail: `连续 ${DETECT.idleMs}ms 未识别到怪` };
+        if (Date.now() - lastSeenAt >= CLEAR_MOBS.idleMs) {
+          ctx.sendLog('info', `[${label}] 清怪:连续 ${CLEAR_MOBS.idleMs}ms 未识别到怪,认为周围已清完`);
+          return { ok: true, detail: `连续 ${CLEAR_MOBS.idleMs}ms 未识别到怪` };
         }
         await sleep(DETECT.pollMs);
         continue;
       }
+      // OCR 识别到怪就重新计时(不要求锁上/点到):只有完整的 CLEAR_MOBS.idleMs 都识别不到怪才算清完
+      lastSeenAt = Date.now();
       // 怪名位置:没配技能时开打点的就是这里;配了技能时缺省施法(target)技能的左键也落在这里
       const aimPos = monster.locate(m.name) ?? m.screenPos;
       if (castable.length > 0) {
@@ -2077,7 +2103,6 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
         ctx.sendLog('info', `[${label}] 清怪:识别到「${m.name}」@(${aimPos.x},${aimPos.y}),用技能打(不左键开打)`);
         locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
         lockedAim = aimPos;
-        lastSeenAt = Date.now();
         await sleep(DETECT.pollMs);
         continue;
       }
@@ -2089,7 +2114,6 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       const hudAfterClick = monster.readLockedName();
       if (hudAfterClick.includes(m.name)) {
         locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
-        lastSeenAt = Date.now();
         ctx.sendLog('info', `[${label}] 清怪:已锁定「${m.name}」(HUD:「${hudAfterClick}」)`);
       }
       await sleep(DETECT.pollMs);
@@ -2296,9 +2320,29 @@ async function checkEndReturn(run: FarmRun, completedLoops: number): Promise<str
 // ===== 主循环 =====
 
 /**
+ * 「路径点卡住不跳过」用的兜底:在该点周围 ±STUCK_JITTER_PX 屏幕像素内随机点一下地面,
+ * 让角色尽量落到点附近(点地移动的游戏里,走不到某个点多半是这一步的落点没走成)。
+ *
+ * 只求靠近,不保证到位;落点夹进游戏画面内(点出窗口会点到桌面/别的程序上)。
+ * 调用方(见 walkWaypoints)随后照常执行该点的技能,并重新读一次坐标当当前位置。
+ */
+async function jitterClickNear(run: FarmRun, wp: ResolvedWaypoint, current: MapPosition): Promise<void> {
+  const { x: minX, y: minY, w, h } = run.view.roi;
+  const aim = run.movement.mapToScreen({ map: current.map, x: wp.x, y: wp.y }, current);
+  const point = {
+    x: Math.min(Math.max(Math.round(aim.x + (Math.random() * 2 - 1) * STUCK_JITTER_PX), minX + CLICK_MARGIN), minX + w - CLICK_MARGIN),
+    y: Math.min(Math.max(Math.round(aim.y + (Math.random() * 2 - 1) * STUCK_JITTER_PX), minY + CLICK_MARGIN), minY + h - CLICK_MARGIN),
+  };
+  await run.input.moveMouse(point, { kind: 'instant' });
+  await run.input.click('left');
+  run.ctx.sendLog('info', `[${run.label}] 卡住兜底:在 (${wp.x},${wp.y}) 附近随机落脚 (${point.x},${point.y})`);
+}
+
+/**
  * 沿路径点循环:走到点 → (定点识别先锁怪) → 放技能 → 下一个点
  * - 每次移动前先扫一眼拾取(见 runPickup):拾取点击会走位,只能在没移动的时候做
- * - 卡住的点(超过 noMoveTimeoutMs 没动)记一条日志就跳过,不强求
+ * - 卡住的点(超过 noMoveTimeoutMs 没动):缺省记一条日志跳过;taskConfig.skipStuckWaypoint=false 时
+ *   不跳过 —— 在该点周围随机落脚(见 jitterClickNear),再照常执行该点的技能(见下面卡住那一段)
  * - 死亡回城补给成功后结束本圈,从第一个路径点重新跑(不再从死亡时的中断点续跑)
  * - 条件回城(taskConfig.endReturn):走到本圈最后一个路径点(不管有没有真的到达)= 完成一圈,
  *   满足条件就返回 reset 结果,由 runFarmLoop 回城 → 回挂机图 → 重开一轮(不是结束任务)
@@ -2314,7 +2358,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
   /** 挂机循环实际要走的点(去掉入图点) */
   const patrol = conf.waypoints.filter((w) => w.type !== 'entry');
   let loop = 0;
-  /** 连续多少个路径点没到达(目前只用于日志;想改成"卡住几次就终止",在这里加判断) */
+  /** 连续多少个路径点没到达(累计值,只用于日志与"不跳过"时的提示) */
   let stuckCount = 0;
   /**
    * 上一个路径点的地图坐标:定点打怪用它算"移动方向"。
@@ -2393,13 +2437,13 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         }
 
         // 移动到下一个路径点:精确点移动的落点就是目标坐标本身,坐标又是整数 → 1 个单位内即到位;
-        // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住(3s 没动视为卡住)
+        // 坐标读数是整数,只要变了(±1)就算在移动,别让"没移动"计时误判卡住
         const arrived = await run.movement.moveTo(
           { map: mapName, x: wp.x, y: wp.y },
           {
             arriveTolerance: 1, // 到达容忍度:1 个单位内即到位
-            stepIntervalMs: conf.stepIntervalMs, // 每次移动间隔
-            noMoveTimeoutMs: 2000, // 1.5s 没动视为卡住
+            stepIntervalMs: conf.stepIntervalMs, // 走位点击间隔(界面「走位点击间隔」)
+            noMoveTimeoutMs: 2000, // 2s 没动视为卡住(卡住后怎么处理见下面的 arrived 判断)
             moveEpsilon: 0.5, // 1 个单位内即到位
           },
         );
@@ -2407,7 +2451,7 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
         const current: MapPosition | null = await run.movement.readPosition();
         if (current?.map) mapName = current.map;
         // 落点超出画面会裁到画面内,落进配置的 UI 区域会缩到区域外,见 blockRects
-        const here: MapPosition | null = current ?? prev;
+        let here: MapPosition | null = current ?? prev;
 
         // 本圈最后一个路径点 = 一圈走完(口径:走到最后一个点就算完成一圈,**不管有没有真的到达** ——
         // 某个点常年卡住时,按"必须到达"会让圈数条件永远不触发)。
@@ -2425,12 +2469,30 @@ async function walkWaypoints(run: FarmRun, start: MapPosition): Promise<FarmLoop
 
         if (!arrived) {
           stuckCount++;
-          ctx.sendLog('warn', `[${label}] 路径点 (${wp.x},${wp.y}) 未到达(累计卡住 ${stuckCount} 个点),跳过`);
-          prev = here;
-          continue;
+          // 跳过(缺省):记一条日志接着走下一个点,本点的技能也不放。
+          // 读不到坐标时同样跳过 —— 算不出落脚点,没法"不跳过"
+          if (conf.skipStuckWaypoint || !current) {
+            ctx.sendLog(
+              'warn',
+              `[${label}] 路径点 (${wp.x},${wp.y}) 未到达(累计卡住 ${stuckCount} 个点),` +
+                (conf.skipStuckWaypoint ? '跳过' : '读不到坐标,跳过'),
+            );
+            prev = here;
+            continue;
+          }
+          // 不跳过:卡住多半是"这一步的落点没走成" —— 在该点周围随机点一下尽量就近落脚,
+          // 然后照常执行本点的技能(下骑/宠物技能/定点打怪/定点识别),不白跑这一个点
+          ctx.sendLog(
+            'warn',
+            `[${label}] 路径点 (${wp.x},${wp.y}) 未到达(累计卡住 ${stuckCount} 个点),按「不跳过」在点附近随机落脚后继续本点操作`,
+          );
+          await jitterClickNear(run, wp, current);
+          // 落脚点是刚点下去的,角色才起步:能读到新坐标就用新的,读不到沿用旧坐标
+          here = (await run.movement.readPosition()) ?? here;
+        } else {
+          // 到达后重置卡住计数
+          stuckCount = 0;
         }
-        // 到达后重置卡住计数
-        stuckCount = 0;
         if (!here) continue;
 
         // 到达挂机点:从城里一路上骑过来就先下骑;随后按需「打怪前开启宠物技能」,再开始打怪。

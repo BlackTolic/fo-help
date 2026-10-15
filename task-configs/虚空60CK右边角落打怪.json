@@ -64,7 +64,7 @@
       }
     },
     "skills": [],
-    "movementSpeed": 400,
+    "moveStepIntervalMs": 400,
     "watchdog": {
       "verifyCode": true
     },

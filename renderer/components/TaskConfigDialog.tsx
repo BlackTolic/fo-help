@@ -335,12 +335,15 @@ export function TaskConfigDialog({
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   // 找怪关键字:定点识别下留空 = 纯 OCR(范围内任意文字都算怪名),不强制默认值
   const [nameKeywords, setNameKeywords] = useState('');
-  // 找怪相关:怪名颜色(多选) / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 角色移动间隔
+  // 找怪相关:怪名颜色(多选) / 定点识别的 OCR 范围与点击偏移 / 任务级技能列表 / 走位点击间隔
   const [mobNameColors, setMobNameColors] = useState<string[]>([COLOR_GREY_WHITE]);
   const [ocrRange, setOcrRange] = useState<ScreenRect>({ x: 0, y: 0, w: 0, h: 0 });
   const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [skills, setSkills] = useState<FarmSkillConfig[]>([]);
   const [moveStepIntervalMs, setMoveStepIntervalMs] = useState(400);
+  // 挂机循环节奏:挂机点停留时间(定点识别;0 = 不配 = 内置 2000ms) / 路径点卡住是否跳过(缺省跳过)
+  const [spotIdleMs, setSpotIdleMs] = useState(2000);
+  const [skipStuckWaypoint, setSkipStuckWaypoint] = useState(true);
   // 看门狗:组队申请 / 神医验证码 / 生命回复 / 角色停级;全空 = worker 不启动看门狗
   const [watchdog, setWatchdog] = useState<FarmWatchdogConfig>(DEFAULT_WATCHDOG);
   // 物品拾取:打怪间隙捡掉落物(范围/颜色/名称;关掉 = worker 不产生任何扫描开销)
@@ -559,7 +562,11 @@ export function TaskConfigDialog({
           rangePx: s.rangePx ?? 0,
         })),
       );
-      setMoveStepIntervalMs(farm.movementSpeed ?? 800);
+      // 旧配置的字段名是 movementSpeed,读不到新字段时兜底
+      setMoveStepIntervalMs(farm.moveStepIntervalMs ?? farm.movementSpeed ?? 800);
+      // 旧配置没有这两项:停留时间按内置 2000ms、路径点卡住按"跳过"
+      setSpotIdleMs(farm.spotIdleMs ?? 2000);
+      setSkipStuckWaypoint(farm.skipStuckWaypoint !== false);
       // 旧配置没有 watchdog 字段:按「只开验证码」回显,与 worker 的兼容行为一致
       setWatchdog(farm.watchdog ?? DEFAULT_WATCHDOG);
       // 旧配置没有 pickup 字段:回显成"不开启"
@@ -703,7 +710,12 @@ export function TaskConfigDialog({
             enabled: s.enabled !== false,
             note: s.note,
           })),
-        movementSpeed: Math.max(100, moveStepIntervalMs | 0),
+        // 走位点击间隔:每点一次地面后隔多久再读坐标纠偏(最小 100,worker 那边小于 100 也按内置默认走)
+        moveStepIntervalMs: Math.max(100, moveStepIntervalMs | 0),
+        // 挂机点停留时间:0 / 空 = 不配(worker 用内置 2000ms,与旧行为一致)
+        spotIdleMs: spotIdleMs > 0 ? spotIdleMs | 0 : undefined,
+        // 路径点卡住:缺省跳过 → 存 undefined(旧配置/不配都是跳过);勾了「不跳过」才显式存 false
+        skipStuckWaypoint: skipStuckWaypoint ? undefined : false,
         // 看门狗只保存"已开启"的项;全关时是空对象(worker 据此不启动看门狗,不做额外轮询)
         watchdog: {
           ...(watchdog.teamInvite ? { teamInvite: { action: watchdog.teamInvite.action } } : {}),
@@ -1211,6 +1223,10 @@ export function TaskConfigDialog({
               setSkills={setSkills}
               moveStepIntervalMs={moveStepIntervalMs}
               setMoveStepIntervalMs={setMoveStepIntervalMs}
+              spotIdleMs={spotIdleMs}
+              setSpotIdleMs={setSpotIdleMs}
+              skipStuckWaypoint={skipStuckWaypoint}
+              setSkipStuckWaypoint={setSkipStuckWaypoint}
               watchdog={watchdog}
               setWatchdog={setWatchdog}
               pickup={pickup}
@@ -1640,8 +1656,15 @@ interface FarmConfigProps {
   setClickOffset: (v: { x: number; y: number }) => void;
   skills: FarmSkillConfig[];
   setSkills: (v: FarmSkillConfig[] | ((prev: FarmSkillConfig[]) => FarmSkillConfig[])) => void;
+  /** 走位点击间隔(毫秒;沿路径点走位时每点一次地面后隔多久再读坐标) */
   moveStepIntervalMs: number;
   setMoveStepIntervalMs: (v: number) => void;
+  /** 挂机点停留时间(毫秒;定点识别:连续这么久识别不到怪就前往下一个路径点) */
+  spotIdleMs: number;
+  setSpotIdleMs: (v: number) => void;
+  /** 路径点卡住时是否跳过该点(缺省 true = 跳过) */
+  skipStuckWaypoint: boolean;
+  setSkipStuckWaypoint: (v: boolean) => void;
   /** 看门狗配置(组队申请/验证码/生命回复/角色停级) */
   watchdog: FarmWatchdogConfig;
   setWatchdog: (v: FarmWatchdogConfig | ((prev: FarmWatchdogConfig) => FarmWatchdogConfig)) => void;
@@ -1713,6 +1736,10 @@ function FarmConfig(props: FarmConfigProps) {
     setSkills,
     moveStepIntervalMs,
     setMoveStepIntervalMs,
+    spotIdleMs,
+    setSpotIdleMs,
+    skipStuckWaypoint,
+    setSkipStuckWaypoint,
     watchdog,
     setWatchdog,
     pickup,
@@ -1923,7 +1950,7 @@ function FarmConfig(props: FarmConfigProps) {
         <div className="text-[11px] text-text-muted mt-1.5">
           {mode === 'fixed' && '在固定路径点上,释放该点绑定的固定技能(不做识别;缺省施法技能落在固定方向上)'}
           {mode === 'fixed-detect' &&
-            '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,右键点击怪名锁定(HUD 出现名字才算锁上)后用左键点击怪名开打;右键点了 HUD 里却没出现名字 = 该目标已阵亡,不攻击,继续扫描;不配技能 = 识别到怪就普通攻击(左键点一下);连续识别不到怪后原地再等约 3 秒,仍没有怪才前往下一个点'}
+            '在固定路径点上,按设定的 OCR 范围/颜色识别怪物名称,右键点击怪名锁定(HUD 出现名字才算锁上)后用左键点击怪名开打;右键点了 HUD 里却没出现名字 = 该目标已阵亡,不攻击,继续扫描;不配技能 = 识别到怪就普通攻击(左键点一下);连续识别不到怪后原地再等「挂机点停留时间」(默认 2 秒),仍没有怪才前往下一个点'}
           {mode === 'move-detect' && '移动途中识别到怪物名称,优先停下打怪,打完再继续前往路径点'}
         </div>
       </div>
@@ -2160,7 +2187,7 @@ function FarmConfig(props: FarmConfigProps) {
           <span className="text-text-muted text-[10px]">
             {castMode === 'smart'
               ? mode === 'fixed-detect'
-                ? '定点识别:到每个挂机点后循环释放全部已配置技能(各自按 CD,物品使用除外),直到锁定的怪名消失才停手,再重新 OCR 识别;识别不到怪后原地再等约 3 秒(等刷新),仍没有怪才前往下一个点'
+                ? '定点识别:到每个挂机点后循环释放全部已配置技能(各自按 CD,物品使用除外),直到锁定的怪名消失才停手,再重新 OCR 识别;识别不到怪后原地再等「挂机点停留时间」(默认 2 秒,等刷新),仍没有怪才前往下一个点'
                 : '到每个挂机点,状态施法技能(CD 已好)一次性全部释放;其余技能自动选一个未冷却的释放(多个可释放时选 CD 最长的;都在冷却则跳过);物品使用技能不参与自动挑选(交给看门狗的「生命回复」)'
               : '在下方每个挂机点上勾选要释放的技能(不选 = 释放全部;物品使用需在此显式绑定)'}
           </span>
@@ -2393,10 +2420,10 @@ function FarmConfig(props: FarmConfigProps) {
         </>
       )}
 
-      {/* 角色移动间隔 */}
+      {/* 走位点击间隔 */}
       <div>
         <label className="text-sm text-text-secondary mb-1.5 block">
-          移动间隔 <span className="text-text-muted text-[11px]">(毫秒,角色移动速度)</span>
+          走位点击间隔 <span className="text-text-muted text-[11px]">(毫秒,沿路径点走位时每次点击移动的间隔)</span>
         </label>
         <input
           type="number"
@@ -2408,7 +2435,49 @@ function FarmConfig(props: FarmConfigProps) {
           className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
         />
         <div className="text-[10px] text-text-muted mt-1">
-          每走一步后等多久再读坐标纠偏;移速快的角色可以调小(如 500),慢的角色调大(如 1000)
+          每点一次地面(走一步)后等多久再读坐标纠偏;调小 = 走位更频繁、更贴点(如 500),调大 = 走位更省(如 1000)
+          <br />
+          只影响挂机点之间的走位,不影响角色实际移速,也不影响过图/回城那些段落
+        </div>
+      </div>
+
+      {/* 挂机点停留时间(定点识别) */}
+      <div>
+        <label className="text-sm text-text-secondary mb-1.5 block">
+          挂机点停留时间 <span className="text-text-muted text-[11px]">(毫秒;仅「定点识别」生效)</span>
+        </label>
+        <input
+          type="number"
+          min={0}
+          step={500}
+          value={spotIdleMs}
+          onChange={(e) => setSpotIdleMs(parseInt(e.target.value) || 0)}
+          disabled={readOnly}
+          className={`w-full bg-bg-input border border-border-base rounded px-3 py-1.5 text-sm outline-none focus:border-accent-cyan font-mono ${disabledCls}`}
+        />
+        <div className="text-[10px] text-text-muted mt-1">
+          在挂机点连续这么久没锁定到怪(打光了 / 没刷出来)就前往下一个路径点;填 0 = 不设置(用默认 2000ms)
+          <br />
+          怪刷得慢、想多点时间等刷新就调大,免得空等
+        </div>
+      </div>
+
+      {/* 路径点卡住:跳过 / 不跳过 */}
+      <div>
+        <label className="inline-flex items-center gap-1.5 text-sm text-text-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            className="accent-accent-cyan"
+            disabled={readOnly}
+            checked={skipStuckWaypoint}
+            onChange={(e) => setSkipStuckWaypoint(e.target.checked)}
+          />
+          <span>路径点卡住时跳过该点</span>
+        </label>
+        <div className="text-[10px] text-text-muted mt-1">
+          {skipStuckWaypoint
+            ? '默认:走不到的点(坐标一直没变化)记一条日志就跳过,本点的技能也不放'
+            : '取消勾选 = 不跳过:走不到的点会在该点周围 10 像素内随机点一下尽量就近落脚,并照常执行该点的技能'}
         </div>
       </div>
 

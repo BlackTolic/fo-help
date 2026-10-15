@@ -185,7 +185,7 @@
         "enabled": true
       }
     ],
-    "movementSpeed": 300
+    "moveStepIntervalMs": 300
   },
   "createdAt": 1790225289133,
   "updatedAt": 1790320676621
