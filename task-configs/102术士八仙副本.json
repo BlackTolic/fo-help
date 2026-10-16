@@ -296,6 +296,36 @@
         "x": 146,
         "y": 68,
         "type": "farm-spot"
+      },
+      {
+        "id": "wp-1792155603357-x6y5",
+        "x": 131,
+        "y": 67,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1792155603748-cohh",
+        "x": 126,
+        "y": 74,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1792155604156-a7e5",
+        "x": 140,
+        "y": 77,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1792155633043-nagi",
+        "x": 148,
+        "y": 70,
+        "type": "farm-spot"
+      },
+      {
+        "id": "wp-1792155633475-sn7x",
+        "x": 138,
+        "y": 64,
+        "type": "farm-spot"
       }
     ],
     "mobFilter": {
@@ -482,7 +512,7 @@
             "a8a8a0-111111"
           ],
           "nameKeywords": [
-            "结界|精英|头目|守护|巡逻|者|天魔|斩首"
+            "结界|精英|头目|守护|巡逻|者|斩首"
           ],
           "ocrRange": {
             "x": 465,
@@ -496,5 +526,5 @@
     "blockAllPlayersOnNewMap": true
   },
   "createdAt": 1791981816445,
-  "updatedAt": 1792074039786
+  "updatedAt": 1792160364523
 }

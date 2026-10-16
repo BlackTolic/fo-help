@@ -72,7 +72,7 @@ import { ItemNameDetector } from '../../../../core/perception/ItemNameDetector';
 import type { DetectedItem, ItemPickupRule } from '../../../../core/perception/ItemNameDetector';
 import { detectDeath } from '../../../../core/perception/DeathDetector';
 import type { DeathDetection } from '../../../../core/perception/DeathDetector';
-import { MovementControllerByPrecisePoint } from '../../../../core/navigation/MovementController';
+import { MovementControllerByPrecisePoint, inflateBlockRects, shrinkOutOfBlockRects } from '../../../../core/navigation/MovementController';
 import type { PrecisePointConfig } from '../../../../core/navigation/MovementController';
 import { crossMapProfiles } from '../../../../core/navigation/MapCrossing';
 import { travelWithinMap } from '../../../../core/navigation/RouteTraveler';
@@ -92,7 +92,7 @@ import { departTownTo, returnViaScroll, transitCityToTown } from '../resupply/to
 import { dismountPet, enablePreFarmPetSkill, mountPet } from '../pet-ride';
 import type { PetRideDeps, PetRideSkill, ResolvedPetRide } from '../pet-ride';
 import { runFarmAux, pickFarmAux } from '../farm-aux';
-import { parkMouseOutsideRoi } from '../park-mouse';
+import { parkMouseTopLeft } from '../park-mouse';
 import { resolveReloginConfig, returnViaRelogin } from '../relogin';
 import type { ResolvedRelogin } from '../relogin';
 import type { FarmTaskConfig, FarmEndReturnMethod, FarmPickupRule, GameResolution, ScreenRect, Waypoint } from '../../../../shared/types';
@@ -425,7 +425,7 @@ const VIEW_UI_MARGIN = { top: 100, bottom: 70, left: 10, right: 10 };
 const BLOCK_RECTS_1280: ScreenRect[] = [
   { x: 1, y: 1, w: 207, h: 186 }, // 左上:小地图/头像
   { x: 406, y: 6, w: 440, h: 98 }, // 顶部中间:状态/目标条
-  { x: 1097, y: 1, w: 183, h: 190 }, // 右上:小地图
+  { x: 1078, y: 0, w: 202, h: 187 }, // 右上:小地图
   { x: 1, y: 588, w: 228, h: 213 }, // 左下:聊天框
   { x: 890, y: 720, w: 387, h: 90 }, // 右下:技能栏/功能按钮
 ];
@@ -567,6 +567,24 @@ function blockRectsFor(view: ViewGeometry): Rect[] {
     w: r.w,
     h: r.h,
   }));
+}
+
+/**
+ * 要避开的 UI 区域(当前画面坐标,已按同一份余量外扩):与走路的 blockRects 同一实现。
+ * 给"自己算落点、不走移动控制器"的点击用 —— 技能落点 / 卡住兜底随机落脚 / 拾取点击,
+ * 不套这一层就会点到 UI 上(小地图/技能栏/聊天框),那一下等于白点甚至点开面板。
+ */
+function blockedClickRects(view: ViewGeometry): Rect[] {
+  return inflateBlockRects(blockRectsFor(view));
+}
+
+/**
+ * 落点避让:压在 UI 区域上时沿「角色(画面中心) → 落点」方向缩到区域外(方向不变,只缩短),
+ * 与走路落点同一条规则(见 core/navigation/MovementController 的 shrinkOutOfBlockRects)。
+ * 没被挡时原样返回。
+ */
+function avoidBlockedClick(run: FarmRun, point: Point): Point {
+  return shrinkOutOfBlockRects(run.view.center, point, blockedClickRects(run.view));
 }
 
 /** 矩形字段清洗:宽高必须为正才有意义,否则回退 fallback(并拷一份,避免调用方共享引用) */
@@ -1509,6 +1527,8 @@ function fixedAimPoint(view: ViewGeometry, angle: number, skill: MoveAttackSkill
  *   self   状态施法 = 点角色自身(画面中心偏上)→ 右键 → 按键 → 等吟唱
  *   item   物品使用 = 只按快捷键
  * 调用方负责 CD 判定与 lastCast 记录。
+ * clickPos(target 用)也由调用方算好:点怪名的那两条路要给 nameClickPos 的落点(含点击偏移),
+ * 定点打怪按角度算的落点直接给原始坐标(不是在点名字,不加偏移)。
  * @returns true = 真的放出去了(调用方可以记 CD);false = 没放(如 target 没有可用落点)
  */
 async function castSkill(run: FarmRun, skill: MoveAttackSkill, clickPos: Point | null): Promise<boolean> {
@@ -1590,7 +1610,7 @@ function abandonItem(rt: PickupRuntime, pos: Point): void {
 async function pickupGone(run: FarmRun, item: DetectedItem, waitMs: number): Promise<boolean> {
   // 先挪开鼠标再等:这次点击刚落在物品名上,鼠标不移开的话悬停效果一直挂着 ——
   // 挪在前头,waitMs 这段时间正好够它收干净,等完立刻就能读(见 park-mouse.ts)
-  await parkMouseFor(run, run.conf.pickup.roi);
+  await parkMouseFor(run);
   await sleep(waitMs);
   if (run.pickup.detector.isStillThereNear(item)) return false;
   run.ctx.sendLog('info', `[${run.label}] 物品${item.name ? `「${item.name}」` : ''}已消失,拾取完成`);
@@ -1608,10 +1628,11 @@ async function pickupGone(run: FarmRun, item: DetectedItem, waitMs: number): Pro
 async function pickOneItem(run: FarmRun, item: DetectedItem): Promise<boolean> {
   const { ctx, input, conf, pickup, label } = run;
   const dropLabel = item.name ? `「${item.name}」` : '';
-  const clickPos: Point = {
+  // 落点还要让开 UI 区域:物品名压在 UI 上时点下去等于点 UI(见 avoidBlockedClick)
+  const clickPos: Point = avoidBlockedClick(run, {
     x: item.screenPos.x + conf.pickup.clickOffset.x,
     y: item.screenPos.y + conf.pickup.clickOffset.y,
-  };
+  });
   ctx.sendLog('info', `[${label}] 发现可拾取物品${dropLabel}@(${item.screenPos.x},${item.screenPos.y}),左键点击拾取`);
 
   for (let i = 0; i < conf.pickup.maxClicks; i++) {
@@ -1664,8 +1685,8 @@ async function runPickup(run: FarmRun): Promise<PickupOutcome> {
   for (let round = 0; round < PICKUP.maxPerBatch; round++) {
     if (!run.ctx.moveAttack.running) break;
 
-    // 扫描前把鼠标挪出拾取范围:上一件刚点完,鼠标正停在里面,不挪开下一件的名字会被指针挡住
-    await parkMouseFor(run, conf.pickup.roi);
+    // 扫描前把鼠标挪到左上角:上一件刚点完,鼠标正停在拾取范围里,不挪开下一件的名字会被指针挡住
+    await parkMouseFor(run);
 
     // 放弃过的那件直接跳过(交给 detector 判断,它能接着看后面的规则)
     const item = pickup.detector.detect((pos) => isItemAbandoned(pickup, pos));
@@ -1702,13 +1723,23 @@ async function pickupFirst(run: FarmRun, lockedName: string | null): Promise<boo
 // ===== 定点识别(fixed-detect)=====
 
 /**
- * 把鼠标移到怪名上点击(名字坐标 + 配置的点击偏移)。
+ * OCR / 找字定位出来的怪名坐标 → 实际落点:加上配置的「点击偏移」(见 conf.clickOffset,默认 0,0 = 点在名字上)。
+ * 只给"点名字"的落点用:定点打怪那种按角度算出来的落点不是在点名字,不加(见 runFixedSpot / fixedAimPoint)。
+ * 三处共用同一份偏移:左键点怪名开打 / 定点识别的 target 技能 / 小退前清怪的 target 技能。
+ */
+function nameClickPos(run: FarmRun, pos: Point): Point {
+  return { x: pos.x + run.conf.clickOffset.x, y: pos.y + run.conf.clickOffset.y };
+}
+
+/**
+ * 把鼠标移到怪名上点击(名字坐标 + 配置的点击偏移,见 nameClickPos)。
  * 定点识别现在固定用左键:按一下怪名,游戏就会锁定它并开始自动攻击,锁定成功时 HUD 里会出现它的名字
  * (见 isLockAlive / readLockedName)。保留 button 参数是为了以后换回"右键只锁定"时只改调用处。
+ * 落点还要让开 UI 区域:怪名压在 UI 上时这一下会被 UI 吃掉(见 avoidBlockedClick)。
  */
 async function clickMonsterName(run: FarmRun, pos: Point, button: MouseButton): Promise<void> {
-  const { input, conf } = run;
-  await input.moveMouse({ x: pos.x + conf.clickOffset.x, y: pos.y + conf.clickOffset.y }, { kind: 'instant' });
+  const { input } = run;
+  await input.moveMouse(avoidBlockedClick(run, nameClickPos(run, pos)), { kind: 'instant' });
   await input.delay(200);
   await input.click(button);
 }
@@ -1821,8 +1852,8 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
     await waitWhilePaused(ctx, label);
     if (!ctrl.running) return;
 
-    // 识别前把鼠标挪出怪名识别范围:上一轮点过怪名/放过目标技能,鼠标正停在里面,不挪开局部的名字就会被指针挡住
-    await parkMouseFor(run, conf.ocrRange);
+    // 识别前把鼠标挪到左上角:上一轮点过怪名/放过目标技能,鼠标正停在识别范围里,不挪开局部的名字就会被指针挡住
+    await parkMouseFor(run);
 
     // 0) 拾取优先:不管有没有正在打的怪,先把范围内的物品捡掉再继续。
     //    runPickup 会把能找到的都捡完才返回;捡到要刷新「有怪」计时
@@ -1928,19 +1959,23 @@ async function runDetectSpot(run: FarmRun, wp: ResolvedWaypoint): Promise<void> 
       }
       let clickPos: Point | null = null;
       if (skill.method === 'target') {
-        clickPos = monster.locate(lockedName);
-        if (!clickPos) {
+        const namePos = monster.locate(lockedName);
+        if (!namePos) {
           // 怪名重新定位失败(怪死了/被挡住):别瞎点,回去重新识别
           locked = null;
           break;
         }
+        // 距离按怪名算(不偏移):判的是"怪离自己多远",与点哪儿无关
         if (skill.rangePx > 0) {
-          const dist = Math.hypot(clickPos.x - view.center.x, clickPos.y - view.center.y);
+          const dist = Math.hypot(namePos.x - view.center.x, namePos.y - view.center.y);
           if (dist > skill.rangePx) {
             ctx.sendLog('info', `[${label}] ${skill.key} 跳过:怪距离 ${Math.round(dist)}px 超出施法距离 ${skill.rangePx}px`);
             continue;
           }
         }
+        // 落点 = 怪名 + 点击偏移:与左键点怪名同一口径(怪名的字面位置点不中时,调偏移能同时管住两条路);
+        // 再让开 UI 区域(怪名压在 UI 上时那道点击本来也会被 UI 吃掉,见 avoidBlockedClick)
+        clickPos = avoidBlockedClick(run, nameClickPos(run, namePos));
       }
       if (await castSkill(run, skill, clickPos)) lastCast.set(skill.id, Date.now());
     }
@@ -1983,7 +2018,9 @@ async function runFixedSpot(run: FarmRun, wp: ResolvedWaypoint, current: MapPosi
     if (!ctx.moveAttack.running) break;
     // 技能配得多时,每个技能释放前先让一拍,避免连点被当成异常操作
     if (index > 0) await sleep(INTER_SKILL_MS);
-    const clickPos = skill.method === 'target' ? fixedAimPoint(view, angle, skill) : null;
+    // target 技能的落点是按距离算出来的,可能正好压在画面角落的 UI 上(小地图/技能栏):
+    // 沿「角色 → 落点」方向缩到 UI 外,方向不变(与走路同一套避让,见 avoidBlockedClick)
+    const clickPos = skill.method === 'target' ? avoidBlockedClick(run, fixedAimPoint(view, angle, skill)) : null;
     // 目标技能(如普通攻击)需要先定位到目标,再点击
     if (await castSkill(run, skill, clickPos)) lastCast.set(skill.id, Date.now());
   }
@@ -2064,7 +2101,7 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
   const deadline = Date.now() + timeoutMs;
   let locked: LockedMonster | null = null;
   /**
-   * 怪名位置(「开打那次点击」的落点):配了技能时目标的左键就落在这里 —— 见下面的技能循环。
+   * 怪名在识别范围里的位置(原始坐标,不含点击偏移):配了技能时目标的左键就落在它上面 —— 见下面的技能循环。
    * null = 还没锁定 / 已放弃该目标;没配技能时不用它(普通攻击靠 HUD 判活)。
    */
   let lockedAim: Point | null = null;
@@ -2091,8 +2128,8 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       return { ok: false, detail: '小退前清怪时角色死亡(复活后重试,或先确认能打过这片怪)' };
     }
 
-    // 识别前把鼠标挪出识别范围:上一轮点过怪名/放过目标技能,鼠标正停在里面(见 park-mouse.ts)
-    await parkMouseFor(run, roi);
+    // 识别前把鼠标挪到左上角:上一轮点过怪名/放过目标技能,鼠标正停在识别范围里(见 park-mouse.ts)
+    await parkMouseFor(run);
 
     // 读 HUD:它是"锁定的怪还在不在"的唯一判据(见 isLockAlive);没锁定目标就不用读
     const hudName = locked ? monster.readLockedName() : '';
@@ -2118,11 +2155,11 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       }
       // OCR 识别到怪就重新计时(不要求锁上/点到):只有完整的 CLEAR_MOBS.idleMs 都识别不到怪才算清完
       lastSeenAt = Date.now();
-      // 怪名位置:没配技能时开打点的就是这里;配了技能时缺省施法(target)技能的左键也落在这里
+      // 怪名位置:没配技能时开打点的就是这里;配了技能时缺省施法(target)技能的左键也落在这里(实际落点再加点击偏移,见 nameClickPos)
       const aimPos = monster.locate(m.name) ?? m.screenPos;
       if (castable.length > 0) {
         // 配了技能:识别到怪就直接用技能打,不先左键点一下开打(用户要求)。
-        // 缺省施法(target)技能带的那次左键落在 aimPos,首次释放顺便把怪选上,HUD 随后就会出现它的名字。
+        // 缺省施法(target)技能带的那次左键落在 aimPos + 点击偏移,首次释放顺便把怪选上,HUD 随后就会出现它的名字。
         ctx.sendLog('info', `[${label}] 清怪:识别到「${m.name}」@(${aimPos.x},${aimPos.y}),用技能打(不左键开打)`);
         locked = { name: m.name, clickedAt: Date.now(), hudSeenAt: Date.now() };
         lockedAim = aimPos;
@@ -2176,12 +2213,14 @@ async function clearMobsAround(run: FarmRun, timeoutMs: number): Promise<{ ok: b
       let clickPos: Point | null = null;
       if (skill.method === 'target') {
         // 缺省施法:左键落在"刚才开打那次点击的位置"(识别到怪名的地方);拿不到才重新定位一次
-        clickPos = lockedAim ?? monster.locate(locked.name);
-        if (!clickPos) {
+        const namePos = lockedAim ?? monster.locate(locked.name);
+        if (!namePos) {
           locked = null;
           lockedAim = null;
           break;
         }
+        // 落点 = 怪名 + 点击偏移(与左键点怪名同一口径,见 nameClickPos),再让开 UI 区域(见 avoidBlockedClick)
+        clickPos = avoidBlockedClick(run, nameClickPos(run, namePos));
       }
       if (await castSkill(run, skill, clickPos)) lastCast.set(skill.id, Date.now());
     }
@@ -2346,13 +2385,13 @@ async function checkEndReturn(run: FarmRun, completedLoops: number): Promise<str
 const farmAuxDeps = (run: FarmRun): PetRideDeps => ({ client: dmApi, input: run.input, size: run.size });
 
 /**
- * 识别前把鼠标挪出这块区域(公共实现见 ../park-mouse.ts):
+ * 识别前把鼠标挪到左上角(公共实现见 ../park-mouse.ts):
  * 鼠标箭头本身就画在画面上,停在识别区域里会把字挡住,OCR/找字会读错或读不到。
  * 挂机流程里四处识别都要用:定点识别的怪名扫描 / 小退前清怪 / 物品拾取 —— 这些步骤刚点过字(怪名、物品名),
  * 鼠标就停在识别区域里;不挪开下一轮扫描读到的就是被指针挡了一半的名字。
  */
-async function parkMouseFor(run: FarmRun, roi: Rect): Promise<void> {
-  await parkMouseOutsideRoi(run.input, run.size, roi);
+async function parkMouseFor(run: FarmRun): Promise<void> {
+  await parkMouseTopLeft(run.input);
 }
 
 /**
@@ -2369,16 +2408,17 @@ async function runAuxOnFarmMapEntry(run: FarmRun, map: string, label: string): P
  * 「路径点卡住不跳过」用的兜底:在该点周围 ±STUCK_JITTER_PX 屏幕像素内随机点一下地面,
  * 让角色尽量落到点附近(点地移动的游戏里,走不到某个点多半是这一步的落点没走成)。
  *
- * 只求靠近,不保证到位;落点夹进游戏画面内(点出窗口会点到桌面/别的程序上)。
+ * 只求靠近,不保证到位;落点夹进游戏画面内(点出窗口会点到桌面/别的程序上),
+ * 并且让开 UI 区域 —— 卡住的点常常就在画面角落,随机落脚很容易踩到小地图/技能栏上(见 avoidBlockedClick)。
  * 调用方(见 walkWaypoints)随后照常执行该点的技能,并重新读一次坐标当当前位置。
  */
 async function jitterClickNear(run: FarmRun, wp: ResolvedWaypoint, current: MapPosition): Promise<void> {
   const { x: minX, y: minY, w, h } = run.view.roi;
   const aim = run.movement.mapToScreen({ map: current.map, x: wp.x, y: wp.y }, current);
-  const point = {
+  const point = avoidBlockedClick(run, {
     x: Math.min(Math.max(Math.round(aim.x + (Math.random() * 2 - 1) * STUCK_JITTER_PX), minX + CLICK_MARGIN), minX + w - CLICK_MARGIN),
     y: Math.min(Math.max(Math.round(aim.y + (Math.random() * 2 - 1) * STUCK_JITTER_PX), minY + CLICK_MARGIN), minY + h - CLICK_MARGIN),
-  };
+  });
   await run.input.moveMouse(point, { kind: 'instant' });
   await run.input.click('left');
   run.ctx.sendLog('info', `[${run.label}] 卡住兜底:在 (${wp.x},${wp.y}) 附近随机落脚 (${point.x},${point.y})`);
@@ -2767,6 +2807,11 @@ export async function runFarmLoop(ctx: WorkerContext, hwnd: number, opts?: FarmL
       // 小退后角色往往还在同一张图,地图名没变,不清基线的话「每圈一次的换图判断」会一直认为没换图,
       // 「进入新地图时屏蔽所有人」就再也不会按(而游戏重新进图本来会把屏蔽状态重置掉)。
       run.lastMapName = null;
+      // 清完基线立刻判一次换图:小退后角色可能直接落在别处(副本小退常回到副本外那张图),
+      // 不在这里判的话,要一路走到进入挂机图的下一跳才第一次读图,中间那张图就漏了屏蔽。
+      // ⚠️ 时机:这里已经是 returnViaRelogin 之后 —— 角色按过 Enter、等回到游戏、点掉登录提示全做完了,
+      // 按键才有效(选择角色界面/登录提示上按 F11 是白发,所以不能提到小退流程里面去按)。
+      await handleMapChange(run);
       const prepared = await prepareFarmEntry(run, entryStart, { allowResupply, forceResupply: true });
       if (prepared.exit) return prepared.exit;
       entryStart = prepared.start;

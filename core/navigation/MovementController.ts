@@ -354,6 +354,37 @@ function rayRectEnterT(self: Point, dx: number, dy: number, r: Rect): number | n
   return Math.max(enter, 0);
 }
 
+/**
+ * 要避开的 UI 区域按固定余量外扩(落点离区域边界至少留 BLOCK_MARGIN_PX 像素)。
+ * 走路(移动控制器内部)与「技能/兜底/拾取」那些自己算落点的点击共用这一份,余量保持一致。
+ */
+export function inflateBlockRects(rects: Rect[]): Rect[] {
+  return rects.map((r) => inflateRect(r, BLOCK_MARGIN_PX));
+}
+
+/**
+ * 落点压在要避开的 UI 区域上时,沿「self(角色) → 落点」方向缩到区域外(方向不变,只缩短);
+ * 没被挡就原样返回。缩到哪:连线上第一个进入的区域决定上限 —— 取所有区域「进入参数」的最小值。
+ *
+ * @param rects 已按 inflateBlockRects 外扩过的区域
+ */
+export function shrinkOutOfBlockRects(self: Point, point: Point, rects: Rect[]): Point {
+  const dx = point.x - self.x;
+  const dy = point.y - self.y;
+  if (Math.hypot(dx, dy) < PARALLEL_EPS) return point;
+
+  let t = 1;
+  for (const rect of rects) {
+    // 角色脚下本身就在这个区域里(理论上不该发生):沿本方向无从规避,交给下一步重算
+    if (containsPoint(rect, self)) continue;
+    const enter = rayRectEnterT(self, dx, dy, rect);
+    if (enter !== null) t = Math.min(t, enter);
+  }
+  if (t >= 1) return point;
+
+  return { x: Math.round(self.x + dx * t), y: Math.round(self.y + dy * t) };
+}
+
 export class MovementControllerByPrecisePoint extends MovementController {
   private readonly calib: MapCalibration;
   // 鼠标就位后多久点击(ms,默认 300:同上一步点击的间隔,给游戏反应时间)
@@ -371,7 +402,7 @@ export class MovementControllerByPrecisePoint extends MovementController {
     super(input, coords);
     this.calib = new MapCalibration(config);
     this.pressDelayMs = config.pressDelayMs ?? 300; // 默认 300ms,同上一步点击的间隔,给游戏反应时间
-    this.blockRects = (config.blockRects ?? []).map((r) => inflateRect(r, BLOCK_MARGIN_PX));
+    this.blockRects = inflateBlockRects(config.blockRects ?? []);
   }
 
   /** 地图坐标 → 屏幕落点(不含画面裁剪、不含过冲自适应;调试/校验标定用) */
@@ -425,31 +456,13 @@ export class MovementControllerByPrecisePoint extends MovementController {
    * 为什么不能就这么点下去:这些区域点上去等于点 UI,角色根本不动;朝该方向的每一步都白点,
    * 坐标长时间不变,基类会按「卡住」超时退出。缩回区域外仍然朝目标方向走了一段,下一步重算落点继续逼近。
    *
-   * 缩到哪:连线上第一个进入的区域决定上限 —— 取所有区域「进入参数」的最小值,
-   * 缩回点就在所有区域之前(区域已按 BLOCK_MARGIN_PX 外扩,所以离区域边界还留着这个余量)。
+   * 具体缩法见 shrinkOutOfBlockRects(技能落点/兜底落脚也用同一份实现)。
    *
    * @returns blocked=true 表示落点被 UI 区域挡下、这一步的距离被缩短过
    */
   private avoidBlockRects(point: Point): { point: Point; blocked: boolean } {
-    const { selfScreen } = this.calib;
-    const dx = point.x - selfScreen.x;
-    const dy = point.y - selfScreen.y;
-    const len = Math.hypot(dx, dy);
-    if (len < PARALLEL_EPS) return { point, blocked: false };
-
-    let t = 1;
-    for (const rect of this.blockRects) {
-      // 角色脚下本身就在这个区域里(理论上不该发生):沿本方向无从规避,交给下一步重算
-      if (containsPoint(rect, selfScreen)) continue;
-      const enter = rayRectEnterT(selfScreen, dx, dy, rect);
-      if (enter !== null) t = Math.min(t, enter);
-    }
-    if (t >= 1) return { point, blocked: false };
-
-    return {
-      point: { x: Math.round(selfScreen.x + dx * t), y: Math.round(selfScreen.y + dy * t) },
-      blocked: true,
-    };
+    const out = shrinkOutOfBlockRects(this.calib.selfScreen, point, this.blockRects);
+    return { point: out, blocked: out !== point };
   }
 
   /** 每个路径点(每次 moveTo)重新开始:过冲自适应只在本次 moveTo 内累计 */

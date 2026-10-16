@@ -40,7 +40,7 @@ import { sleep } from '../../../core/utils/sleep';
 import { pressGameHotkey } from '../../../shared/game-hotkeys';
 import type { PetTrainingConfig, ResupplyAuxConfig } from '../../../shared/types';
 import type { WorkerContext } from './context';
-import { parkMouseOutsideRoi } from './park-mouse';
+import { parkMouseTopLeft } from './park-mouse';
 import type { PetRideDeps } from './pet-ride';
 
 /** 宠物列表里的一只宠物:找字命中的位置 + 它当前是醒(已出战)还是睡(睡眠) */
@@ -108,11 +108,11 @@ function parseFindStrEx(text: string): Point[] {
 }
 
 /**
- * 识别前把鼠标挪出这块区域(公共实现见 park-mouse.ts):
+ * 识别前把鼠标挪到左上角(公共实现见 park-mouse.ts):
  * 鼠标停在识别区域上会挡住字(指针本身就画在画面上),OCR/找字会读错或读不到。
  */
-async function parkMouseAwayFrom(deps: PetRideDeps, roi: PetListRoi): Promise<void> {
-  await parkMouseOutsideRoi(deps.input, deps.size, { x: roi.x1, y: roi.y1, w: roi.x2 - roi.x1, h: roi.y2 - roi.y1 });
+async function parkMouseAwayFrom(deps: PetRideDeps): Promise<void> {
+  await parkMouseTopLeft(deps.input);
 }
 
 /**
@@ -121,11 +121,11 @@ async function parkMouseAwayFrom(deps: PetRideDeps, roi: PetListRoi): Promise<vo
  *      以及按 OCR 阅读顺序出战的是第几只(第一个「醒」前面有几只睡 + 1);
  *   2. 再用找字拿每只宠物名字的坐标(OCR 不给坐标),按 y 再 x 排序 = 列表从上到下 / 从左到右 ——
  *      双击落点用它。列表里一只都没定位到时 entries 是空数组(面板没开 / 区域或颜色对不上)。
- * 读之前先把鼠标挪出这块区域(见 parkMouseAwayFrom),否则鼠标箭头会挡住字。
+ * 读之前先把鼠标挪到左上角(见 parkMouseAwayFrom),否则鼠标箭头会挡住字。
  */
 async function readPetList(deps: PetRideDeps, roi: PetListRoi): Promise<PetListRead> {
   const { client } = deps;
-  await parkMouseAwayFrom(deps, roi);
+  await parkMouseAwayFrom(deps);
 
   // 1) OCR:数只数与状态(文字里「睡」「醒」各出现几次)
   const text = client.ocr(roi.x1, roi.y1, roi.x2, roi.y2, `${PET_LIST_ASLEEP.color}|${PET_LIST_AWAKE.color}`, PET_LIST_SIM);
@@ -148,12 +148,12 @@ async function readPetList(deps: PetRideDeps, roi: PetListRoi): Promise<PetListR
 /**
  * 读宠物信息(等级/饥渴/信赖):OCR 整块区域的文字后按「字母/汉字 + 数字」取前三个数
  * (与参考工程 ffo-auto-tool 的 checkPetInfo 同一套;读不到返回 null)。
- * 同样先把鼠标挪出这块区域(鼠标压在字上会读错)。
+ * 同样先把鼠标挪到左上角(鼠标压在字上会读错)。
  */
 async function readPetInfo(deps: PetRideDeps, size: WindowSizeKey): Promise<PetInfo | null> {
   const roi = PET_INFO_ROI[size];
   if (!roi) return null;
-  await parkMouseAwayFrom(deps, roi);
+  await parkMouseAwayFrom(deps);
   const petInfoText = deps.client.ocr(roi.x1, roi.y1, roi.x2, roi.y2, roi.color, roi.sim);
   if (!petInfoText) return null;
   // 1. 匹配 字母/汉字 + 数字 + 汉字
@@ -170,7 +170,7 @@ async function readPetInfo(deps: PetRideDeps, size: WindowSizeKey): Promise<PetI
 async function readPetSkillText(deps: PetRideDeps, size: WindowSizeKey): Promise<string | null> {
   const roi = PET_SKILL_ROI[size];
   if (!roi) return null;
-  await parkMouseAwayFrom(deps, roi);
+  await parkMouseAwayFrom(deps);
   return deps.client.ocr(roi.x1, roi.y1, roi.x2, roi.y2, roi.color, roi.sim);
 }
 
@@ -218,9 +218,9 @@ async function switchToPet(
   await deps.input.moveMouse(point, { kind: 'instant' });
   await deps.input.delay(PET_TRAINING_TIMING.pollMs);
   await deps.input.click('left', 2);
-  // 双击完马上把鼠标挪出列表:别让它停在宠物上(悬停会弹 tooltip / 高亮,可能盖住名字),
+  // 双击完马上把鼠标挪到左上角:别让它停在宠物上(悬停会弹 tooltip / 高亮,可能盖住名字),
   // 也把 switchSettleMs 整段时间留给这些效果收干净 —— 等都等完了再挪,就只剩 parkSettleMs 那么点时间了
-  await parkMouseAwayFrom(deps, roi);
+  await parkMouseAwayFrom(deps);
   await deps.input.delay(PET_TRAINING_TIMING.switchSettleMs);
 
   // 再读一次确认换过去了(是醒还是睡眠):readPetList 里还会再挪一次,保证读的那一刻鼠标一定不在区域里

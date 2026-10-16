@@ -2562,7 +2562,9 @@ function FarmConfig(props: FarmConfigProps) {
                   />
                 </div>
               </div>
-              <div className="text-[10px] text-text-muted mt-1">点击怪名(右键锁定 / 左键攻击)时的偏移;点不到怪时再往下 / 往右调一点</div>
+              <div className="text-[10px] text-text-muted mt-1">
+                点击怪名(左键攻击 / target 技能的落点)时的偏移;点不到怪时再往下 / 往右调一点
+              </div>
             </div>
           )}
 
